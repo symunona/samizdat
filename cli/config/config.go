@@ -38,7 +38,8 @@ type NetworkConfig struct {
 }
 
 type ServerConfig struct {
-	Port int `toml:"port"`
+	Port   int    `toml:"port"`
+	WebDir string `toml:"web_dir"`
 }
 
 func DefaultPath() (string, error) {

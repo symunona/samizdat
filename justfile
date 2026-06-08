@@ -38,7 +38,7 @@ setup-cli:
 
 [group('setup')]
 setup-app:
-    cd app && npm install 2>/dev/null || echo "app/ not initialized yet (expo create)"
+    cd app && pnpm install
 
 [group('setup')]
 setup-clipper:
@@ -55,22 +55,42 @@ _check-go:
 _check-just:
     @command -v just >/dev/null 2>&1 || (echo "error: just not installed — https://just.systems/"; exit 1)
 
+# Checks port 8765: stops our service automatically; errors on unknown process.
+_check-no-service:
+    @if ss -tlnp 2>/dev/null | grep -q ':8765'; then \
+        if systemctl is-active --quiet samizdat 2>/dev/null; then \
+            echo "samizdat service running — stopping for dev mode..."; \
+            sudo systemctl stop samizdat && echo "Service stopped."; \
+        else \
+            echo "ERROR: port 8765 in use by unknown process:"; \
+            ss -tlnp | grep ':8765'; \
+            exit 1; \
+        fi; \
+    fi
+
+# Fails if port 8765 is occupied by a non-service process (i.e. a dev server is running).
+_check-no-dev:
+    @if ss -tlnp 2>/dev/null | grep -q ':8765' && ! systemctl is-active --quiet samizdat 2>/dev/null; then \
+        echo "ERROR: dev server already running on :8765 — stop it before installing the service"; \
+        exit 1; \
+    fi
+
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
 [group('dev')]
-[doc('Run the server (dev mode)')]
-dev:
-    cd server && go run ./... 2>/dev/null || echo "server/ not initialized yet"
+[doc('Build app + server, run server (dev mode, HTTP) serving the web app')]
+dev: _check-no-service build-server build-app-web
+    cd server && ./bin/samizdat serve --webdir ../app/dist
 
 [group('dev')]
-[doc('Run the Expo app')]
+[doc('Build + run the sam CLI with args (e.g. just sam connect)')]
+sam *args: build-cli
+    ./cli/bin/sam {{args}}
+
+[group('dev')]
+[doc('Run the Expo app (native/Expo Go)')]
 app:
     cd app && npx expo start 2>/dev/null || echo "app/ not initialized yet"
-
-[group('dev')]
-[doc('Run the Expo app in the browser (RN Web)')]
-app-web:
-    cd app && npx expo start --web 2>/dev/null || echo "app/ not initialized yet"
 
 [group('dev')]
 [doc('Build & load the clipper extension (dev)')]
@@ -86,17 +106,17 @@ build: build-server build-cli
 [group('build')]
 [doc('Build the server static binary')]
 build-server:
-    cd server && CGO_ENABLED=0 go build -o bin/samizdat ./... 2>/dev/null || echo "server/ not initialized yet"
+    cd server && CGO_ENABLED=0 go build -o bin/samizdat .
 
 [group('build')]
 [doc('Build the sam CLI')]
 build-cli:
-    cd cli && CGO_ENABLED=0 go build -o bin/sam ./... 2>/dev/null || echo "cli/ not initialized yet"
+    cd cli && CGO_ENABLED=0 go build -o bin/sam .
 
 [group('build')]
 [doc('Export the Expo web build (served by the server)')]
 build-app-web:
-    cd app && npx expo export --platform web 2>/dev/null || echo "app/ not initialized yet"
+    cd app && pnpm expo export --platform web --output-dir dist
 
 [group('build')]
 [doc('Package the clipper extension')]
@@ -137,14 +157,31 @@ lint:
 # ── Deploy ────────────────────────────────────────────────────────────────────
 
 [group('deploy')]
+[doc('Build everything, symlink bins, install & start the service (needs sudo)')]
+install: _check-no-dev install-bins
+    @echo ""
+    bash scripts/install-service.sh
+    @echo ""
+    @echo "sam     → $(readlink /usr/local/bin/sam)"
+    @echo "samizdat → $(readlink /usr/local/bin/samizdat)"
+    @echo ""
+    @echo "Rebuild anytime: just build   (symlinks stay, service picks up on next restart)"
+    @echo "Force restart:   sudo systemctl restart samizdat"
+
+[group('deploy')]
+[doc('Build + symlink sam and samizdat to /usr/local/bin (no service touch, needs sudo)')]
+install-bins: build
+    @echo "Symlinking binaries — may prompt for sudo password"
+    sudo -v
+    sudo ln -sf "{{justfile_directory()}}/cli/bin/sam" /usr/local/bin/sam
+    sudo ln -sf "{{justfile_directory()}}/server/bin/samizdat" /usr/local/bin/samizdat
+    @echo "  sam      -> $(readlink /usr/local/bin/sam)"
+    @echo "  samizdat -> $(readlink /usr/local/bin/samizdat)"
+
+[group('deploy')]
 [doc('Configure public HTTPS reachability (domain or sslip.io)')]
 setup-public:
     bash scripts/setup-public.sh
-
-[group('deploy')]
-[doc('Install & start the systemd service (run just build-server first)')]
-install-service:
-    bash scripts/install-service.sh
 
 [group('deploy')]
 [doc('Tail the service logs')]

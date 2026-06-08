@@ -31,6 +31,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		CfgPath: cfgPath,
 		Steps: []setup.Step{
 			steps.DataDir{},
+			steps.VaultDir{},
 			// steps.LLM{},     — coming next
 			// steps.Network{}, — coming next
 		},

@@ -74,4 +74,4 @@ just dev        # run the server in dev
 just app        # run the Expo app
 ```
 
-License: TBD (OSS-first; intent is permissive core).
+License: MIT
