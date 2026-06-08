@@ -4,6 +4,7 @@ import { Slot, useRouter, useSegments } from 'expo-router'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { loadConnection } from '../src/storage'
 import type { StoredConnection } from '../src/storage'
+import { ConnectionProvider } from '../src/ConnectionContext'
 
 export default function RootLayout() {
   const router = useRouter()
@@ -28,7 +29,9 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <Slot />
+      <ConnectionProvider>
+        <Slot />
+      </ConnectionProvider>
     </GestureHandlerRootView>
   )
 }

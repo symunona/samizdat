@@ -26,6 +26,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string) ht
 	mux.HandleFunc("GET /api/v1/health", handleHealth)
 	mux.HandleFunc("POST /api/v1/pair", (&pairHandler{db: db, q: q, serverURLs: serverURLs}).ServeHTTP)
 	mux.HandleFunc("GET /api/v1/me", bearerAuth(q, handleMe))
+	mux.HandleFunc("GET /api/v1/devices", handleListDevices(q))
 	mux.HandleFunc("POST /api/v1/admin/pair/new", localhostOnly((&adminPairHandler{q: q, serverURLs: serverURLs}).ServeHTTP))
 
 	devH := &adminDevicesHandler{q: q}
@@ -38,6 +39,10 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string) ht
 	docsH := &documentsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents", bearerAuth(q, docsH.list))
 	mux.HandleFunc("GET /api/v1/documents/{id}", bearerAuth(q, docsH.get))
+
+	rsH := &readStatesHandler{q: q}
+	mux.HandleFunc("GET /api/v1/documents/{id}/progress", bearerAuth(q, rsH.get))
+	mux.HandleFunc("PUT /api/v1/documents/{id}/progress", bearerAuth(q, rsH.put))
 
 	if webDir != "" {
 		if _, err := os.Stat(webDir); err == nil {
