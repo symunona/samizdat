@@ -83,3 +83,17 @@ test-go:
 lint:
     cd server && go vet ./... 2>/dev/null || true
     cd cli && go vet ./... 2>/dev/null || true
+
+# --- Milestone 1: deploy / service --------------------------------------
+
+# Step 1: configure public HTTPS reachability (domain or sslip.io)
+setup-public:
+    bash scripts/setup-public.sh
+
+# Step 2: install & start the systemd service (run `just build-server` first)
+install-service:
+    bash scripts/install-service.sh
+
+# Tail the service logs
+service-logs:
+    journalctl -u samizdat -f --no-pager

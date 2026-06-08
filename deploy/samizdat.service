@@ -1,0 +1,19 @@
+[Unit]
+Description=Samizdat server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/samizdat serve
+WorkingDirectory=/var/lib/samizdat
+Restart=on-failure
+RestartSec=3
+# Bind :443 without running as root:
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+# Recommended hardening once a dedicated user exists:
+# User=samizdat
+# Environment=SAMIZDAT_DATA_DIR=/var/lib/samizdat
+
+[Install]
+WantedBy=multi-user.target

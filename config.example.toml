@@ -1,0 +1,11 @@
+# Samizdat server config. Copy to config.toml (chmod 0600) and edit.
+# The real config.toml is gitignored — never commit secrets.
+
+host = "samizdat.example.com"   # or "<ip>.sslip.io" — CertMagic certs this hostname
+data_dir = "/var/lib/samizdat"  # holds app.db + vault/ + certs/
+dev = false                     # true = plain HTTP on localhost:8787, no cert
+
+# LLM providers (wired in M2) — prefer environment variables for keys:
+# [providers]
+# anthropic_api_key = ""        # or env ANTHROPIC_API_KEY
+# openai_base_url   = ""        # e.g. http://localhost:11434/v1 (Ollama)
