@@ -4,10 +4,11 @@ Go HTTP server + job worker. Single static binary. No Docker, no nginx.
 
 ## After changing Go code
 
-Always rebuild and restart the running service:
+Always use `just dev` to rebuild and restart — it rebuilds both server AND app, kills any running instance, and starts in background:
 ```bash
-cd server && CGO_ENABLED=0 go build -o bin/samizdat . && pkill -f "samizdat serve"; sleep 1 && nohup ./bin/samizdat serve > /tmp/samizdat.log 2>&1 &
+just dev
 ```
+Never use raw `pkill`/`go build` manually. `just dev` is the canonical restart command for agents and humans alike.
 
 ## Module
 

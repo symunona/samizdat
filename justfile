@@ -83,9 +83,10 @@ _check-no-dev:
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
 [group('dev')]
-[doc('Build app + server, run server (dev mode, HTTP) serving the web app')]
+[doc('Build app + server, restart background server (dev mode, HTTP)')]
 dev: _check-no-service build-server build-app-web
-    cd server && ./bin/samizdat serve --webdir ../app/dist
+    cd server && nohup ./bin/samizdat serve --webdir ../app/dist > /tmp/samizdat.log 2>&1 &
+    @sleep 1 && echo "server started, log: /tmp/samizdat.log"
 
 [group('dev')]
 [doc('Build + run the sam CLI with args (e.g. just sam connect)')]
