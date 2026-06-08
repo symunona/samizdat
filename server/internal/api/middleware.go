@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/symunona/samizdat/server/internal/auth"
 	"github.com/symunona/samizdat/server/internal/store"
@@ -64,6 +65,13 @@ func bearerAuth(q *store.Queries, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		ctx := context.WithValue(r.Context(), deviceKey, dev)
+		go func() {
+			now := time.Now().UTC().Format(time.RFC3339)
+			_ = q.UpdateDeviceLastSeen(context.Background(), store.UpdateDeviceLastSeenParams{
+				LastSeenAt: &now,
+				ID:         dev.ID,
+			})
+		}()
 		next(w, r.WithContext(ctx))
 	}
 }

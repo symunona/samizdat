@@ -12,14 +12,9 @@ import {
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { fetchDocuments, findReachable, submitScrapeJob } from '../../src/api'
+import { fetchDocuments, submitScrapeJob } from '../../src/api'
 import type { Document } from '../../src/api'
-import { loadConnection } from '../../src/storage'
-
-type ConnState =
-  | { kind: 'loading' }
-  | { kind: 'ready'; serverUrl: string; token: string }
-  | { kind: 'no-connection' }
+import { useConnection } from '../../src/ConnectionContext'
 
 function formatDate(iso: string): string {
   try {
@@ -37,8 +32,8 @@ export default function DocumentsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const router = useRouter()
+  const { status, error: connError, activeUrl, token, probe } = useConnection()
 
-  const [conn, setConn] = useState<ConnState>({ kind: 'loading' })
   const [documents, setDocuments] = useState<Document[]>([])
   const [fetchLoading, setFetchLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -49,32 +44,16 @@ export default function DocumentsScreen() {
   const [submitError, setSubmitError] = useState<string | null>(null)
   const queuedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Resolve active server URL on mount
+  // Redirect only when no credentials stored
   useEffect(() => {
-    loadConnection().then(async (saved) => {
-      if (!saved) {
-        setConn({ kind: 'no-connection' })
-        return
-      }
-      const found = await findReachable(saved.serverUrls, saved.token)
-      if (!found) {
-        setConn({ kind: 'no-connection' })
-        return
-      }
-      setConn({ kind: 'ready', serverUrl: found.url, token: saved.token })
-    })
-  }, [])
-
-  // Redirect if no connection
-  useEffect(() => {
-    if (conn.kind === 'no-connection') {
+    if (status === 'disconnected' && !token) {
       router.replace('/connect')
     }
-  }, [conn, router])
+  }, [status, token, router])
 
   const loadDocuments = useCallback(
     async (isRefresh = false) => {
-      if (conn.kind !== 'ready') return
+      if (!activeUrl || !token) return
       if (isRefresh) {
         setRefreshing(true)
       } else {
@@ -82,7 +61,7 @@ export default function DocumentsScreen() {
       }
       setFetchError(null)
       try {
-        const docs = await fetchDocuments(conn.serverUrl, conn.token)
+        const docs = await fetchDocuments(activeUrl, token)
         setDocuments(docs)
       } catch (e: unknown) {
         setFetchError(e instanceof Error ? e.message : 'Failed to load documents')
@@ -91,25 +70,25 @@ export default function DocumentsScreen() {
         setRefreshing(false)
       }
     },
-    [conn],
+    [activeUrl, token],
   )
 
   // Fetch documents once connection is ready
   useEffect(() => {
-    if (conn.kind === 'ready') {
+    if (status === 'connected') {
       loadDocuments()
     }
-  }, [conn, loadDocuments])
+  }, [status, loadDocuments])
 
   async function handleSubmitUrl() {
-    if (conn.kind !== 'ready') return
+    if (!activeUrl || !token) return
     const trimmed = urlInput.trim()
     if (!trimmed) return
 
     setSubmitState('submitting')
     setSubmitError(null)
     try {
-      await submitScrapeJob(conn.serverUrl, conn.token, trimmed)
+      await submitScrapeJob(activeUrl!, token!, trimmed)
       setUrlInput('')
       setSubmitState('queued')
       if (queuedTimerRef.current) clearTimeout(queuedTimerRef.current)
@@ -138,10 +117,23 @@ export default function DocumentsScreen() {
     )
   }
 
-  if (conn.kind === 'loading') {
+  if (status === 'loading') {
     return (
       <SafeAreaView style={s.screen}>
         <ActivityIndicator color={theme.colors.accent} size="large" />
+      </SafeAreaView>
+    )
+  }
+
+  if (status === 'disconnected' && connError) {
+    return (
+      <SafeAreaView style={s.screen}>
+        <View style={s.centered}>
+          <Text style={s.errorText}>{connError}</Text>
+          <Pressable onPress={probe} style={s.retryBtn}>
+            <Text style={s.retryText}>Retry</Text>
+          </Pressable>
+        </View>
       </SafeAreaView>
     )
   }

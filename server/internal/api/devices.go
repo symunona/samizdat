@@ -21,17 +21,19 @@ func handleListDevices(q *store.Queries) http.HandlerFunc {
 		}
 
 		type deviceView struct {
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			CreatedAt string `json:"created_at"`
+			ID         string  `json:"id"`
+			Name       string  `json:"name"`
+			CreatedAt  string  `json:"created_at"`
+			LastSeenAt *string `json:"last_seen_at"`
 		}
 
 		views := make([]deviceView, 0, len(devices))
 		for _, d := range devices {
 			views = append(views, deviceView{
-				ID:        d.ID,
-				Name:      d.Name,
-				CreatedAt: d.CreatedAt,
+				ID:         d.ID,
+				Name:       d.Name,
+				CreatedAt:  d.CreatedAt,
+				LastSeenAt: d.LastSeenAt,
 			})
 		}
 
@@ -81,7 +83,7 @@ func handleRevokeDevice(q *store.Queries) http.HandlerFunc {
 
 		now := time.Now().UTC().Format(time.RFC3339)
 		err = q.SoftDeleteDevice(r.Context(), store.SoftDeleteDeviceParams{
-			DeletedAt: sql.NullString{String: now, Valid: true},
+			DeletedAt: &now,
 			UpdatedAt: now,
 			Rev:       nextRev,
 			ID:        id,

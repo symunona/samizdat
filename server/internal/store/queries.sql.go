@@ -7,7 +7,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 )
 
 const claimNextJob = `-- name: ClaimNextJob :one
@@ -50,9 +49,19 @@ SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at FROM device
 WHERE id = ? AND deleted_at IS NULL
 `
 
-func (q *Queries) GetDevice(ctx context.Context, id string) (Device, error) {
+type GetDeviceRow struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	TokenHash string  `json:"token_hash"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+	Rev       int64   `json:"rev"`
+	DeletedAt *string `json:"deleted_at"`
+}
+
+func (q *Queries) GetDevice(ctx context.Context, id string) (GetDeviceRow, error) {
 	row := q.db.QueryRowContext(ctx, getDevice, id)
-	var i Device
+	var i GetDeviceRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -66,7 +75,7 @@ func (q *Queries) GetDevice(ctx context.Context, id string) (Device, error) {
 }
 
 const getDeviceByTokenHash = `-- name: GetDeviceByTokenHash :one
-SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at FROM devices
+SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at, last_seen_at FROM devices
 WHERE token_hash = ? AND deleted_at IS NULL
 LIMIT 1
 `
@@ -82,6 +91,7 @@ func (q *Queries) GetDeviceByTokenHash(ctx context.Context, tokenHash string) (D
 		&i.UpdatedAt,
 		&i.Rev,
 		&i.DeletedAt,
+		&i.LastSeenAt,
 	)
 	return i, err
 }
@@ -179,7 +189,7 @@ func (q *Queries) GetSetting(ctx context.Context, key string) (string, error) {
 const insertDevice = `-- name: InsertDevice :one
 INSERT INTO devices (id, name, token_hash, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?)
-RETURNING id, name, token_hash, created_at, updated_at, rev, deleted_at
+RETURNING id, name, token_hash, created_at, updated_at, rev, deleted_at, last_seen_at
 `
 
 type InsertDeviceParams struct {
@@ -209,6 +219,7 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 		&i.UpdatedAt,
 		&i.Rev,
 		&i.DeletedAt,
+		&i.LastSeenAt,
 	)
 	return i, err
 }
@@ -309,7 +320,7 @@ func (q *Queries) InsertPairCode(ctx context.Context, arg InsertPairCodeParams) 
 }
 
 const listDevices = `-- name: ListDevices :many
-SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at FROM devices WHERE deleted_at IS NULL ORDER BY created_at
+SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at, last_seen_at FROM devices WHERE deleted_at IS NULL ORDER BY created_at
 `
 
 func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
@@ -329,6 +340,7 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 			&i.UpdatedAt,
 			&i.Rev,
 			&i.DeletedAt,
+			&i.LastSeenAt,
 		); err != nil {
 			return nil, err
 		}
@@ -422,8 +434,8 @@ UPDATE pair_codes SET used_at = ? WHERE code = ?
 `
 
 type MarkPairCodeUsedParams struct {
-	UsedAt sql.NullString `json:"used_at"`
-	Code   string         `json:"code"`
+	UsedAt *string `json:"used_at"`
+	Code   string  `json:"code"`
 }
 
 func (q *Queries) MarkPairCodeUsed(ctx context.Context, arg MarkPairCodeUsedParams) error {
@@ -448,10 +460,10 @@ WHERE id = ?
 `
 
 type SoftDeleteDeviceParams struct {
-	DeletedAt sql.NullString `json:"deleted_at"`
-	UpdatedAt string         `json:"updated_at"`
-	Rev       int64          `json:"rev"`
-	ID        string         `json:"id"`
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+	Rev       int64   `json:"rev"`
+	ID        string  `json:"id"`
 }
 
 func (q *Queries) SoftDeleteDevice(ctx context.Context, arg SoftDeleteDeviceParams) error {
@@ -461,6 +473,20 @@ func (q *Queries) SoftDeleteDevice(ctx context.Context, arg SoftDeleteDevicePara
 		arg.Rev,
 		arg.ID,
 	)
+	return err
+}
+
+const updateDeviceLastSeen = `-- name: UpdateDeviceLastSeen :exec
+UPDATE devices SET last_seen_at = ? WHERE id = ?
+`
+
+type UpdateDeviceLastSeenParams struct {
+	LastSeenAt *string `json:"last_seen_at"`
+	ID         string  `json:"id"`
+}
+
+func (q *Queries) UpdateDeviceLastSeen(ctx context.Context, arg UpdateDeviceLastSeenParams) error {
+	_, err := q.db.ExecContext(ctx, updateDeviceLastSeen, arg.LastSeenAt, arg.ID)
 	return err
 }
 

@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDevices, revokeDevice, ApiError } from '../../src/api'
 import type { DeviceInfo } from '../../src/api'
-import { clearConnection } from '../../src/storage'
+import { clearConnection, removeServerUrl } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
 
 function hostname(url: string): string {
@@ -22,6 +22,21 @@ function formatTime(d: Date | null): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
+function formatRelative(iso: string): string {
+  try {
+    const diff = Date.now() - new Date(iso).getTime()
+    const secs = Math.floor(diff / 1000)
+    if (secs < 60) return 'just now'
+    const mins = Math.floor(secs / 60)
+    if (mins < 60) return `${mins}m ago`
+    const hrs = Math.floor(mins / 60)
+    if (hrs < 24) return `${hrs}h ago`
+    const days = Math.floor(hrs / 24)
+    if (days < 7) return `${days}d ago`
+    return formatDate(iso)
+  } catch { return iso }
+}
+
 export default function SettingsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
@@ -32,6 +47,7 @@ export default function SettingsScreen() {
   const [devices, setDevices] = useState<DeviceInfo[]>([])
   const [currentDeviceId, setCurrentDeviceId] = useState<string | null>(null)
   const [devicesLoading, setDevicesLoading] = useState(false)
+  const [devicesRefreshing, setDevicesRefreshing] = useState(false)
   const [devicesError, setDevicesError] = useState<string | null>(null)
   const [revoking, setRevoking] = useState<Set<string>>(new Set())
 
@@ -41,9 +57,13 @@ export default function SettingsScreen() {
     router.replace('/connect')
   }
 
-  const loadDevices = useCallback(async () => {
+  const loadDevices = useCallback(async (silent = false) => {
     if (!activeUrl || !token) return
-    setDevicesLoading(true)
+    if (silent) {
+      setDevicesRefreshing(true)
+    } else {
+      setDevicesLoading(true)
+    }
     setDevicesError(null)
     try {
       const result = await fetchDevices(activeUrl, token)
@@ -57,6 +77,7 @@ export default function SettingsScreen() {
       setDevicesError(e instanceof Error ? e.message : 'Failed to load devices')
     } finally {
       setDevicesLoading(false)
+      setDevicesRefreshing(false)
     }
   }, [activeUrl, token])
 
@@ -76,6 +97,24 @@ export default function SettingsScreen() {
     router.replace('/connect')
   }
 
+  function handleDeleteUrl(url: string) {
+    Alert.alert(
+      'Remove server URL',
+      `Remove "${url}" from the list?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            await removeServerUrl(url)
+            await reload()
+          },
+        },
+      ]
+    )
+  }
+
   function handleRevokeDevice(id: string, name: string) {
     Alert.alert(
       'Revoke device',
@@ -90,7 +129,7 @@ export default function SettingsScreen() {
             setRevoking(prev => new Set(prev).add(id))
             try {
               await revokeDevice(activeUrl, token, id)
-              await loadDevices()
+              await loadDevices(true)
             } catch (e: unknown) {
               if (e instanceof ApiError && e.status === 401) {
                 handleUnauthorized()
@@ -134,19 +173,18 @@ export default function SettingsScreen() {
           </Text>
         </View>
 
-        {activeUrl && (
-          <View style={s.infoRow}>
-            <Text style={s.infoLabel}>Active URL</Text>
-            <Text style={s.infoValue} numberOfLines={1}>{activeUrl}</Text>
-          </View>
-        )}
-
-        {lastChecked && (
-          <View style={s.infoRow}>
-            <Text style={s.infoLabel}>Last checked</Text>
-            <Text style={s.infoValue}>{formatTime(lastChecked)}</Text>
-          </View>
-        )}
+        {status === 'connected' && activeUrl ? (
+          <Text style={s.connectionDetail}>
+            Connected to <Text style={s.connectionUrl}>{activeUrl}</Text>
+            {lastChecked ? ` — last checked ${formatTime(lastChecked)}` : ''}
+          </Text>
+        ) : status === 'disconnected' ? (
+          <Text style={s.connectionDetail}>
+            {serverUrls.length > 0
+              ? `Trying ${serverUrls.map(hostname).join(', ')}${lastChecked ? ` — last connected ${formatTime(lastChecked)}` : ''}`
+              : 'No server URLs configured'}
+          </Text>
+        ) : null}
       </View>
 
       {/* Server URLs */}
@@ -163,7 +201,17 @@ export default function SettingsScreen() {
                   <Text style={[s.urlHost, isActive && s.urlHostActive]}>{hostname(url)}</Text>
                   <Text style={s.urlFull} numberOfLines={1}>{url}</Text>
                 </View>
-                {isActive && <Text style={s.activeBadge}>active</Text>}
+                {isActive
+                  ? <Text style={s.activeBadge}>active</Text>
+                  : (
+                    <Pressable
+                      onPress={() => handleDeleteUrl(url)}
+                      style={({ pressed }) => [s.deleteUrlBtn, pressed && s.deleteUrlBtnPressed]}
+                    >
+                      <Text style={s.deleteUrlText}>✕</Text>
+                    </Pressable>
+                  )
+                }
               </View>
             )
           })}
@@ -186,12 +234,14 @@ export default function SettingsScreen() {
         <View style={s.cardHeader}>
           <Text style={s.cardTitle}>Connected Devices</Text>
           {status === 'connected' && (
-            <Pressable onPress={loadDevices} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
-              <Text style={s.refreshBtnText}>Refresh</Text>
-            </Pressable>
+            devicesRefreshing
+              ? <ActivityIndicator size="small" color={theme.colors.accent} />
+              : <Pressable onPress={() => loadDevices()} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
+                  <Text style={s.refreshBtnText}>Refresh</Text>
+                </Pressable>
           )}
         </View>
-        {devicesLoading ? (
+        {devicesLoading && devices.length === 0 ? (
           <ActivityIndicator color={theme.colors.accent} size="small" style={{ alignSelf: 'flex-start' }} />
         ) : devicesError ? (
           <Text style={s.errorText}>{devicesError}</Text>
@@ -212,6 +262,9 @@ export default function SettingsScreen() {
                   </View>
                   <Text style={s.deviceId} numberOfLines={1}>{d.id}</Text>
                   <Text style={s.deviceDate}>Paired {formatDate(d.created_at)}</Text>
+                  {d.last_seen_at && (
+                    <Text style={s.deviceLastSeen}>Last seen {formatRelative(d.last_seen_at)}</Text>
+                  )}
                 </View>
                 {!isCurrent && (
                   <Pressable
@@ -284,6 +337,20 @@ function buildStyles(t: Theme) {
     urlHostActive: { color: t.colors.text, fontWeight: '700' },
     urlFull: { color: t.colors.placeholder, fontSize: 11, fontFamily: 'monospace' },
     activeBadge: { color: t.colors.online, fontSize: 11, fontWeight: '700', flexShrink: 0 },
+    connectionDetail: { color: t.colors.muted, fontSize: 12, lineHeight: 16 },
+    connectionUrl: { color: t.colors.text, fontWeight: '600' },
+    deleteUrlBtn: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: t.colors.error,
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+    },
+    deleteUrlBtnPressed: { opacity: 0.5 },
+    deleteUrlText: { color: t.colors.error, fontSize: 12, fontWeight: '700', lineHeight: 14 },
     deviceRow: { paddingVertical: t.spacing.sm, flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
     deviceRowBorder: { borderBottomWidth: 1, borderBottomColor: t.colors.border },
     deviceMain: { flex: 1, gap: 2 },
@@ -293,6 +360,7 @@ function buildStyles(t: Theme) {
     currentBadge: { color: t.colors.accent, fontSize: 11, fontWeight: '700' },
     deviceId: { color: t.colors.placeholder, fontSize: 10, fontFamily: 'monospace' },
     deviceDate: { color: t.colors.muted, fontSize: 11 },
+    deviceLastSeen: { color: t.colors.accent, fontSize: 11 },
     errorText: { color: t.colors.error, fontSize: 13 },
     emptyText: { color: t.colors.muted, fontSize: 13 },
     revokeBtn: {

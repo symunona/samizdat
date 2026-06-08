@@ -3,7 +3,6 @@ package pair
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"fmt"
 	"math/big"
 	"time"
@@ -35,20 +34,21 @@ func Mint(ctx context.Context, q *store.Queries) (code string, expiresAt time.Ti
 
 // Claim validates and consumes a pairing code. Returns ErrInvalid if the code
 // is unknown, expired, or already used.
-func Claim(ctx context.Context, db *sql.DB, q *store.Queries, code string) error {
+func Claim(ctx context.Context, q *store.Queries, code string) error {
 	row, err := q.GetPairCode(ctx, code)
 	if err != nil {
 		return ErrInvalid
 	}
-	if row.UsedAt.Valid {
+	if row.UsedAt != nil {
 		return ErrInvalid
 	}
 	exp, err := time.Parse(time.RFC3339, row.ExpiresAt)
 	if err != nil || time.Now().UTC().After(exp) {
 		return ErrInvalid
 	}
+	now := time.Now().UTC().Format(time.RFC3339)
 	if err := q.MarkPairCodeUsed(ctx, store.MarkPairCodeUsedParams{
-		UsedAt: sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
+		UsedAt: &now,
 		Code:   code,
 	}); err != nil {
 		return fmt.Errorf("mark used: %w", err)

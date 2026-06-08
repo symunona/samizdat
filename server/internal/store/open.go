@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -44,13 +45,14 @@ func Open(path string) (*sql.DB, error) {
 
 const schema = `
 CREATE TABLE IF NOT EXISTS devices (
-    id          TEXT    PRIMARY KEY,
-    name        TEXT    NOT NULL DEFAULT '',
-    token_hash  TEXT    NOT NULL,
-    created_at  TEXT    NOT NULL,
-    updated_at  TEXT    NOT NULL,
-    rev         INTEGER NOT NULL DEFAULT 0,
-    deleted_at  TEXT
+    id           TEXT    PRIMARY KEY,
+    name         TEXT    NOT NULL DEFAULT '',
+    token_hash   TEXT    NOT NULL,
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL,
+    rev          INTEGER NOT NULL DEFAULT 0,
+    deleted_at   TEXT,
+    last_seen_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pair_codes (
@@ -92,11 +94,36 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS documents_canonical_url ON documents(canonical_url);
+
+CREATE TABLE IF NOT EXISTS read_states (
+    id          TEXT    PRIMARY KEY,
+    device_id   TEXT    NOT NULL REFERENCES devices(id),
+    document_id TEXT    NOT NULL REFERENCES documents(id),
+    scroll_y    REAL    NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0,
+    deleted_at  TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS read_states_device_doc ON read_states(device_id, document_id);
 `
 
 func migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("schema exec: %w", err)
+	}
+	// Additive column migrations — safe to re-run; ignore "duplicate column" errors.
+	additiveMigrations := []string{
+		`ALTER TABLE devices ADD COLUMN last_seen_at TEXT`,
+	}
+	for _, m := range additiveMigrations {
+		if _, err := db.Exec(m); err != nil {
+			// SQLite error message for duplicate column
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				return fmt.Errorf("migration %q: %w", m, err)
+			}
+		}
 	}
 	return nil
 }

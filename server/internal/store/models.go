@@ -4,60 +4,57 @@
 
 package store
 
-import (
-	"database/sql"
-)
-
 type Device struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`
-	TokenHash string         `json:"token_hash"`
-	CreatedAt string         `json:"created_at"`
-	UpdatedAt string         `json:"updated_at"`
-	Rev       int64          `json:"rev"`
-	DeletedAt sql.NullString `json:"deleted_at"`
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	TokenHash  string  `json:"token_hash"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+	Rev        int64   `json:"rev"`
+	DeletedAt  *string `json:"deleted_at"`
+	LastSeenAt *string `json:"last_seen_at"`
 }
 
 type Document struct {
-	ID           string         `json:"id"`
-	CanonicalUrl string         `json:"canonical_url"`
-	Title        string         `json:"title"`
-	Markdown     string         `json:"markdown"`
-	FetchedAt    string         `json:"fetched_at"`
-	CreatedAt    string         `json:"created_at"`
-	UpdatedAt    string         `json:"updated_at"`
-	Rev          int64          `json:"rev"`
-	DeletedAt    sql.NullString `json:"deleted_at"`
+	ID           string  `json:"id"`
+	CanonicalUrl string  `json:"canonical_url"`
+	Title        string  `json:"title"`
+	Markdown     string  `json:"markdown"`
+	FetchedAt    string  `json:"fetched_at"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
+	Rev          int64   `json:"rev"`
+	DeletedAt    *string `json:"deleted_at"`
 }
 
 type Job struct {
-	ID        string         `json:"id"`
-	Kind      string         `json:"kind"`
-	Payload   string         `json:"payload"`
-	Status    string         `json:"status"`
-	Attempts  int64          `json:"attempts"`
-	RunAfter  string         `json:"run_after"`
-	CreatedAt string         `json:"created_at"`
-	UpdatedAt string         `json:"updated_at"`
-	Rev       int64          `json:"rev"`
-	DeletedAt sql.NullString `json:"deleted_at"`
+	ID        string  `json:"id"`
+	Kind      string  `json:"kind"`
+	Payload   string  `json:"payload"`
+	Status    string  `json:"status"`
+	Attempts  int64   `json:"attempts"`
+	RunAfter  string  `json:"run_after"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+	Rev       int64   `json:"rev"`
+	DeletedAt *string `json:"deleted_at"`
 }
 
 type PairCode struct {
-	Code      string         `json:"code"`
-	ExpiresAt string         `json:"expires_at"`
-	UsedAt    sql.NullString `json:"used_at"`
+	Code      string  `json:"code"`
+	ExpiresAt string  `json:"expires_at"`
+	UsedAt    *string `json:"used_at"`
 }
 
 type ReadState struct {
-	ID         string         `json:"id"`
-	DeviceID   string         `json:"device_id"`
-	DocumentID string         `json:"document_id"`
-	ScrollY    float64        `json:"scroll_y"`
-	CreatedAt  string         `json:"created_at"`
-	UpdatedAt  string         `json:"updated_at"`
-	Rev        int64          `json:"rev"`
-	DeletedAt  sql.NullString `json:"deleted_at"`
+	ID         string  `json:"id"`
+	DeviceID   string  `json:"device_id"`
+	DocumentID string  `json:"document_id"`
+	ScrollY    float64 `json:"scroll_y"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+	Rev        int64   `json:"rev"`
+	DeletedAt  *string `json:"deleted_at"`
 }
 
 type ServerSetting struct {

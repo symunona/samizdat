@@ -25,6 +25,13 @@ export async function clearConnection(): Promise<void> {
   await AsyncStorage.removeItem(KEY)
 }
 
+export async function removeServerUrl(url: string): Promise<void> {
+  const conn = await loadConnection()
+  if (!conn) return
+  const updated = { ...conn, serverUrls: conn.serverUrls.filter(u => u !== url) }
+  await saveConnection(updated)
+}
+
 const LAST_URL_KEY = 'samizdat_last_url'
 
 export async function saveLastSuccessfulUrl(url: string): Promise<void> {

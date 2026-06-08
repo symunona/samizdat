@@ -101,6 +101,7 @@ export type DeviceInfo = {
   id: string
   name: string
   created_at: string
+  last_seen_at?: string
 }
 export type DeviceListResult = {
   devices: DeviceInfo[]

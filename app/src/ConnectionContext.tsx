@@ -8,6 +8,7 @@ type ConnectionStatus = 'loading' | 'connected' | 'disconnected'
 
 export type ConnectionState = {
   status: ConnectionStatus
+  error: string | null
   activeUrl: string | null
   serverUrls: string[]
   token: string | null
@@ -15,12 +16,13 @@ export type ConnectionState = {
   serverInfo: Me | null
   lastChecked: Date | null
   probe: () => void
-  reload: () => void
+  reload: () => Promise<void>
   logout: () => Promise<void>
 }
 
 const Ctx = createContext<ConnectionState>({
   status: 'loading',
+  error: null,
   activeUrl: null,
   serverUrls: [],
   token: null,
@@ -28,12 +30,13 @@ const Ctx = createContext<ConnectionState>({
   serverInfo: null,
   lastChecked: null,
   probe: () => {},
-  reload: () => {},
+  reload: () => Promise.resolve(),
   logout: async () => {},
 })
 
 export function ConnectionProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<ConnectionStatus>('loading')
+  const [error, setError] = useState<string | null>(null)
   const [activeUrl, setActiveUrl] = useState<string | null>(null)
   const [serverInfo, setServerInfo] = useState<Me | null>(null)
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
@@ -41,8 +44,8 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   const [storageLoaded, setStorageLoaded] = useState(false)
   const lastSuccessfulUrlRef = useRef<string | null>(null)
 
-  const reload = useCallback(() => {
-    Promise.all([loadConnection(), loadLastSuccessfulUrl()]).then(([c, lastUrl]) => {
+  const reload = useCallback((): Promise<void> => {
+    return Promise.all([loadConnection(), loadLastSuccessfulUrl()]).then(([c, lastUrl]) => {
       setStored(c)
       lastSuccessfulUrlRef.current = lastUrl
       setStorageLoaded(true)
@@ -62,6 +65,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
 
   const probe = useCallback(async (conn: StoredConnection | null) => {
     if (!conn) {
+      setError(null)
       setStatus('disconnected')
       setActiveUrl(null)
       setServerInfo(null)
@@ -73,6 +77,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       if (found) {
         setActiveUrl(found.url)
         setServerInfo(found.info)
+        setError(null)
         setStatus('connected')
         if (found.url !== lastSuccessfulUrlRef.current) {
           lastSuccessfulUrlRef.current = found.url
@@ -81,6 +86,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       } else {
         setActiveUrl(null)
         setServerInfo(null)
+        setError('Server unreachable')
         setStatus('disconnected')
       }
     } catch (e) {
@@ -89,8 +95,10 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
         setStored(null)
         setActiveUrl(null)
         setServerInfo(null)
+        setError('Unauthorized — please reconnect')
         setStatus('disconnected')
       } else {
+        setError(e instanceof Error ? e.message : 'Connection failed')
         setStatus('disconnected')
       }
     }
@@ -107,6 +115,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   return (
     <Ctx.Provider value={{
       status,
+      error,
       activeUrl,
       serverUrls: stored?.serverUrls ?? [],
       token: stored?.token ?? null,

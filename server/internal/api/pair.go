@@ -34,7 +34,7 @@ func (h *pairHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := pair.Claim(r.Context(), h.db, h.q, body.Code); err != nil {
+	if err := pair.Claim(r.Context(), h.q, body.Code); err != nil {
 		writeErr(w, http.StatusUnauthorized, "invalid or expired code")
 		return
 	}
