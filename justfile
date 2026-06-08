@@ -9,8 +9,31 @@ default:
 
 # --- Setup ---------------------------------------------------------------
 
+# Install dev environment from a git clone (needs Go 1.22+)
+install-dev: _check-go _check-just setup-cli setup-server
+    @echo ""
+    @echo "Dev env ready."
+    @echo ""
+    @echo "Next steps:"
+    @echo "  Build:      just build"
+    @echo "  Run server: just dev"
+    @echo ""
+    @echo "Tip — enable just tab completion (pick your shell):"
+    @echo "  bash:  just --completions bash >> ~/.bash_completion"
+    @echo "  zsh:   just --completions zsh > ~/.zfunc/_just && echo 'fpath=(~/.zfunc \$fpath)' >> ~/.zshrc"
+    @echo "  fish:  just --completions fish > ~/.config/fish/completions/just.fish"
+    @echo ""
+    @echo "Or let sam do it: sam setup"
+
+_check-go:
+    @command -v go >/dev/null 2>&1 || (echo "error: Go not installed — https://go.dev/dl/"; exit 1)
+    @go version | grep -qE "go1\.(2[2-9]|[3-9][0-9])\." || (echo "error: Go 1.22+ required ($(go version))"; exit 1)
+
+_check-just:
+    @command -v just >/dev/null 2>&1 || (echo "error: just not installed — https://just.systems/"; exit 1)
+
 # Install deps for every component (run after cloning)
-setup: setup-server setup-cli setup-app setup-clipper
+setup: setup-server setup-cli setup-app setup-clipper setup-tooling
 
 setup-server:
     cd server && go mod download 2>/dev/null || echo "server/ not initialized yet (go mod init)"
@@ -23,6 +46,9 @@ setup-app:
 
 setup-clipper:
     cd clipper && npm install 2>/dev/null || echo "clipper/ not initialized yet"
+
+setup-tooling:
+    cd tooling && go mod download 2>/dev/null || echo "tooling/ not initialized yet"
 
 # --- Dev / run -----------------------------------------------------------
 
@@ -97,3 +123,25 @@ install-service:
 # Tail the service logs
 service-logs:
     journalctl -u samizdat -f --no-pager
+
+# --- Tooling / spec runner -----------------------------------------------
+
+# Build the spec tool
+tooling-build:
+    cd tooling && CGO_ENABLED=0 go build -o bin/spec ./cmd/spec
+
+# Run golangci-lint on all Go projects
+tooling-lint: tooling-build
+    REPO_ROOT="{{justfile_directory()}}" ./tooling/bin/spec lint
+
+# Architecture diff-review (branch vs main) + optional CLAUDE.md updates
+tooling-diff-review: tooling-build
+    REPO_ROOT="{{justfile_directory()}}" ./tooling/bin/spec diff-review
+
+# Detect + explain new Go libraries added vs main
+tooling-lib-check: tooling-build
+    REPO_ROOT="{{justfile_directory()}}" ./tooling/bin/spec lib-check
+
+# Run all spec checks
+tooling-all: tooling-build
+    REPO_ROOT="{{justfile_directory()}}" ./tooling/bin/spec all

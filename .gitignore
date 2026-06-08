@@ -16,9 +16,10 @@ certs/
 *.pem
 *.key
 
-# --- Go (server/, cli/) ---
+# --- Go (server/, cli/, tooling/) ---
 /server/bin/
 /cli/bin/
+/tooling/bin/
 /server/sam
 /cli/sam
 *.test
