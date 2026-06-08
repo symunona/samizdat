@@ -50,6 +50,15 @@ Use front matter: create date, topic, excerpt, status of where we are.
 When done, move to plans/archive folder.
 When feature is larger commit plan to main, then branch off, do smaller commits, at the end, ask the user to check. When done, squash merge back to main.
 
+## Git Worktrees
+Use `isolation: "worktree"` when spawning Agent for any non-trivial code task. Worktree isolates changes so main working tree stays clean.
+
+Rules:
+- Agent writes code → use worktree isolation
+- Agent does research/read-only → no worktree needed
+- After agent completes, review diff before merging back to main
+- Worktree auto-cleans if agent makes no changes
+
 ## Testing
 Craft self-tests before starting based on the plan.
 If there are inconsistencies in the specs, raise it to the user, before starting to implement.
