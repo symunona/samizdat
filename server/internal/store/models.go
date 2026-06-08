@@ -21,6 +21,9 @@ type Document struct {
 	Title        string  `json:"title"`
 	Markdown     string  `json:"markdown"`
 	FetchedAt    string  `json:"fetched_at"`
+	Excerpt      string  `json:"excerpt"`
+	HeroImageUrl string  `json:"hero_image_url"`
+	Author       string  `json:"author"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
 	Rev          int64   `json:"rev"`
@@ -38,6 +41,20 @@ type Job struct {
 	UpdatedAt string  `json:"updated_at"`
 	Rev       int64   `json:"rev"`
 	DeletedAt *string `json:"deleted_at"`
+}
+
+type MediaAsset struct {
+	ID          string  `json:"id"`
+	DocumentID  string  `json:"document_id"`
+	OriginalUrl string  `json:"original_url"`
+	LocalPath   string  `json:"local_path"`
+	Kind        string  `json:"kind"`
+	Width       *int64  `json:"width"`
+	Height      *int64  `json:"height"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
+	Rev         int64   `json:"rev"`
+	DeletedAt   *string `json:"deleted_at"`
 }
 
 type PairCode struct {

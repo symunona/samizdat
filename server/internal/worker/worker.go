@@ -18,11 +18,12 @@ const (
 )
 
 type Worker struct {
-	q *store.Queries
+	q        *store.Queries
+	cacheDir string
 }
 
-func New(q *store.Queries) *Worker {
-	return &Worker{q: q}
+func New(q *store.Queries, cacheDir string) *Worker {
+	return &Worker{q: q, cacheDir: cacheDir}
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -65,6 +66,8 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	switch job.Kind {
 	case "scrape_url":
 		err = handleScrapeURL(ctx, w.q, job)
+	case "fetch_assets":
+		err = handleFetchAssets(ctx, w.q, job, w.cacheDir)
 	default:
 		err = fmt.Errorf("unknown job kind: %s", job.Kind)
 	}

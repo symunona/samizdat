@@ -67,9 +67,12 @@ UPDATE jobs SET status = ?, attempts = ?, run_after = ?, updated_at = ? WHERE id
 SELECT * FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1;
 
 -- name: InsertDocument :one
-INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 RETURNING *;
+
+-- name: UpdateDocumentExcerptHero :exec
+UPDATE documents SET excerpt = ?, hero_image_url = ?, author = ?, updated_at = ? WHERE id = ?;
 
 -- name: ListDocuments :many
 SELECT * FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50;
@@ -89,3 +92,17 @@ RETURNING *;
 -- name: GetReadState :one
 SELECT * FROM read_states
 WHERE device_id = ? AND document_id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: InsertMediaAsset :one
+INSERT INTO media_assets (id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: GetMediaAssetByOriginalURL :one
+SELECT * FROM media_assets WHERE original_url = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: GetMediaAssetByID :one
+SELECT * FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: ListMediaAssetsByDocument :many
+SELECT * FROM media_assets WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at;

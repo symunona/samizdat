@@ -68,10 +68,14 @@ func runServe(_ *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
+	if err := os.MkdirAll(c.CacheDir+"/media", 0755); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+
 	urls := network.DetectURLs(port)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	handler := api.New(context.Background(), db, webDir, urls)
+	handler := api.New(context.Background(), db, webDir, urls, c.CacheDir)
 
 	log.Printf("samizdat %s listening on %s", api.Version(), addr)
 	log.Printf("reachable at:\n  %s", strings.Join(urls, "\n  "))

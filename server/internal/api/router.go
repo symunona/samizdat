@@ -15,10 +15,10 @@ import (
 
 // New returns the root HTTP handler. webDir may be empty (API-only mode).
 // serverURLs is the ordered list of reachable base URLs for this server.
-func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string) http.Handler {
+func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, cacheDir string) http.Handler {
 	q := store.New(db)
 
-	w := worker.New(q)
+	w := worker.New(q, cacheDir)
 	w.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -40,6 +40,10 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string) ht
 	docsH := &documentsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents", bearerAuth(q, docsH.list))
 	mux.HandleFunc("GET /api/v1/documents/{id}", bearerAuth(q, docsH.get))
+	mux.HandleFunc("GET /api/v1/documents/{id}/media", bearerAuth(q, docsH.listMedia))
+
+	mediaH := &mediaHandler{q: q, cacheDir: cacheDir}
+	mux.HandleFunc("GET /api/v1/media/{id}", mediaH.serve)
 
 	rsH := &readStatesHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents/{id}/progress", bearerAuth(q, rsH.get))

@@ -36,3 +36,20 @@ func (h *documentsHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, doc)
 }
+
+func (h *documentsHandler) listMedia(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "missing id")
+		return
+	}
+	assets, err := h.q.ListMediaAssetsByDocument(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if assets == nil {
+		assets = []store.MediaAsset{}
+	}
+	writeJSON(w, http.StatusOK, assets)
+}

@@ -97,7 +97,7 @@ func (q *Queries) GetDeviceByTokenHash(ctx context.Context, tokenHash string) (D
 }
 
 const getDocumentByCanonicalURL = `-- name: GetDocumentByCanonicalURL :one
-SELECT id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev, deleted_at FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev, deleted_at FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl string) (Document, error) {
@@ -109,6 +109,9 @@ func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl st
 		&i.Title,
 		&i.Markdown,
 		&i.FetchedAt,
+		&i.Excerpt,
+		&i.HeroImageUrl,
+		&i.Author,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -118,7 +121,7 @@ func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl st
 }
 
 const getDocumentByID = `-- name: GetDocumentByID :one
-SELECT id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev, deleted_at FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev, deleted_at FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetDocumentByID(ctx context.Context, id string) (Document, error) {
@@ -130,6 +133,55 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id string) (Document, err
 		&i.Title,
 		&i.Markdown,
 		&i.FetchedAt,
+		&i.Excerpt,
+		&i.HeroImageUrl,
+		&i.Author,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getMediaAssetByID = `-- name: GetMediaAssetByID :one
+SELECT id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev, deleted_at FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetMediaAssetByID(ctx context.Context, id string) (MediaAsset, error) {
+	row := q.db.QueryRowContext(ctx, getMediaAssetByID, id)
+	var i MediaAsset
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.OriginalUrl,
+		&i.LocalPath,
+		&i.Kind,
+		&i.Width,
+		&i.Height,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getMediaAssetByOriginalURL = `-- name: GetMediaAssetByOriginalURL :one
+SELECT id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev, deleted_at FROM media_assets WHERE original_url = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetMediaAssetByOriginalURL(ctx context.Context, originalUrl string) (MediaAsset, error) {
+	row := q.db.QueryRowContext(ctx, getMediaAssetByOriginalURL, originalUrl)
+	var i MediaAsset
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.OriginalUrl,
+		&i.LocalPath,
+		&i.Kind,
+		&i.Width,
+		&i.Height,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -225,9 +277,9 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 }
 
 const insertDocument = `-- name: InsertDocument :one
-INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-RETURNING id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev, deleted_at
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev, deleted_at
 `
 
 type InsertDocumentParams struct {
@@ -236,6 +288,9 @@ type InsertDocumentParams struct {
 	Title        string `json:"title"`
 	Markdown     string `json:"markdown"`
 	FetchedAt    string `json:"fetched_at"`
+	Excerpt      string `json:"excerpt"`
+	HeroImageUrl string `json:"hero_image_url"`
+	Author       string `json:"author"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
 }
@@ -247,6 +302,9 @@ func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) 
 		arg.Title,
 		arg.Markdown,
 		arg.FetchedAt,
+		arg.Excerpt,
+		arg.HeroImageUrl,
+		arg.Author,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -257,6 +315,9 @@ func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) 
 		&i.Title,
 		&i.Markdown,
 		&i.FetchedAt,
+		&i.Excerpt,
+		&i.HeroImageUrl,
+		&i.Author,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -297,6 +358,53 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, erro
 		&i.Status,
 		&i.Attempts,
 		&i.RunAfter,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const insertMediaAsset = `-- name: InsertMediaAsset :one
+INSERT INTO media_assets (id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev, deleted_at
+`
+
+type InsertMediaAssetParams struct {
+	ID          string `json:"id"`
+	DocumentID  string `json:"document_id"`
+	OriginalUrl string `json:"original_url"`
+	LocalPath   string `json:"local_path"`
+	Kind        string `json:"kind"`
+	Width       *int64 `json:"width"`
+	Height      *int64 `json:"height"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+func (q *Queries) InsertMediaAsset(ctx context.Context, arg InsertMediaAssetParams) (MediaAsset, error) {
+	row := q.db.QueryRowContext(ctx, insertMediaAsset,
+		arg.ID,
+		arg.DocumentID,
+		arg.OriginalUrl,
+		arg.LocalPath,
+		arg.Kind,
+		arg.Width,
+		arg.Height,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i MediaAsset
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.OriginalUrl,
+		&i.LocalPath,
+		&i.Kind,
+		&i.Width,
+		&i.Height,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -356,7 +464,7 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 }
 
 const listDocuments = `-- name: ListDocuments :many
-SELECT id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev, deleted_at FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev, deleted_at FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50
 `
 
 func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
@@ -374,6 +482,48 @@ func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
 			&i.Title,
 			&i.Markdown,
 			&i.FetchedAt,
+			&i.Excerpt,
+			&i.HeroImageUrl,
+			&i.Author,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMediaAssetsByDocument = `-- name: ListMediaAssetsByDocument :many
+SELECT id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev, deleted_at FROM media_assets WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at
+`
+
+func (q *Queries) ListMediaAssetsByDocument(ctx context.Context, documentID string) ([]MediaAsset, error) {
+	rows, err := q.db.QueryContext(ctx, listMediaAssetsByDocument, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MediaAsset
+	for rows.Next() {
+		var i MediaAsset
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.OriginalUrl,
+			&i.LocalPath,
+			&i.Kind,
+			&i.Width,
+			&i.Height,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -487,6 +637,29 @@ type UpdateDeviceLastSeenParams struct {
 
 func (q *Queries) UpdateDeviceLastSeen(ctx context.Context, arg UpdateDeviceLastSeenParams) error {
 	_, err := q.db.ExecContext(ctx, updateDeviceLastSeen, arg.LastSeenAt, arg.ID)
+	return err
+}
+
+const updateDocumentExcerptHero = `-- name: UpdateDocumentExcerptHero :exec
+UPDATE documents SET excerpt = ?, hero_image_url = ?, author = ?, updated_at = ? WHERE id = ?
+`
+
+type UpdateDocumentExcerptHeroParams struct {
+	Excerpt      string `json:"excerpt"`
+	HeroImageUrl string `json:"hero_image_url"`
+	Author       string `json:"author"`
+	UpdatedAt    string `json:"updated_at"`
+	ID           string `json:"id"`
+}
+
+func (q *Queries) UpdateDocumentExcerptHero(ctx context.Context, arg UpdateDocumentExcerptHeroParams) error {
+	_, err := q.db.ExecContext(ctx, updateDocumentExcerptHero,
+		arg.Excerpt,
+		arg.HeroImageUrl,
+		arg.Author,
+		arg.UpdatedAt,
+		arg.ID,
+	)
 	return err
 }
 

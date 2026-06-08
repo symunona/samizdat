@@ -107,19 +107,45 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job) error
 	}
 
 	title := strings.TrimSpace(result.Metadata.Title)
-	now := time.Now().UTC().Format(time.RFC3339)
 
-	_, err = q.InsertDocument(ctx, store.InsertDocumentParams{
-		ID:           uuid.NewString(),
+	excerpt := strings.TrimSpace(result.Metadata.Description)
+	if len(excerpt) > 500 {
+		excerpt = excerpt[:500]
+	}
+	heroImageURL := strings.TrimSpace(result.Metadata.Image)
+	author := strings.TrimSpace(result.Metadata.Author)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	docID := uuid.NewString()
+
+	doc, err := q.InsertDocument(ctx, store.InsertDocumentParams{
+		ID:           docID,
 		CanonicalUrl: canonical,
 		Title:        title,
 		Markdown:     md,
 		FetchedAt:    now,
+		Excerpt:      excerpt,
+		HeroImageUrl: heroImageURL,
+		Author:       author,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	})
 	if err != nil {
 		return fmt.Errorf("insert document: %w", err)
+	}
+
+	// Enqueue asset fetching job.
+	payload, _ := json.Marshal(map[string]string{"document_id": doc.ID})
+	_, err = q.InsertJob(ctx, store.InsertJobParams{
+		ID:        uuid.NewString(),
+		Kind:      "fetch_assets",
+		Payload:   string(payload),
+		RunAfter:  now,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		return fmt.Errorf("enqueue fetch_assets: %w", err)
 	}
 	return nil
 }

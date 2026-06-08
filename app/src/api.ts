@@ -81,6 +81,18 @@ export type Document = {
   title: string
   markdown: string
   fetched_at: string
+  excerpt: string
+  hero_image_url: string
+  author: string
+}
+
+export type MediaAsset = {
+  id: string
+  document_id: string
+  original_url: string
+  kind: 'hero' | 'content'
+  width: number | null
+  height: number | null
 }
 
 export async function fetchDocument(serverUrl: string, token: string, id: string): Promise<Document> {
@@ -166,4 +178,20 @@ export async function submitScrapeJob(
     body: JSON.stringify({ url }),
   })
   return json<{ job_id: string }>(res, '/api/v1/jobs')
+}
+
+export async function fetchDocumentMedia(
+  serverUrl: string,
+  token: string,
+  docId: string,
+): Promise<MediaAsset[]> {
+  try {
+    const res = await fetch(
+      `${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/media`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    return json<MediaAsset[]>(res, '/api/v1/documents/:id/media')
+  } catch {
+    return []
+  }
 }

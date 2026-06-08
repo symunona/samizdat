@@ -82,18 +82,38 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS jobs_status_run_after ON jobs(status, run_after);
 
 CREATE TABLE IF NOT EXISTS documents (
-    id            TEXT PRIMARY KEY,
-    canonical_url TEXT NOT NULL,
-    title         TEXT NOT NULL DEFAULT '',
-    markdown      TEXT NOT NULL DEFAULT '',
-    fetched_at    TEXT NOT NULL,
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL,
-    rev           INTEGER NOT NULL DEFAULT 0,
-    deleted_at    TEXT
+    id              TEXT PRIMARY KEY,
+    canonical_url   TEXT NOT NULL,
+    title           TEXT NOT NULL DEFAULT '',
+    markdown        TEXT NOT NULL DEFAULT '',
+    fetched_at      TEXT NOT NULL,
+    excerpt         TEXT NOT NULL DEFAULT '',
+    hero_image_url  TEXT NOT NULL DEFAULT '',
+    author          TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    rev             INTEGER NOT NULL DEFAULT 0,
+    deleted_at      TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS documents_canonical_url ON documents(canonical_url);
+
+CREATE TABLE IF NOT EXISTS media_assets (
+    id           TEXT PRIMARY KEY,
+    document_id  TEXT NOT NULL REFERENCES documents(id),
+    original_url TEXT NOT NULL,
+    local_path   TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    width        INTEGER,
+    height       INTEGER,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    rev          INTEGER NOT NULL DEFAULT 0,
+    deleted_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS media_assets_document_id ON media_assets(document_id);
+CREATE UNIQUE INDEX IF NOT EXISTS media_assets_original_url ON media_assets(original_url);
 
 CREATE TABLE IF NOT EXISTS read_states (
     id          TEXT    PRIMARY KEY,
@@ -116,6 +136,9 @@ func migrate(db *sql.DB) error {
 	// Additive column migrations — safe to re-run; ignore "duplicate column" errors.
 	additiveMigrations := []string{
 		`ALTER TABLE devices ADD COLUMN last_seen_at TEXT`,
+		`ALTER TABLE documents ADD COLUMN excerpt TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE documents ADD COLUMN hero_image_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE documents ADD COLUMN author TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {
