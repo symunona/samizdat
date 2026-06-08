@@ -1,6 +1,7 @@
 package api
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"io/fs"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/symunona/samizdat/server/internal/store"
 	"github.com/symunona/samizdat/server/internal/worker"
@@ -74,9 +76,69 @@ func spaHandler(dir string) http.Handler {
 		if _, err := fs.Stat(root, path); err != nil {
 			r2 := r.Clone(r.Context())
 			r2.URL.Path = "/"
+			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeFileFS(w, r2, root, "index.html")
 			return
 		}
+		// Never cache index.html — hashed JS chunks are fine to cache long-term
+		if path == "index.html" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			gzw := &gzipResponseWriter{ResponseWriter: w, gz: nil}
+			defer gzw.close()
+			w = gzw
+		}
 		fileServer.ServeHTTP(w, r)
 	})
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz      *gzip.Writer
+	skipped bool
+}
+
+func (g *gzipResponseWriter) WriteHeader(code int) {
+	ct := g.ResponseWriter.Header().Get("Content-Type")
+	if isCompressible(ct) {
+		g.ResponseWriter.Header().Set("Content-Encoding", "gzip")
+		g.ResponseWriter.Header().Del("Content-Length")
+		g.gz = gzip.NewWriter(g.ResponseWriter)
+	} else {
+		g.skipped = true
+	}
+	g.ResponseWriter.WriteHeader(code)
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) {
+	if g.gz == nil && !g.skipped {
+		// WriteHeader not called yet — default 200, check content type from header
+		ct := g.ResponseWriter.Header().Get("Content-Type")
+		if isCompressible(ct) {
+			g.ResponseWriter.Header().Set("Content-Encoding", "gzip")
+			g.ResponseWriter.Header().Del("Content-Length")
+			g.gz = gzip.NewWriter(g.ResponseWriter)
+		} else {
+			g.skipped = true
+		}
+	}
+	if g.gz != nil {
+		return g.gz.Write(b)
+	}
+	return g.ResponseWriter.Write(b)
+}
+
+func (g *gzipResponseWriter) close() {
+	if g.gz != nil {
+		g.gz.Close()
+	}
+}
+
+func isCompressible(ct string) bool {
+	return strings.HasPrefix(ct, "text/") ||
+		strings.Contains(ct, "javascript") ||
+		strings.Contains(ct, "json") ||
+		strings.Contains(ct, "xml") ||
+		strings.Contains(ct, "wasm")
 }
