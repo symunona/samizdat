@@ -5,6 +5,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { loadConnection } from '../src/storage'
 import type { StoredConnection } from '../src/storage'
 import { ConnectionProvider } from '../src/ConnectionContext'
+import { ToastProvider } from '../src/ToastContext'
+import { ConfirmProvider } from '../src/ConfirmContext'
 
 export default function RootLayout() {
   const router = useRouter()
@@ -30,7 +32,11 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ConnectionProvider>
-        <Slot />
+        <ToastProvider>
+          <ConfirmProvider>
+            <Slot />
+          </ConfirmProvider>
+        </ToastProvider>
       </ConnectionProvider>
     </GestureHandlerRootView>
   )

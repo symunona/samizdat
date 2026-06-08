@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { findReachable, health, pair } from '../src/api'
 import { clearConnection, loadConnection, saveConnection } from '../src/storage'
+import { useConnection } from '../src/ConnectionContext'
 
 function defaultServerUrl(): string {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -54,6 +55,7 @@ export default function ConnectScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const router = useRouter()
+  const { reload } = useConnection()
 
   const [url, setUrl] = useState(defaultServerUrl)
   const [code, setCode] = useState('')
@@ -77,6 +79,7 @@ export default function ConnectScreen() {
       const found = await findReachable(urls, t)
       if (!found) throw new Error('No server reachable on any known address.')
 
+      await reload()
       router.replace('/')
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Connection failed'
@@ -91,6 +94,7 @@ export default function ConnectScreen() {
 
   async function disconnect() {
     await clearConnection()
+    await reload()
   }
 
   return (

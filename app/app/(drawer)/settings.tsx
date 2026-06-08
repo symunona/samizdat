@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDevices, revokeDevice, ApiError } from '../../src/api'
 import type { DeviceInfo } from '../../src/api'
 import { clearConnection, removeServerUrl } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
+import { useConfirm } from '../../src/ConfirmContext'
+import { useToast } from '../../src/ToastContext'
 
 function hostname(url: string): string {
   try { return new URL(url).hostname } catch { return url }
@@ -43,6 +45,9 @@ export default function SettingsScreen() {
   const router = useRouter()
   const { status, activeUrl, serverUrls, token, deviceId, serverInfo, lastChecked, probe, reload, logout } = useConnection()
 
+  const { toast } = useToast()
+  const { confirm } = useConfirm()
+
   const [probing, setProbing] = useState(false)
   const [devices, setDevices] = useState<DeviceInfo[]>([])
   const [currentDeviceId, setCurrentDeviceId] = useState<string | null>(null)
@@ -51,11 +56,11 @@ export default function SettingsScreen() {
   const [devicesError, setDevicesError] = useState<string | null>(null)
   const [revoking, setRevoking] = useState<Set<string>>(new Set())
 
-  async function handleUnauthorized() {
+  const handleUnauthorized = useCallback(async () => {
     await logout()
-    Alert.alert('Device disconnected', 'This device\'s access was revoked. Please relink.')
+    toast('Device access was revoked. Please relink.', 'error')
     router.replace('/connect')
-  }
+  }, [logout, toast, router])
 
   const loadDevices = useCallback(async (silent = false) => {
     if (!activeUrl || !token) return
@@ -79,7 +84,7 @@ export default function SettingsScreen() {
       setDevicesLoading(false)
       setDevicesRefreshing(false)
     }
-  }, [activeUrl, token])
+  }, [activeUrl, token, handleUnauthorized])
 
   useEffect(() => {
     if (status === 'connected') loadDevices()
@@ -97,52 +102,40 @@ export default function SettingsScreen() {
     router.replace('/connect')
   }
 
-  function handleDeleteUrl(url: string) {
-    Alert.alert(
-      'Remove server URL',
-      `Remove "${url}" from the list?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: async () => {
-            await removeServerUrl(url)
-            await reload()
-          },
-        },
-      ]
-    )
+  async function handleDeleteUrl(url: string) {
+    const ok = await confirm({
+      title: 'Remove server URL',
+      message: `Remove "${url}" from the list?`,
+      confirmLabel: 'Remove',
+      destructive: true,
+    })
+    if (!ok) return
+    await removeServerUrl(url)
+    await reload()
   }
 
-  function handleRevokeDevice(id: string, name: string) {
-    Alert.alert(
-      'Revoke device',
-      `Remove "${name || 'Unnamed device'}"? It will be disconnected immediately.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Revoke',
-          style: 'destructive',
-          onPress: async () => {
-            if (!activeUrl || !token) return
-            setRevoking(prev => new Set(prev).add(id))
-            try {
-              await revokeDevice(activeUrl, token, id)
-              await loadDevices(true)
-            } catch (e: unknown) {
-              if (e instanceof ApiError && e.status === 401) {
-                handleUnauthorized()
-                return
-              }
-              Alert.alert('Error', e instanceof Error ? e.message : 'Failed to revoke device')
-            } finally {
-              setRevoking(prev => { const s = new Set(prev); s.delete(id); return s })
-            }
-          },
-        },
-      ]
-    )
+  async function handleRevokeDevice(id: string, name: string) {
+    const ok = await confirm({
+      title: 'Revoke device',
+      message: `Remove "${name || 'Unnamed device'}"? It will be disconnected immediately.`,
+      confirmLabel: 'Revoke',
+      destructive: true,
+    })
+    if (!ok) return
+    if (!activeUrl || !token) return
+    setRevoking(prev => new Set(prev).add(id))
+    try {
+      await revokeDevice(activeUrl, token, id)
+      await loadDevices(true)
+    } catch (e: unknown) {
+      if (e instanceof ApiError && e.status === 401) {
+        handleUnauthorized()
+        return
+      }
+      toast(e instanceof Error ? e.message : 'Failed to revoke device', 'error')
+    } finally {
+      setRevoking(prev => { const s = new Set(prev); s.delete(id); return s })
+    }
   }
 
   const dotColor = status === 'connected' ? theme.colors.online : status === 'disconnected' ? theme.colors.error : theme.colors.placeholder

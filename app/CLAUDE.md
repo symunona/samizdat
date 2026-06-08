@@ -64,3 +64,32 @@ Digest: assembled citations, LLM draft, export.
 ## UI guidelines
 Always look for existing components before making a new one.
 Interactions: when user clicks on something that does an API call - indicate loading, disable button. On error, toast, indicate error on button. Make this a component, reuse wherever.
+
+## Connection state — NEVER bypass ConnectionProvider
+
+`ConnectionProvider` (in `src/ConnectionContext.tsx`) is the single owner of connection state. It probes the server on mount and every 30s, and picks the fastest reachable URL automatically.
+
+**Rule:** Every screen reads connection via `useConnection()`. Never import `loadConnection`, `saveConnection`, or `findReachable` directly in a screen.
+
+```ts
+// ✅ correct
+const { activeUrl, token, status } = useConnection()
+
+// ❌ wrong — bypasses provider, re-probes every render, hangs on slow/dead URLs
+const saved = await loadConnection()
+const found = await findReachable(saved.serverUrls, saved.token)
+```
+
+**Why it matters:** `findReachable` without a `lastSuccessfulUrl` hint tries ALL stored URLs sequentially — localhost, docker bridges, Tailscale — with no timeout. For a remote client (Tailscale, LAN), unreachable IPs stall the fetch indefinitely. `ConnectionProvider` already did this work; use its result.
+
+**Pattern for screens that fetch on mount:**
+```ts
+const { activeUrl, token, status } = useConnection()
+
+useEffect(() => {
+  if (status === 'connected') load()
+  else if (status === 'disconnected') { setError('Not connected'); setLoading(false) }
+}, [status, load])
+```
+
+**Writing connection data** (e.g. after pairing): call `reload()` from `useConnection()` — do not call `saveConnection` and forget. `reload()` re-reads storage and triggers a fresh probe, keeping the provider in sync.
