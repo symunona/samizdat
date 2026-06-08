@@ -55,6 +55,7 @@ Craft self-tests before starting based on the plan.
 If there are inconsistencies in the specs, raise it to the user, before starting to implement.
 Always run linter before squash merging to main, fix errors, run lint jobs.
 Maintain the global linter.
+Always run a 1 time e2e test with agent-browser to check if what you implemented actually worked!
 
 ## Subsidiarity
 Keep sub-project specifix notes in the CLAUDE.mds. Before each merge, run the `diff_review` tool to see if we need to append the respective CLAUDE.md with new info.
@@ -63,7 +64,7 @@ Keep sub-project specifix notes in the CLAUDE.mds. Before each merge, run the `d
 No dead code. Only functional code.
 Keep repo CLEAN code.
 Try always everything DRY.
-
+Always run `just build` before you call a job done.
 
 ## Design source of truth
 Detailed research + decisions live in the planning vault (outside this repo):
