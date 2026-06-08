@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -65,12 +66,12 @@ func runServe(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	urls := network.DetectURLs(port)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	handler := api.New(db, webDir, urls)
+	handler := api.New(context.Background(), db, webDir, urls)
 
 	log.Printf("samizdat %s listening on %s", api.Version(), addr)
 	log.Printf("reachable at:\n  %s", strings.Join(urls, "\n  "))
@@ -78,5 +79,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 		log.Printf("web app served from %s", webDir)
 	}
 
-	return http.ListenAndServe(addr, handler)
+	if err := http.ListenAndServe(addr, handler); err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	return nil
 }

@@ -47,10 +47,13 @@ func Claim(ctx context.Context, db *sql.DB, q *store.Queries, code string) error
 	if err != nil || time.Now().UTC().After(exp) {
 		return ErrInvalid
 	}
-	return q.MarkPairCodeUsed(ctx, store.MarkPairCodeUsedParams{
+	if err := q.MarkPairCodeUsed(ctx, store.MarkPairCodeUsedParams{
 		UsedAt: sql.NullString{String: time.Now().UTC().Format(time.RFC3339), Valid: true},
 		Code:   code,
-	})
+	}); err != nil {
+		return fmt.Errorf("mark used: %w", err)
+	}
+	return nil
 }
 
 var ErrInvalid = fmt.Errorf("invalid or expired pairing code")
@@ -60,7 +63,7 @@ func randomCode() (string, error) {
 	for i := range b {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("rand int: %w", err)
 		}
 		b[i] = charset[n.Int64()]
 	}

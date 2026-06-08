@@ -31,7 +31,7 @@ func repoRoot() string {
 	return "."
 }
 
-// suppress unused import warning for runtime on non-debug builds
+// suppress unused import warning for runtime on non-debug builds.
 var _ = runtime.GOOS
 
 func main() {

@@ -10,6 +10,41 @@ import (
 	"database/sql"
 )
 
+const claimNextJob = `-- name: ClaimNextJob :one
+UPDATE jobs
+SET status = 'running', attempts = attempts + 1, updated_at = ?
+WHERE id = (
+    SELECT j2.id FROM jobs j2
+    WHERE j2.status = 'queued' AND j2.run_after <= ?
+    ORDER BY j2.created_at
+    LIMIT 1
+)
+RETURNING id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, deleted_at
+`
+
+type ClaimNextJobParams struct {
+	UpdatedAt string `json:"updated_at"`
+	RunAfter  string `json:"run_after"`
+}
+
+func (q *Queries) ClaimNextJob(ctx context.Context, arg ClaimNextJobParams) (Job, error) {
+	row := q.db.QueryRowContext(ctx, claimNextJob, arg.UpdatedAt, arg.RunAfter)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Payload,
+		&i.Status,
+		&i.Attempts,
+		&i.RunAfter,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getDevice = `-- name: GetDevice :one
 SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at FROM devices
 WHERE id = ? AND deleted_at IS NULL
@@ -43,6 +78,27 @@ func (q *Queries) GetDeviceByTokenHash(ctx context.Context, tokenHash string) (D
 		&i.ID,
 		&i.Name,
 		&i.TokenHash,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getDocumentByCanonicalURL = `-- name: GetDocumentByCanonicalURL :one
+SELECT id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev, deleted_at FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl string) (Document, error) {
+	row := q.db.QueryRowContext(ctx, getDocumentByCanonicalURL, canonicalUrl)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.CanonicalUrl,
+		&i.Title,
+		&i.Markdown,
+		&i.FetchedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -110,6 +166,87 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 	return i, err
 }
 
+const insertDocument = `-- name: InsertDocument :one
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev, deleted_at
+`
+
+type InsertDocumentParams struct {
+	ID           string `json:"id"`
+	CanonicalUrl string `json:"canonical_url"`
+	Title        string `json:"title"`
+	Markdown     string `json:"markdown"`
+	FetchedAt    string `json:"fetched_at"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) (Document, error) {
+	row := q.db.QueryRowContext(ctx, insertDocument,
+		arg.ID,
+		arg.CanonicalUrl,
+		arg.Title,
+		arg.Markdown,
+		arg.FetchedAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.CanonicalUrl,
+		&i.Title,
+		&i.Markdown,
+		&i.FetchedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const insertJob = `-- name: InsertJob :one
+INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev)
+VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, 0)
+RETURNING id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, deleted_at
+`
+
+type InsertJobParams struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Payload   string `json:"payload"`
+	RunAfter  string `json:"run_after"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, error) {
+	row := q.db.QueryRowContext(ctx, insertJob,
+		arg.ID,
+		arg.Kind,
+		arg.Payload,
+		arg.RunAfter,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Payload,
+		&i.Status,
+		&i.Attempts,
+		&i.RunAfter,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const insertPairCode = `-- name: InsertPairCode :exec
 INSERT INTO pair_codes (code, expires_at) VALUES (?, ?)
 `
@@ -157,6 +294,80 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const listDocuments = `-- name: ListDocuments :many
+SELECT id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev, deleted_at FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50
+`
+
+func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
+	rows, err := q.db.QueryContext(ctx, listDocuments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.CanonicalUrl,
+			&i.Title,
+			&i.Markdown,
+			&i.FetchedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markJobDone = `-- name: MarkJobDone :exec
+UPDATE jobs SET status = 'done', updated_at = ? WHERE id = ?
+`
+
+type MarkJobDoneParams struct {
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) MarkJobDone(ctx context.Context, arg MarkJobDoneParams) error {
+	_, err := q.db.ExecContext(ctx, markJobDone, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const markJobFailed = `-- name: MarkJobFailed :exec
+UPDATE jobs SET status = ?, attempts = ?, run_after = ?, updated_at = ? WHERE id = ?
+`
+
+type MarkJobFailedParams struct {
+	Status    string `json:"status"`
+	Attempts  int64  `json:"attempts"`
+	RunAfter  string `json:"run_after"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) MarkJobFailed(ctx context.Context, arg MarkJobFailedParams) error {
+	_, err := q.db.ExecContext(ctx, markJobFailed,
+		arg.Status,
+		arg.Attempts,
+		arg.RunAfter,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
 }
 
 const markPairCodeUsed = `-- name: MarkPairCodeUsed :exec

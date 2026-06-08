@@ -37,3 +37,36 @@ SELECT value FROM server_settings WHERE key = ? LIMIT 1;
 -- name: UpsertSetting :exec
 INSERT INTO server_settings (key, value) VALUES (?, ?)
 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+-- name: InsertJob :one
+INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev)
+VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: ClaimNextJob :one
+UPDATE jobs
+SET status = 'running', attempts = attempts + 1, updated_at = ?
+WHERE id = (
+    SELECT j2.id FROM jobs j2
+    WHERE j2.status = 'queued' AND j2.run_after <= ?
+    ORDER BY j2.created_at
+    LIMIT 1
+)
+RETURNING *;
+
+-- name: MarkJobDone :exec
+UPDATE jobs SET status = 'done', updated_at = ? WHERE id = ?;
+
+-- name: MarkJobFailed :exec
+UPDATE jobs SET status = ?, attempts = ?, run_after = ?, updated_at = ? WHERE id = ?;
+
+-- name: GetDocumentByCanonicalURL :one
+SELECT * FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: InsertDocument :one
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: ListDocuments :many
+SELECT * FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50;

@@ -37,7 +37,7 @@ func init() {
 func loadPort() (int, error) {
 	cfgPath, err := config.DefaultPath()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("default config path: %w", err)
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -52,13 +52,13 @@ func runDeviceList(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	url := fmt.Sprintf("http://localhost:%d/admin/devices", port)
+	url := fmt.Sprintf("http://localhost:%d/api/v1/admin/devices", port)
 	resp, err := http.Get(url) //nolint:noctx
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not reach server on port %d. Is `samizdat serve` running?\n", port)
-		return err
+		return fmt.Errorf("get devices: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		fmt.Fprintf(os.Stderr, "server returned %s\n", resp.Status)
@@ -96,7 +96,7 @@ func runDeviceRevoke(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	url := fmt.Sprintf("http://localhost:%d/admin/devices/%s", port, id)
+	url := fmt.Sprintf("http://localhost:%d/api/v1/admin/devices/%s", port, id)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
@@ -105,9 +105,9 @@ func runDeviceRevoke(_ *cobra.Command, args []string) error {
 	resp, err := http.DefaultClient.Do(req) //nolint:noctx
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not reach server on port %d. Is `samizdat serve` running?\n", port)
-		return err
+		return fmt.Errorf("revoke device: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
 	case http.StatusNoContent:

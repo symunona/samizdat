@@ -55,6 +55,9 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
+# --- Temporary / debug (screenshots, browser sessions, scratch) ---
+tmp/
+
 # --- Logs ---
 *.log
 npm-debug.*

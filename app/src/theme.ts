@@ -1,6 +1,6 @@
 import { StyleSheet } from 'react-native-unistyles'
 
-export const dark = {
+const dark = {
   colors: {
     background: '#0b0b0c',
     surface: '#161618',

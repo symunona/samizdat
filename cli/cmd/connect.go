@@ -30,7 +30,7 @@ func init() {
 func runConnect(_ *cobra.Command, _ []string) error {
 	cfgPath, err := config.DefaultPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("default config path: %w", err)
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -42,13 +42,13 @@ func runConnect(_ *cobra.Command, _ []string) error {
 		port = flagConnectPort
 	}
 
-	url := fmt.Sprintf("http://localhost:%d/admin/pair/new", port)
+	url := fmt.Sprintf("http://localhost:%d/api/v1/admin/pair/new", port)
 	resp, err := http.Post(url, "application/json", strings.NewReader("{}")) //nolint:noctx
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not reach server on port %d. Is `samizdat serve` running?\n", port)
-		return err
+		return fmt.Errorf("post pairing request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		fmt.Fprintf(os.Stderr, "server returned %s\n", resp.Status)

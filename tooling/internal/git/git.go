@@ -1,6 +1,7 @@
 package git
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
 )
@@ -8,7 +9,7 @@ import (
 func CurrentBranch() (string, error) {
 	out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("git rev-parse: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -17,7 +18,7 @@ func CurrentBranch() (string, error) {
 func DiffFromMain(path string) (string, error) {
 	out, err := exec.Command("git", "diff", "main...HEAD", "--", path).Output()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("git diff: %w", err)
 	}
 	return string(out), nil
 }

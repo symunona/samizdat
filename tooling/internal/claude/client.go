@@ -52,12 +52,12 @@ func (c *Client) Complete(ctx context.Context, model, prompt string) (string, er
 		Messages:  []message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("json marshal: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -65,13 +65,13 @@ func (c *Client) Complete(ctx context.Context, model, prompt string) (string, er
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("http do: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result response
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
+		return "", fmt.Errorf("decode response: %w", err)
 	}
 	if result.Error != nil {
 		return "", fmt.Errorf("api error: %s", result.Error.Message)

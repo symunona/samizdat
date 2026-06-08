@@ -18,11 +18,11 @@ async function json<T>(res: Response, what: string): Promise<T> {
 }
 
 export async function health(url: string): Promise<Health> {
-  return json<Health>(await fetch(`${base(url)}/health`), '/health')
+  return json<Health>(await fetch(`${base(url)}/api/v1/health`), '/api/v1/health')
 }
 
 export async function pair(url: string, code: string, name?: string): Promise<PairResult> {
-  const res = await fetch(`${base(url)}/pair`, {
+  const res = await fetch(`${base(url)}/api/v1/pair`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code, name }),
@@ -31,10 +31,10 @@ export async function pair(url: string, code: string, name?: string): Promise<Pa
 }
 
 export async function me(url: string, token: string): Promise<Me> {
-  const res = await fetch(`${base(url)}/me`, {
+  const res = await fetch(`${base(url)}/api/v1/me`, {
     headers: { Authorization: `Bearer ${token}` },
   })
-  return json<Me>(res, '/me')
+  return json<Me>(res, '/api/v1/me')
 }
 
 // Try each URL in order; return the first one that successfully connects.
@@ -52,4 +52,35 @@ export async function findReachable(
     }
   }
   return null
+}
+
+export type Document = {
+  id: string
+  canonical_url: string
+  title: string
+  markdown: string
+  fetched_at: string
+}
+
+export async function fetchDocuments(serverUrl: string, token: string): Promise<Document[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Document[]>(res, '/api/v1/documents')
+}
+
+export async function submitScrapeJob(
+  serverUrl: string,
+  token: string,
+  url: string,
+): Promise<{ job_id: string }> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ url }),
+  })
+  return json<{ job_id: string }>(res, '/api/v1/jobs')
 }

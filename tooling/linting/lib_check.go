@@ -16,7 +16,7 @@ var GoModFiles = []string{"cli/go.mod", "server/go.mod", "tooling/go.mod"}
 func RunLibCheck(repoRoot string) error {
 	added, err := findAddedLibraries()
 	if err != nil {
-		return err
+		return fmt.Errorf("find added libraries: %w", err)
 	}
 	if len(added) == 0 {
 		fmt.Println("lib-check: no new Go libraries added")
@@ -32,7 +32,7 @@ func RunLibCheck(repoRoot string) error {
 	ai, err := claude.New()
 	if err != nil {
 		fmt.Printf("(set ANTHROPIC_API_KEY for explanations — skipping)\n")
-		return nil
+		return fmt.Errorf("claude client: %w", err)
 	}
 
 	explanations, err := explainLibraries(ai, added)
@@ -55,7 +55,7 @@ func findAddedLibraries() ([]string, error) {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			out = exitErr.Stderr
 		} else {
-			return nil, err
+			return nil, fmt.Errorf("git diff go.mod: %w", err)
 		}
 	}
 
@@ -104,7 +104,11 @@ For each library:
 
 Be concise — one short paragraph per library.`, list)
 
-	return ai.Complete(context.Background(), claude.ModelHaiku, prompt)
+	result, err := ai.Complete(context.Background(), claude.ModelHaiku, prompt)
+	if err != nil {
+		return "", fmt.Errorf("claude complete: %w", err)
+	}
+	return result, nil
 }
 
 func plural(n int, singular, pluralForm string) string {

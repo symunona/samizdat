@@ -83,11 +83,11 @@ func completionTarget(shell string) (target, cmd string) {
 
 func runCompletionInstall(shell, target string) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-		return err
+		return fmt.Errorf("mkdir completion dir: %w", err)
 	}
 	out, err := exec.Command("just", "--completions", shell).Output()
 	if err != nil {
-		return err
+		return fmt.Errorf("just --completions %s: %w", shell, err)
 	}
 	flag := os.O_CREATE | os.O_WRONLY
 	if shell == "bash" {
@@ -97,9 +97,11 @@ func runCompletionInstall(shell, target string) error {
 	}
 	f, err := os.OpenFile(target, flag, 0644)
 	if err != nil {
-		return err
+		return fmt.Errorf("open completion file: %w", err)
 	}
-	defer f.Close()
-	_, err = f.Write(out)
-	return err
+	defer func() { _ = f.Close() }()
+	if _, err = f.Write(out); err != nil {
+		return fmt.Errorf("write completion file: %w", err)
+	}
+	return nil
 }

@@ -19,7 +19,7 @@ var setupCmd = &cobra.Command{
 func runSetup(cmd *cobra.Command, _ []string) error {
 	cfgPath, err := config.DefaultPath()
 	if err != nil {
-		return err
+		return fmt.Errorf("default config path: %w", err)
 	}
 
 	cfg, err := config.Load(cfgPath)

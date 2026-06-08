@@ -1,3 +1,5 @@
+version: "2"
+
 run:
   timeout: 5m
   go: "1.22"
@@ -8,20 +10,21 @@ linters:
     # Correctness
     - govet          # go vet checks
     - errcheck       # unchecked errors
-    - staticcheck    # SA* static analysis rules
-    - gosimple       # S* simplification hints
+    - staticcheck    # SA* + S* static analysis rules (includes gosimple)
     - ineffassign    # assigned and never used
     - unused         # unused code
-    - deadcode       # unreachable functions and methods
     # Style / hygiene
-    - gofmt          # formatting
-    - goimports      # import ordering
     - misspell       # typos in comments and strings
     - godot          # comments should end with a period
     # Safety
     - wrapcheck      # errors from external packages must be wrapped
     - nilerr         # returning nil where error expected
     - exhaustive     # exhaustive switch on enums
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 linters-settings:
   goimports:

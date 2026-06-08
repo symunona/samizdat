@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -22,7 +23,7 @@ type ServerSection struct {
 func DefaultPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("home dir: %w", err)
 	}
 	return filepath.Join(home, ".samizdat", "config.toml"), nil
 }
@@ -44,7 +45,7 @@ func Load(path string) (*Config, error) {
 		return cfg, nil
 	}
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	return cfg, nil
 }

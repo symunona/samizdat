@@ -35,7 +35,7 @@ func RunDiffReview(repoRoot string) error {
 
 	changed, err := git.ChangedSubprojects(Subprojects)
 	if err != nil {
-		return err
+		return fmt.Errorf("changed subprojects: %w", err)
 	}
 	if len(changed) == 0 {
 		fmt.Println("No subproject changes found.")
@@ -54,8 +54,11 @@ func reviewProject(repoRoot, proj string, ai *claude.Client) error {
 	fmt.Printf("=== reviewing %s/ ===\n", proj)
 
 	diff, err := git.DiffFromMain(proj)
-	if err != nil || strings.TrimSpace(diff) == "" {
-		return err
+	if err != nil {
+		return fmt.Errorf("git diff %s: %w", proj, err)
+	}
+	if strings.TrimSpace(diff) == "" {
+		return nil
 	}
 
 	claudeMDPath := filepath.Join(repoRoot, proj, "CLAUDE.md")
@@ -64,7 +67,7 @@ func reviewProject(repoRoot, proj string, ai *claude.Client) error {
 	prompt := buildReviewPrompt(proj, string(claudeMD), diff)
 	result, err := ai.Complete(context.Background(), claude.ModelSonnet, prompt)
 	if err != nil {
-		return err
+		return fmt.Errorf("claude complete: %w", err)
 	}
 
 	update, notes, updatedMD := parseReviewResponse(result)

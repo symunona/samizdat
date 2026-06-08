@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -45,7 +46,7 @@ type ServerConfig struct {
 func DefaultPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("user home dir: %w", err)
 	}
 	return filepath.Join(home, ".samizdat", "config.toml"), nil
 }
@@ -91,7 +92,7 @@ func Load(path string) (*Config, error) {
 		return cfg, nil
 	}
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	return cfg, nil
 }
@@ -99,12 +100,15 @@ func Load(path string) (*Config, error) {
 // Save writes cfg to path as TOML with 0600 permissions.
 func Save(cfg *Config, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
+		return fmt.Errorf("mkdir config dir: %w", err)
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		return err
+		return fmt.Errorf("open config file: %w", err)
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(cfg)
+	defer func() { _ = f.Close() }()
+	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	return nil
 }

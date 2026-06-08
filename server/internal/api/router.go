@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"io/fs"
 	"log"
@@ -9,22 +10,33 @@ import (
 	"path/filepath"
 
 	"github.com/symunona/samizdat/server/internal/store"
+	"github.com/symunona/samizdat/server/internal/worker"
 )
 
 // New returns the root HTTP handler. webDir may be empty (API-only mode).
 // serverURLs is the ordered list of reachable base URLs for this server.
-func New(db *sql.DB, webDir string, serverURLs []string) http.Handler {
+func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string) http.Handler {
 	q := store.New(db)
+
+	w := worker.New(q)
+	w.Start(ctx)
+
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("POST /pair", (&pairHandler{db: db, q: q, serverURLs: serverURLs}).ServeHTTP)
-	mux.HandleFunc("GET /me", bearerAuth(q, handleMe))
-	mux.HandleFunc("POST /admin/pair/new", localhostOnly((&adminPairHandler{q: q, serverURLs: serverURLs}).ServeHTTP))
+	mux.HandleFunc("GET /api/v1/health", handleHealth)
+	mux.HandleFunc("POST /api/v1/pair", (&pairHandler{db: db, q: q, serverURLs: serverURLs}).ServeHTTP)
+	mux.HandleFunc("GET /api/v1/me", bearerAuth(q, handleMe))
+	mux.HandleFunc("POST /api/v1/admin/pair/new", localhostOnly((&adminPairHandler{q: q, serverURLs: serverURLs}).ServeHTTP))
 
 	devH := &adminDevicesHandler{q: q}
-	mux.HandleFunc("GET /admin/devices", localhostOnly(devH.list))
-	mux.HandleFunc("DELETE /admin/devices/{id}", localhostOnly(devH.revoke))
+	mux.HandleFunc("GET /api/v1/admin/devices", localhostOnly(devH.list))
+	mux.HandleFunc("DELETE /api/v1/admin/devices/{id}", localhostOnly(devH.revoke))
+
+	jobsH := &jobsHandler{q: q}
+	mux.HandleFunc("POST /api/v1/jobs", bearerAuth(q, jobsH.create))
+
+	docsH := &documentsHandler{q: q}
+	mux.HandleFunc("GET /api/v1/documents", bearerAuth(q, docsH.list))
 
 	if webDir != "" {
 		if _, err := os.Stat(webDir); err == nil {

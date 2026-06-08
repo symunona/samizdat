@@ -223,3 +223,44 @@ tooling-lib-check: tooling-build
 [doc('Run all spec checks (lint + diff-review + lib-check)')]
 tooling-all: tooling-build
     REPO_ROOT="{{justfile_directory()}}" ./tooling/bin/spec all
+
+# ── Browser sessions ──────────────────────────────────────────────────────────
+
+[group('debug')]
+[doc('Launch Chrome with a named session from tmp/sessions/<name>.json (creates tmp/ if missing)')]
+browser-session name="default":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{justfile_directory()}}/tmp/sessions"
+    SESSION="{{justfile_directory()}}/tmp/sessions/{{name}}.json"
+    PROFILE="{{justfile_directory()}}/tmp/chrome-profile-{{name}}"
+    mkdir -p "$PROFILE"
+    # Restore cookies/localStorage if session file exists
+    if [ -f "$SESSION" ]; then
+        echo "Loading session: $SESSION"
+        cp "$SESSION" "$PROFILE/session-restore.json"
+    fi
+    URL="${URL:-http://localhost:8765}"
+    echo "Opening $URL with profile '${{name}}'"
+    google-chrome \
+        --user-data-dir="$PROFILE" \
+        --no-first-run \
+        --no-default-browser-check \
+        --app="$URL" 2>/dev/null || \
+    chromium-browser \
+        --user-data-dir="$PROFILE" \
+        --no-first-run \
+        --no-default-browser-check \
+        --app="$URL" 2>/dev/null || \
+    xdg-open "$URL"
+
+[group('debug')]
+[doc('Take a screenshot of the running app (saves to tmp/screenshots/)')]
+screenshot name="app":
+    #!/usr/bin/env bash
+    mkdir -p "{{justfile_directory()}}/tmp/screenshots"
+    OUT="{{justfile_directory()}}/tmp/screenshots/{{name}}-$(date +%Y%m%d-%H%M%S).png"
+    URL="${URL:-http://localhost:8765}"
+    google-chrome --headless --screenshot="$OUT" --window-size=1280,900 "$URL" 2>/dev/null || \
+    chromium-browser --headless --screenshot="$OUT" --window-size=1280,900 "$URL" 2>/dev/null
+    echo "Screenshot saved: $OUT"

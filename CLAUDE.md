@@ -59,12 +59,25 @@ Maintain the global linter.
 ## Subsidiarity
 Keep sub-project specifix notes in the CLAUDE.mds. Before each merge, run the `diff_review` tool to see if we need to append the respective CLAUDE.md with new info.
 
+## Building
+No dead code. Only functional code.
+Keep repo CLEAN code.
+Try always everything DRY.
 
 
 ## Design source of truth
 Detailed research + decisions live in the planning vault (outside this repo):
 `~/dropx/org/50-59 pet projects and hobbies/54 samizdat/` — see `plan/003 Plan Decisions.md`, `plan/004 Onboarding Plan.md`, `plan/005 Samizdat Expo App UX.md`, `options/`, and `research/tech/` (009 naming, 019 SQLite, 020 sync/queue/API). When a decision here is ambiguous, that vault is canonical.
 
+
+## tmp/ — scratch, screenshots, browser sessions
+
+`tmp/` at the repo root is gitignored. Use it for:
+- **Screenshots** from browser automation / agent-browser runs
+- **Browser session files** (cookies, localStorage exports) so headless Chrome can resume authenticated sessions across runs — store as `tmp/sessions/<name>.json`
+- **Temporary debug data**, API response dumps, one-off scripts
+
+To run the web app in a browser with a persisted session, use `just browser-session <name>` — it launches headless Chrome loading `tmp/sessions/<name>.json` if it exists, and saves the session back on exit. Create `tmp/` with `mkdir -p tmp/sessions`.
 
 ## Philosophy
 

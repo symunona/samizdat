@@ -2,6 +2,10 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "ignoreDependencies": [
     "expo-updates",
-    "expo-system-ui"
-  ]
+    "expo-system-ui",
+    "@expo/metro-config",
+    "react-native-worklets"
+  ],
+  "ignoreFiles": ["babel.config.js"],
+  "ignoreExportsUsedInFile": true
 }
