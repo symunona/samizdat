@@ -64,3 +64,16 @@ Keep sub-project specifix notes in the CLAUDE.mds. Before each merge, run the `d
 ## Design source of truth
 Detailed research + decisions live in the planning vault (outside this repo):
 `~/dropx/org/50-59 pet projects and hobbies/54 samizdat/` — see `plan/003 Plan Decisions.md`, `plan/004 Onboarding Plan.md`, `plan/005 Samizdat Expo App UX.md`, `options/`, and `research/tech/` (009 naming, 019 SQLite, 020 sync/queue/API). When a decision here is ambiguous, that vault is canonical.
+
+
+## Philosophy
+
+There is an inherent conflict of interest between you as the publisher and the for-profit platforms out there.
+
+Capitalism's incentive is that you're locked in their ecosystem.
+
+Make your own feed, that serves you.
+
+---
+
+License: MIT
