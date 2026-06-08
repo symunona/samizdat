@@ -139,6 +139,32 @@ func (q *Queries) GetPairCode(ctx context.Context, code string) (PairCode, error
 	return i, err
 }
 
+const getReadState = `-- name: GetReadState :one
+SELECT id, device_id, document_id, scroll_y, created_at, updated_at, rev, deleted_at FROM read_states
+WHERE device_id = ? AND document_id = ? AND deleted_at IS NULL LIMIT 1
+`
+
+type GetReadStateParams struct {
+	DeviceID   string `json:"device_id"`
+	DocumentID string `json:"document_id"`
+}
+
+func (q *Queries) GetReadState(ctx context.Context, arg GetReadStateParams) (ReadState, error) {
+	row := q.db.QueryRowContext(ctx, getReadState, arg.DeviceID, arg.DocumentID)
+	var i ReadState
+	err := row.Scan(
+		&i.ID,
+		&i.DeviceID,
+		&i.DocumentID,
+		&i.ScrollY,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getSetting = `-- name: GetSetting :one
 SELECT value FROM server_settings WHERE key = ? LIMIT 1
 `
@@ -436,6 +462,48 @@ func (q *Queries) SoftDeleteDevice(ctx context.Context, arg SoftDeleteDevicePara
 		arg.ID,
 	)
 	return err
+}
+
+const upsertReadState = `-- name: UpsertReadState :one
+INSERT INTO read_states (id, device_id, document_id, scroll_y, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(device_id, document_id) DO UPDATE SET
+    scroll_y   = excluded.scroll_y,
+    updated_at = excluded.updated_at,
+    rev        = read_states.rev + 1
+RETURNING id, device_id, document_id, scroll_y, created_at, updated_at, rev, deleted_at
+`
+
+type UpsertReadStateParams struct {
+	ID         string  `json:"id"`
+	DeviceID   string  `json:"device_id"`
+	DocumentID string  `json:"document_id"`
+	ScrollY    float64 `json:"scroll_y"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+}
+
+func (q *Queries) UpsertReadState(ctx context.Context, arg UpsertReadStateParams) (ReadState, error) {
+	row := q.db.QueryRowContext(ctx, upsertReadState,
+		arg.ID,
+		arg.DeviceID,
+		arg.DocumentID,
+		arg.ScrollY,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i ReadState
+	err := row.Scan(
+		&i.ID,
+		&i.DeviceID,
+		&i.DocumentID,
+		&i.ScrollY,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
 const upsertSetting = `-- name: UpsertSetting :exec

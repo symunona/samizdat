@@ -76,6 +76,52 @@ export async function fetchDocuments(serverUrl: string, token: string): Promise<
   return json<Document[]>(res, '/api/v1/documents')
 }
 
+export type DeviceInfo = {
+  id: string
+  name: string
+  created_at: string
+}
+export type DeviceListResult = {
+  devices: DeviceInfo[]
+  current_device_id: string
+}
+
+export async function fetchDevices(serverUrl: string, token: string): Promise<DeviceListResult> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/devices`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<DeviceListResult>(res, '/api/v1/devices')
+}
+
+export async function fetchReadingProgress(
+  serverUrl: string,
+  token: string,
+  docId: string,
+): Promise<{ scroll_y: number } | null> {
+  try {
+    const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/progress`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (res.status === 404) return null
+    return json<{ scroll_y: number }>(res, '/api/v1/documents/:id/progress')
+  } catch {
+    return null
+  }
+}
+
+export async function saveReadingProgress(
+  serverUrl: string,
+  token: string,
+  docId: string,
+  scrollY: number,
+): Promise<void> {
+  await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/progress`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scroll_y: scrollY }),
+  })
+}
+
 export async function submitScrapeJob(
   serverUrl: string,
   token: string,

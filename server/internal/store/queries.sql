@@ -73,3 +73,16 @@ SELECT * FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 
 
 -- name: GetDocumentByID :one
 SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: UpsertReadState :one
+INSERT INTO read_states (id, device_id, document_id, scroll_y, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(device_id, document_id) DO UPDATE SET
+    scroll_y   = excluded.scroll_y,
+    updated_at = excluded.updated_at,
+    rev        = read_states.rev + 1
+RETURNING *;
+
+-- name: GetReadState :one
+SELECT * FROM read_states
+WHERE device_id = ? AND document_id = ? AND deleted_at IS NULL LIMIT 1;

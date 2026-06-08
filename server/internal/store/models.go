@@ -49,6 +49,17 @@ type PairCode struct {
 	UsedAt    sql.NullString `json:"used_at"`
 }
 
+type ReadState struct {
+	ID         string         `json:"id"`
+	DeviceID   string         `json:"device_id"`
+	DocumentID string         `json:"document_id"`
+	ScrollY    float64        `json:"scroll_y"`
+	CreatedAt  string         `json:"created_at"`
+	UpdatedAt  string         `json:"updated_at"`
+	Rev        int64          `json:"rev"`
+	DeletedAt  sql.NullString `json:"deleted_at"`
+}
+
 type ServerSetting struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`

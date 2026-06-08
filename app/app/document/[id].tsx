@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Linking,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -12,7 +14,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import Markdown from 'react-native-markdown-display'
-import { fetchDocument, findReachable } from '../../src/api'
+import { fetchDocument, fetchReadingProgress, findReachable, saveReadingProgress } from '../../src/api'
 import type { Document } from '../../src/api'
 import { loadConnection } from '../../src/storage'
 
@@ -28,6 +30,8 @@ function formatDate(iso: string): string {
   }
 }
 
+const DEBOUNCE_MS = 1000
+
 export default function DocumentViewer() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
@@ -39,6 +43,12 @@ export default function DocumentViewer() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const scrollRef = useRef<ScrollView>(null)
+  const contentHeightRef = useRef(0)
+  const viewHeightRef = useRef(0)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const connectionRef = useRef<{ url: string; token: string } | null>(null)
+
   async function load() {
     setLoading(true)
     setError(null)
@@ -47,8 +57,16 @@ export default function DocumentViewer() {
       if (!saved) throw new Error('Not connected')
       const found = await findReachable(saved.serverUrls, saved.token)
       if (!found) throw new Error('Server unreachable')
-      const d = await fetchDocument(found.url, saved.token, id)
+      connectionRef.current = { url: found.url, token: saved.token }
+      const [d, progress] = await Promise.all([
+        fetchDocument(found.url, saved.token, id),
+        fetchReadingProgress(found.url, saved.token, id),
+      ])
       setDoc(d)
+      if (progress && progress.scroll_y > 0) {
+        // Restore after layout via onContentSizeChange
+        savedProgressRef.current = progress.scroll_y
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load document')
     } finally {
@@ -56,8 +74,40 @@ export default function DocumentViewer() {
     }
   }
 
+  const savedProgressRef = useRef(0)
+
+  const handleContentSizeChange = useCallback((_w: number, h: number) => {
+    contentHeightRef.current = h
+    if (savedProgressRef.current > 0 && viewHeightRef.current > 0) {
+      const maxScroll = h - viewHeightRef.current
+      if (maxScroll > 0) {
+        scrollRef.current?.scrollTo({ y: savedProgressRef.current * maxScroll, animated: false })
+      }
+      savedProgressRef.current = 0
+    }
+  }, [])
+
+  const handleLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
+    viewHeightRef.current = e.nativeEvent.layout.height
+  }, [])
+
+  const handleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent
+    const maxScroll = contentSize.height - layoutMeasurement.height
+    if (maxScroll <= 0) return
+    const fraction = Math.min(1, Math.max(0, contentOffset.y / maxScroll))
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      const conn = connectionRef.current
+      if (conn) saveReadingProgress(conn.url, conn.token, id, fraction)
+    }, DEBOUNCE_MS)
+  }, [id])
+
   useEffect(() => {
     load()
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
@@ -82,7 +132,14 @@ export default function DocumentViewer() {
           </Pressable>
         </View>
       ) : doc ? (
-        <ScrollView contentContainerStyle={s.content}>
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={s.content}
+          onScroll={handleScroll}
+          onContentSizeChange={handleContentSizeChange}
+          onLayout={handleLayout}
+          scrollEventThrottle={200}
+        >
           <Text style={s.title}>{doc.title || doc.canonical_url}</Text>
           <Pressable onPress={() => Linking.openURL(doc.canonical_url)}>
             <Text style={s.url} numberOfLines={2}>

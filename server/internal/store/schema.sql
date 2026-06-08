@@ -47,3 +47,16 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS documents_canonical_url ON documents(canonical_url);
+
+CREATE TABLE IF NOT EXISTS read_states (
+    id          TEXT    PRIMARY KEY,
+    device_id   TEXT    NOT NULL REFERENCES devices(id),
+    document_id TEXT    NOT NULL REFERENCES documents(id),
+    scroll_y    REAL    NOT NULL DEFAULT 0,
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0,
+    deleted_at  TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS read_states_device_doc ON read_states(device_id, document_id);
