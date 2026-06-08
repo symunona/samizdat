@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -79,7 +80,14 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job) error
 		return fmt.Errorf("http %d", resp.StatusCode)
 	}
 
-	result, err := trafilatura.Extract(resp.Body, trafilatura.Options{
+	// Buffer body so we can parse it twice: once for trafilatura, once for
+	// lead list extraction (trafilatura drops link-free summary bullets).
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read body: %w", err)
+	}
+
+	result, err := trafilatura.Extract(bytes.NewReader(bodyBytes), trafilatura.Options{
 		OriginalURL:     mustParseURL(canonical),
 		ExcludeComments: true,
 		EnableFallback:  true,
@@ -104,6 +112,11 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job) error
 	}
 	if strings.TrimSpace(md) == "" {
 		md = result.ContentText
+	}
+
+	// Prepend any lead bullet lists that trafilatura skipped.
+	if leadLists := extractLeadLists(bodyBytes, md); leadLists != "" {
+		md = leadLists + "\n\n" + md
 	}
 
 	title := strings.TrimSpace(result.Metadata.Title)
@@ -160,4 +173,112 @@ func renderNode(w io.Writer, n *html.Node) error {
 		return fmt.Errorf("html render: %w", err)
 	}
 	return nil
+}
+
+// extractLeadLists recovers link-free bullet/numbered lists from the raw HTML
+// that trafilatura skips (e.g. article summary bullets before the body).
+// Returns markdown list lines not already present in extractedMD.
+func extractLeadLists(rawHTML []byte, extractedMD string) string {
+	root, err := html.Parse(bytes.NewReader(rawHTML))
+	if err != nil {
+		return ""
+	}
+
+	var lists []string
+	var walk func(*html.Node, bool)
+	walk = func(n *html.Node, inExcluded bool) {
+		if n.Type == html.ElementNode {
+			tag := n.Data
+			// Skip structural noise zones entirely.
+			if tag == "nav" || tag == "header" || tag == "footer" ||
+				tag == "aside" || tag == "script" || tag == "style" ||
+				tag == "noscript" || tag == "form" {
+				return
+			}
+			if tag == "ul" || tag == "ol" {
+				if md := listToMarkdown(n, tag == "ol"); md != "" {
+					lists = append(lists, md)
+				}
+				return // don't recurse into lists we already processed
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c, inExcluded)
+		}
+	}
+	walk(root, false)
+
+	var kept []string
+	for _, list := range lists {
+		// Skip if already represented in the trafilatura output.
+		firstLine := strings.SplitN(list, "\n", 2)[0]
+		firstLine = strings.TrimLeft(firstLine, "-* 0123456789.")
+		firstLine = strings.TrimSpace(firstLine)
+		if firstLine != "" && !strings.Contains(extractedMD, firstLine[:min(40, len(firstLine))]) {
+			kept = append(kept, list)
+		}
+	}
+	return strings.Join(kept, "\n\n")
+}
+
+// listToMarkdown converts a <ul>/<ol> node to markdown if it looks like
+// content (no links, ≥2 items, each item ≥20 chars).
+func listToMarkdown(n *html.Node, ordered bool) string {
+	var items []string
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type != html.ElementNode || c.Data != "li" {
+			continue
+		}
+		// Skip if any <a> inside (link-list = navigation, not content).
+		if hasElement(c, "a") {
+			return ""
+		}
+		text := strings.TrimSpace(nodeText(c))
+		if len(text) < 20 {
+			return "" // too short = icon/badge label
+		}
+		items = append(items, text)
+	}
+	if len(items) < 2 {
+		return ""
+	}
+	var sb strings.Builder
+	for i, item := range items {
+		if ordered {
+			fmt.Fprintf(&sb, "%d. %s\n", i+1, item)
+		} else {
+			fmt.Fprintf(&sb, "- %s\n", item)
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func hasElement(n *html.Node, tag string) bool {
+	if n.Type == html.ElementNode && n.Data == tag {
+		return true
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if hasElement(c, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeText(n *html.Node) string {
+	if n.Type == html.TextNode {
+		return n.Data
+	}
+	var sb strings.Builder
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		sb.WriteString(nodeText(c))
+	}
+	return sb.String()
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

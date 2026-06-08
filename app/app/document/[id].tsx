@@ -53,11 +53,11 @@ export default function DocumentViewer() {
 
   const { activeUrl, token, status } = useConnection()
 
-  // Map from original_url → /api/v1/media/<id> for markdown image rewriting.
+  // Map from original_url → MediaAsset for image rewriting + aspect ratio.
   const mediaMap = useMemo(() => {
-    const map: Record<string, string> = {}
+    const map: Record<string, MediaAsset> = {}
     for (const a of media) {
-      map[a.original_url] = `/api/v1/media/${a.id}`
+      map[a.original_url] = a
     }
     return map
   }, [media])
@@ -212,15 +212,18 @@ export default function DocumentViewer() {
             {doc.markdown ? `  ·  ${readingMinutes(doc.markdown)} min read` : ''}
           </Text>
           {doc.author ? <Text style={s.author}>By {doc.author}</Text> : null}
-          {doc.hero_image_url ? (
-            <Image
-              source={{ uri: mediaMap[doc.hero_image_url]
-                ? `${activeUrl}${mediaMap[doc.hero_image_url]}`
-                : doc.hero_image_url }}
-              style={s.heroImage}
-              resizeMode="cover"
-            />
-          ) : null}
+          {doc.hero_image_url ? (() => {
+            const a = mediaMap[doc.hero_image_url]
+            const uri = a ? `${activeUrl}/api/v1/media/${a.id}` : doc.hero_image_url
+            const ratio = a?.width && a?.height ? a.width / a.height : 16 / 9
+            return (
+              <Image
+                source={{ uri }}
+                style={[s.heroImage, { aspectRatio: ratio }]}
+                resizeMode="cover"
+              />
+            )
+          })() : null}
           {doc.excerpt ? <Text style={s.excerpt}>{doc.excerpt}</Text> : null}
           <View style={s.divider} />
           {doc.markdown ? (
@@ -229,13 +232,14 @@ export default function DocumentViewer() {
               rules={{
                 image: (node) => {
                   const src: string = node.attributes?.src ?? ''
-                  const localPath = mediaMap[src]
-                  const uri = localPath ? `${activeUrl}${localPath}` : src
+                  const asset = mediaMap[src]
+                  const uri = asset ? `${activeUrl}/api/v1/media/${asset.id}` : src
+                  const ratio = asset?.width && asset?.height ? asset.width / asset.height : 16 / 9
                   return (
                     <Image
                       key={node.key}
                       source={{ uri }}
-                      style={s.mdImage}
+                      style={[s.mdImage, { aspectRatio: ratio }]}
                       resizeMode="contain"
                     />
                   )
@@ -290,9 +294,9 @@ function buildStyles(t: Theme) {
     url: { color: t.colors.accent, fontSize: 13, fontFamily: 'monospace', marginBottom: t.spacing.xs },
     meta: { color: t.colors.placeholder, fontSize: 12, marginBottom: t.spacing.xs },
     author: { color: t.colors.muted, fontSize: 13, marginBottom: t.spacing.sm },
-    heroImage: { width: '100%', height: 200, borderRadius: t.radius.sm, marginBottom: t.spacing.sm },
+    heroImage: { width: '100%', borderRadius: t.radius.sm, marginBottom: t.spacing.sm },
     excerpt: { color: t.colors.text, fontSize: 15, fontStyle: 'italic', lineHeight: 22, marginBottom: t.spacing.md },
-    mdImage: { width: '100%', height: 200, marginBottom: t.spacing.md },
+    mdImage: { width: '100%', marginBottom: t.spacing.md },
     divider: { height: 1, backgroundColor: t.colors.border, marginBottom: t.spacing.md },
     empty: { color: t.colors.muted, fontSize: 15, fontStyle: 'italic' },
     progressBar: {
