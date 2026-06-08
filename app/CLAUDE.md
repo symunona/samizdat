@@ -60,3 +60,7 @@ Digest: assembled citations, LLM draft, export.
 - Rich/anchored edits: CodeMirror 6 in a WebView
 - Casual notes: plain `TextInput`
 - Never use RN's built-in `TextInput` for anchored highlight editing
+
+## UI guidelines
+Always look for existing components before making a new one.
+Interactions: when user clicks on something that does an API call - indicate loading, disable button. On error, toast, indicate error on button. Make this a component, reuse wherever.
