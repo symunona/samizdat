@@ -12,6 +12,7 @@ linters:
     - gosimple       # S* simplification hints
     - ineffassign    # assigned and never used
     - unused         # unused code
+    - deadcode       # unreachable functions and methods
     # Style / hygiene
     - gofmt          # formatting
     - goimports      # import ordering

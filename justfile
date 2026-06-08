@@ -161,6 +161,7 @@ lint-go:
 [group('quality')]
 lint-app:
     cd app && npx eslint .
+    cd app && npx knip
 
 # ── Deploy ────────────────────────────────────────────────────────────────────
 
