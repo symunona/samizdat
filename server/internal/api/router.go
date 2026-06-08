@@ -27,6 +27,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string) ht
 	mux.HandleFunc("POST /api/v1/pair", (&pairHandler{db: db, q: q, serverURLs: serverURLs}).ServeHTTP)
 	mux.HandleFunc("GET /api/v1/me", bearerAuth(q, handleMe))
 	mux.HandleFunc("GET /api/v1/devices", handleListDevices(q))
+	mux.HandleFunc("DELETE /api/v1/devices/{id}", handleRevokeDevice(q))
 	mux.HandleFunc("POST /api/v1/admin/pair/new", localhostOnly((&adminPairHandler{q: q, serverURLs: serverURLs}).ServeHTTP))
 
 	devH := &adminDevicesHandler{q: q}

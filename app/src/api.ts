@@ -8,12 +8,19 @@ export type PairResult = {
 export type Health = { status: string; version?: string; time?: string }
 export type Me = { device_id: string; name?: string; server_version?: string }
 
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
 function base(url: string): string {
   return url.trim().replace(/\/+$/, '')
 }
 
 async function json<T>(res: Response, what: string): Promise<T> {
-  if (!res.ok) throw new Error(`${what} failed: HTTP ${res.status}`)
+  if (!res.ok) throw new ApiError(res.status, `${what} failed: HTTP ${res.status}`)
   return (await res.json()) as T
 }
 
@@ -37,18 +44,32 @@ export async function me(url: string, token: string): Promise<Me> {
   return json<Me>(res, '/api/v1/me')
 }
 
-// Try each URL in order; return the first one that successfully connects.
-// Returns null if all fail.
+// Try lastSuccessfulUrl up to 3 times first, then fall through to remaining URLs in order.
+// Re-throws ApiError so callers can distinguish auth failures from network failures.
 export async function findReachable(
   urls: string[],
   token: string,
+  lastSuccessfulUrl?: string | null,
 ): Promise<{ url: string; info: Me } | null> {
+  if (lastSuccessfulUrl && urls.includes(lastSuccessfulUrl)) {
+    for (let i = 0; i < 3; i++) {
+      try {
+        const info = await me(lastSuccessfulUrl, token)
+        return { url: lastSuccessfulUrl, info }
+      } catch (e) {
+        if (e instanceof ApiError) throw e
+        // network error — retry
+      }
+    }
+  }
   for (const url of urls) {
+    if (url === lastSuccessfulUrl) continue
     try {
       const info = await me(url, token)
       return { url, info }
-    } catch {
-      // try next
+    } catch (e) {
+      if (e instanceof ApiError) throw e
+      // network error — try next
     }
   }
   return null
@@ -91,6 +112,14 @@ export async function fetchDevices(serverUrl: string, token: string): Promise<De
     headers: { Authorization: `Bearer ${token}` },
   })
   return json<DeviceListResult>(res, '/api/v1/devices')
+}
+
+export async function revokeDevice(serverUrl: string, token: string, deviceId: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/devices/${encodeURIComponent(deviceId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `revoke device failed: HTTP ${res.status}`)
 }
 
 export async function fetchReadingProgress(

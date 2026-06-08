@@ -24,3 +24,17 @@ export async function loadConnection(): Promise<StoredConnection | null> {
 export async function clearConnection(): Promise<void> {
   await AsyncStorage.removeItem(KEY)
 }
+
+const LAST_URL_KEY = 'samizdat_last_url'
+
+export async function saveLastSuccessfulUrl(url: string): Promise<void> {
+  await AsyncStorage.setItem(LAST_URL_KEY, url)
+}
+
+export async function loadLastSuccessfulUrl(): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(LAST_URL_KEY)
+  } catch {
+    return null
+  }
+}

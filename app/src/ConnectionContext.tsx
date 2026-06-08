@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { findReachable } from './api'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { findReachable, ApiError } from './api'
 import type { Me } from './api'
-import { loadConnection } from './storage'
+import { loadConnection, clearConnection, loadLastSuccessfulUrl, saveLastSuccessfulUrl } from './storage'
 import type { StoredConnection } from './storage'
 
 type ConnectionStatus = 'loading' | 'connected' | 'disconnected'
@@ -16,6 +16,7 @@ export type ConnectionState = {
   lastChecked: Date | null
   probe: () => void
   reload: () => void
+  logout: () => Promise<void>
 }
 
 const Ctx = createContext<ConnectionState>({
@@ -28,6 +29,7 @@ const Ctx = createContext<ConnectionState>({
   lastChecked: null,
   probe: () => {},
   reload: () => {},
+  logout: async () => {},
 })
 
 export function ConnectionProvider({ children }: { children: React.ReactNode }) {
@@ -37,12 +39,23 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
   const [stored, setStored] = useState<StoredConnection | null>(null)
   const [storageLoaded, setStorageLoaded] = useState(false)
+  const lastSuccessfulUrlRef = useRef<string | null>(null)
 
   const reload = useCallback(() => {
-    loadConnection().then((c) => {
+    Promise.all([loadConnection(), loadLastSuccessfulUrl()]).then(([c, lastUrl]) => {
       setStored(c)
+      lastSuccessfulUrlRef.current = lastUrl
       setStorageLoaded(true)
     })
+  }, [])
+
+  const logout = useCallback(async () => {
+    await clearConnection()
+    setStored(null)
+    setActiveUrl(null)
+    setServerInfo(null)
+    setStatus('disconnected')
+    setStorageLoaded(true)
   }, [])
 
   useEffect(() => { reload() }, [reload])
@@ -56,18 +69,30 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       return
     }
     try {
-      const found = await findReachable(conn.serverUrls, conn.token)
+      const found = await findReachable(conn.serverUrls, conn.token, lastSuccessfulUrlRef.current)
       if (found) {
         setActiveUrl(found.url)
         setServerInfo(found.info)
         setStatus('connected')
+        if (found.url !== lastSuccessfulUrlRef.current) {
+          lastSuccessfulUrlRef.current = found.url
+          saveLastSuccessfulUrl(found.url)
+        }
       } else {
         setActiveUrl(null)
         setServerInfo(null)
         setStatus('disconnected')
       }
-    } catch {
-      setStatus('disconnected')
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        await clearConnection()
+        setStored(null)
+        setActiveUrl(null)
+        setServerInfo(null)
+        setStatus('disconnected')
+      } else {
+        setStatus('disconnected')
+      }
     }
     setLastChecked(new Date())
   }, [])
@@ -90,6 +115,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
       lastChecked,
       probe: () => probe(stored),
       reload,
+      logout,
     }}>
       {children}
     </Ctx.Provider>

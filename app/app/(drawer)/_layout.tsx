@@ -25,8 +25,8 @@ function DrawerContent(_props: any) {
     router.replace('/connect')
   }
 
-  const dotColor = status === 'connected' ? '#4ade80' : status === 'disconnected' ? '#f87171' : '#6b7280'
-  const urlLabel = status === 'connected' && activeUrl ? hostname(activeUrl) : status === 'loading' ? '…' : 'offline'
+  const dotColor = status === 'connected' ? '#4ade80' : status === 'disconnected' ? '#f87171' : '#facc15'
+  const urlLabel = status === 'connected' && activeUrl ? hostname(activeUrl) : status === 'loading' ? 'connecting...' : 'offline'
 
   return (
     <View style={{ flex: 1, backgroundColor: '#161618' }}>

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Alert, ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { fetchDevices } from '../../src/api'
+import { fetchDevices, revokeDevice, ApiError } from '../../src/api'
 import type { DeviceInfo } from '../../src/api'
 import { clearConnection } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
@@ -26,13 +26,20 @@ export default function SettingsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const router = useRouter()
-  const { status, activeUrl, serverUrls, token, deviceId, serverInfo, lastChecked, probe, reload } = useConnection()
+  const { status, activeUrl, serverUrls, token, deviceId, serverInfo, lastChecked, probe, reload, logout } = useConnection()
 
   const [probing, setProbing] = useState(false)
   const [devices, setDevices] = useState<DeviceInfo[]>([])
   const [currentDeviceId, setCurrentDeviceId] = useState<string | null>(null)
   const [devicesLoading, setDevicesLoading] = useState(false)
   const [devicesError, setDevicesError] = useState<string | null>(null)
+  const [revoking, setRevoking] = useState<Set<string>>(new Set())
+
+  async function handleUnauthorized() {
+    await logout()
+    Alert.alert('Device disconnected', 'This device\'s access was revoked. Please relink.')
+    router.replace('/connect')
+  }
 
   const loadDevices = useCallback(async () => {
     if (!activeUrl || !token) return
@@ -43,6 +50,10 @@ export default function SettingsScreen() {
       setDevices(result.devices)
       setCurrentDeviceId(result.current_device_id)
     } catch (e: unknown) {
+      if (e instanceof ApiError && e.status === 401) {
+        handleUnauthorized()
+        return
+      }
       setDevicesError(e instanceof Error ? e.message : 'Failed to load devices')
     } finally {
       setDevicesLoading(false)
@@ -63,6 +74,36 @@ export default function SettingsScreen() {
     await clearConnection()
     reload()
     router.replace('/connect')
+  }
+
+  function handleRevokeDevice(id: string, name: string) {
+    Alert.alert(
+      'Revoke device',
+      `Remove "${name || 'Unnamed device'}"? It will be disconnected immediately.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Revoke',
+          style: 'destructive',
+          onPress: async () => {
+            if (!activeUrl || !token) return
+            setRevoking(prev => new Set(prev).add(id))
+            try {
+              await revokeDevice(activeUrl, token, id)
+              await loadDevices()
+            } catch (e: unknown) {
+              if (e instanceof ApiError && e.status === 401) {
+                handleUnauthorized()
+                return
+              }
+              Alert.alert('Error', e instanceof Error ? e.message : 'Failed to revoke device')
+            } finally {
+              setRevoking(prev => { const s = new Set(prev); s.delete(id); return s })
+            }
+          },
+        },
+      ]
+    )
   }
 
   const dotColor = status === 'connected' ? theme.colors.online : status === 'disconnected' ? theme.colors.error : theme.colors.placeholder
@@ -159,6 +200,7 @@ export default function SettingsScreen() {
         ) : (
           devices.map((d, i) => {
             const isCurrent = d.id === (currentDeviceId ?? deviceId)
+            const isRevoking = revoking.has(d.id)
             return (
               <View key={d.id} style={[s.deviceRow, i < devices.length - 1 && s.deviceRowBorder]}>
                 <View style={s.deviceMain}>
@@ -171,6 +213,18 @@ export default function SettingsScreen() {
                   <Text style={s.deviceId} numberOfLines={1}>{d.id}</Text>
                   <Text style={s.deviceDate}>Paired {formatDate(d.created_at)}</Text>
                 </View>
+                {!isCurrent && (
+                  <Pressable
+                    onPress={() => handleRevokeDevice(d.id, d.name)}
+                    disabled={isRevoking}
+                    style={({ pressed }) => [s.revokeBtn, (pressed || isRevoking) && s.revokeBtnPressed]}
+                  >
+                    {isRevoking
+                      ? <ActivityIndicator size="small" color={theme.colors.error} />
+                      : <Text style={s.revokeBtnText}>Revoke</Text>
+                    }
+                  </Pressable>
+                )}
               </View>
             )
           })
@@ -230,9 +284,9 @@ function buildStyles(t: Theme) {
     urlHostActive: { color: t.colors.text, fontWeight: '700' },
     urlFull: { color: t.colors.placeholder, fontSize: 11, fontFamily: 'monospace' },
     activeBadge: { color: t.colors.online, fontSize: 11, fontWeight: '700', flexShrink: 0 },
-    deviceRow: { paddingVertical: t.spacing.sm },
+    deviceRow: { paddingVertical: t.spacing.sm, flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
     deviceRowBorder: { borderBottomWidth: 1, borderBottomColor: t.colors.border },
-    deviceMain: { gap: 2 },
+    deviceMain: { flex: 1, gap: 2 },
     deviceNameRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
     deviceName: { color: t.colors.text, fontSize: 14, fontWeight: '600' },
     deviceNameCurrent: { color: t.colors.accent },
@@ -241,6 +295,17 @@ function buildStyles(t: Theme) {
     deviceDate: { color: t.colors.muted, fontSize: 11 },
     errorText: { color: t.colors.error, fontSize: 13 },
     emptyText: { color: t.colors.muted, fontSize: 13 },
+    revokeBtn: {
+      paddingHorizontal: t.spacing.sm,
+      paddingVertical: t.spacing.xs,
+      borderRadius: t.radius.sm,
+      borderWidth: 1,
+      borderColor: t.colors.error,
+      minWidth: 60,
+      alignItems: 'center',
+    },
+    revokeBtnPressed: { opacity: 0.6 },
+    revokeBtnText: { color: t.colors.error, fontSize: 12, fontWeight: '600' },
     refreshBtn: {
       paddingHorizontal: t.spacing.md,
       paddingVertical: t.spacing.xs,
