@@ -20,17 +20,20 @@ Anti-slop, own-your-data, one-command self-host. OSS-first; a hosted convenience
 
 Single-user, self-hosted. **Server is the hub** (runs scrapers + cron, owns the canonical store and the markdown vault). **Devices pair in** (phone app, browser clipper, CLI).
 
-```
-Clipper ─POST─┐
-Phone  ◀─sync─│        ┌── cron ─inserts─┐
-              ▼        ▼                  │
-        ┌──────── server (Go) ───────────┴──┐
-        │  REST API · worker · CLI           │
-        │  SQLite (rebuildable index)        │
-        │  vault/ (markdown = source of truth)│
-        └─────────────────────────────────────┘
-                     ▲ Syncthing/git
-                Desktop + Obsidian (power edit, optional)
+```mermaid
+graph TD
+    Clipper -->|POST| Server
+    Phone <-->|sync| Server
+    Cron -->|inserts jobs| Server
+    Desktop["Desktop + Obsidian\n(power edit, optional)"] <-->|Syncthing/git| Server
+
+    subgraph Server["server (Go)"]
+        API[REST API]
+        Worker[worker]
+        CLI[CLI]
+        DB[(SQLite — rebuildable index)]
+        Vault[vault/ — markdown = source of truth]
+    end
 ```
 
 ## Components
@@ -56,6 +59,11 @@ Full glossary: `ARCHITECTURE.md` and the design docs (see `CLAUDE.md`).
 ## Status
 
 Greenfield. Building **L0′** first: newsletter / news-portal ingest → unit breakdown → own reader → digest output. Podcast/transcript, voice notes, and the visual pipeline editor are parked (the data model stays forward-compatible).
+
+## Commit Rules
+Do not commit every little thing.
+Wait for features to be ready.
+If worktree is dirty, let the user know!
 
 ## Quick start
 

@@ -4,18 +4,21 @@ Single-user, self-hosted, offline-first. **Server is the hub; devices pair in.**
 
 ## 1. Topology
 
-```
-  Clipper ──POST──┐
-  Phone/Web ◀─sync─┤            ┌──── Schedule ──inserts──┐
-                   ▼            ▼                          │
-            ┌────────────── server (Go, 1 binary) ─────────┴──┐
-            │  REST API  ·  worker (queue)  ·  CLI (sam)       │
-            │  TLS: CertMagic (in-binary)                      │
-            │  SQLite (modernc, pure-Go) = rebuildable index   │
-            │  vault/ (markdown = source of truth)             │
-            └───────────────────────────────────────────────────┘
-                              ▲ Syncthing / git
-                       Desktop + Obsidian (optional power edit)
+```mermaid
+graph TD
+    Clipper -->|POST| Server
+    PhoneWeb["Phone/Web"] <-->|sync| Server
+    Schedule -->|inserts| Server
+    Desktop["Desktop + Obsidian\n(optional power edit)"] <-->|Syncthing / git| Server
+
+    subgraph Server["server (Go, 1 binary)"]
+        API[REST API]
+        Worker["worker (queue)"]
+        SAMCLI["CLI (sam)"]
+        TLS["TLS: CertMagic (in-binary)"]
+        DB["SQLite (modernc, pure-Go)\nrebuildable index"]
+        Vault["vault/ — markdown = source of truth"]
+    end
 ```
 
 - **server/** runs the engine, the HTTP API, the cron worker, and embeds the web build. One static binary, no Docker, no nginx.
@@ -27,10 +30,13 @@ Single-user, self-hosted, offline-first. **Server is the hub; devices pair in.**
 
 Separated by the **`Document`** seam:
 
-```
-ingest → Job(scrape_url) ──Scraper──▶ Document ──Pipeline──▶ Highlight(s) + Tags ──▶ Feed
-                                         │  (shared, deduped,     (personal, your
-              links → child Documents ◀──┘   LVL0 summary field)   editable rules)
+```mermaid
+flowchart LR
+    Ingest[ingest] --> Job["Job\nscrape_url"]
+    Job -->|Scraper| Doc["Document\nshared · deduped\nLVL0 summary field"]
+    Doc -->|"links create"| ChildDoc["child Documents"]
+    Doc -->|Pipeline| HL["Highlight(s) + Tags\npersonal · editable rules"]
+    HL --> Feed
 ```
 
 - **Phase A — `Scraper` → `Document`:** fetch + extract (Defuddle/Trafilatura) + markdownify. **One `Document` per `canonical_url`** (dedup). Opinion-free, shareable, community-maintainable as config. A shared **LVL0 summary** is a *field on the Document*, computed once. Every link in a source becomes its own child `Document`.

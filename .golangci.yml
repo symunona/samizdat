@@ -1,0 +1,49 @@
+run:
+  timeout: 5m
+  go: "1.22"
+
+linters:
+  disable-all: true
+  enable:
+    # Correctness
+    - govet          # go vet checks
+    - errcheck       # unchecked errors
+    - staticcheck    # SA* static analysis rules
+    - gosimple       # S* simplification hints
+    - ineffassign    # assigned and never used
+    - unused         # unused code
+    # Style / hygiene
+    - gofmt          # formatting
+    - goimports      # import ordering
+    - misspell       # typos in comments and strings
+    - godot          # comments should end with a period
+    # Safety
+    - wrapcheck      # errors from external packages must be wrapped
+    - nilerr         # returning nil where error expected
+    - exhaustive     # exhaustive switch on enums
+
+linters-settings:
+  goimports:
+    local-prefixes: github.com/symunona/samizdat
+  exhaustive:
+    default-signifies-exhaustive: true
+  godot:
+    scope: declarations  # only exported declarations, not all comments
+
+issues:
+  exclude-rules:
+    # tests can skip wrapping and error checks
+    - path: _test\.go
+      linters:
+        - errcheck
+        - wrapcheck
+    # main packages don't need godot on func main comments
+    - path: cmd/
+      linters:
+        - godot
+
+  # Don't exclude common false-positive patterns
+  exclude-use-default: false
+
+  max-issues-per-linter: 50
+  max-same-issues: 10
