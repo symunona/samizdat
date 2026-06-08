@@ -2,6 +2,13 @@
 
 Go HTTP server + job worker. Single static binary. No Docker, no nginx.
 
+## After changing Go code
+
+Always rebuild and restart the running service:
+```bash
+cd server && CGO_ENABLED=0 go build -o bin/samizdat . && pkill -f "samizdat serve"; sleep 1 && nohup ./bin/samizdat serve > /tmp/samizdat.log 2>&1 &
+```
+
 ## Module
 
 `github.com/symunona/samizdat/server` — own `go.mod`. CLI is a separate module; it talks to the server via HTTP (admin endpoints, local trust). No shared `engine/` module for M1; promote later if needed.
