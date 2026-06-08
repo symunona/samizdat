@@ -149,10 +149,18 @@ test-go:
     cd cli && go test ./... 2>/dev/null || echo "cli/ not initialized yet"
 
 [group('quality')]
-[doc('Quick go vet (use tooling-lint for full golangci-lint)')]
-lint:
-    cd server && go vet ./... 2>/dev/null || true
-    cd cli && go vet ./... 2>/dev/null || true
+[doc('Lint all code (go vet + golangci-lint + eslint)')]
+lint: lint-go lint-app
+
+[group('quality')]
+lint-go:
+    cd server && go vet ./...
+    cd cli && go vet ./...
+    REPO_ROOT="{{justfile_directory()}}" ./tooling/bin/spec lint
+
+[group('quality')]
+lint-app:
+    cd app && npx eslint .
 
 # ── Deploy ────────────────────────────────────────────────────────────────────
 
