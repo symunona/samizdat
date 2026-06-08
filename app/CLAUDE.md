@@ -2,6 +2,9 @@
 
 Expo (React Native + RN Web) reader/curator client. Offline-first.
 
+## Stack
+pnpm, React Native, TypeScript. Running & building: always map them to just.
+
 ## Offline-first rule
 All reads come from local SQLite replica. Network sync runs in background.
 Never block UI on network. Server is authoritative; broken replica → wipe + re-pull.

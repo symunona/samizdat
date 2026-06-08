@@ -39,6 +39,28 @@ Rows carry `rev` (server monotonic seq) + `updated_at` + tombstone. Phone pulls 
 - Don't commit secrets, `*.db`, `node_modules`, `.expo`, build output (see `.gitignore`).
 - Tests/lint live behind `just` recipes; run them before claiming done.
 
+## Commit Rules
+Do not commit every little thing.
+Wait for features to be ready.
+If worktree is dirty, let the user know!
+
+## Prefer subagents for dev tasks
+Always make a plan first in the plan/[yyyy-mm-dd]-plan-name.md
+Use front matter: create date, topic, excerpt, status of where we are.
+When done, move to plans/archive folder.
+When feature is larger commit plan to main, then branch off, do smaller commits, at the end, ask the user to check. When done, squash merge back to main.
+
+## Testing
+Craft self-tests before starting based on the plan.
+If there are inconsistencies in the specs, raise it to the user, before starting to implement.
+Always run linter before squash merging to main, fix errors, run lint jobs.
+Maintain the global linter.
+
+## Subsidiarity
+Keep sub-project specifix notes in the CLAUDE.mds. Before each merge, run the `diff_review` tool to see if we need to append the respective CLAUDE.md with new info.
+
+
+
 ## Design source of truth
 Detailed research + decisions live in the planning vault (outside this repo):
 `~/dropx/org/50-59 pet projects and hobbies/54 samizdat/` — see `plan/003 Plan Decisions.md`, `plan/004 Onboarding Plan.md`, `plan/005 Samizdat Expo App UX.md`, `options/`, and `research/tech/` (009 naming, 019 SQLite, 020 sync/queue/API). When a decision here is ambiguous, that vault is canonical.
