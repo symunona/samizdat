@@ -55,16 +55,21 @@ _check-go:
 _check-just:
     @command -v just >/dev/null 2>&1 || (echo "error: just not installed — https://just.systems/"; exit 1)
 
-# Checks port 8765: stops our service automatically; errors on unknown process.
+# Checks port 8765: stops our service automatically; kills unknown process with notice.
 _check-no-service:
     @if ss -tlnp 2>/dev/null | grep -q ':8765'; then \
         if systemctl is-active --quiet samizdat 2>/dev/null; then \
             echo "samizdat service running — stopping for dev mode..."; \
             sudo systemctl stop samizdat && echo "Service stopped."; \
         else \
-            echo "ERROR: port 8765 in use by unknown process:"; \
-            ss -tlnp | grep ':8765'; \
-            exit 1; \
+            PID=$(ss -tlnp | grep ':8765' | grep -oP 'pid=\K[0-9]+' | head -1); \
+            if [ -n "$PID" ]; then \
+                echo "Port 8765 in use by PID $PID ($(ps -p $PID -o comm= 2>/dev/null || echo unknown)) — killing..."; \
+                kill $PID && sleep 0.5 && echo "Process killed."; \
+            else \
+                echo "Port 8765 in use — could not identify PID, trying fuser..."; \
+                fuser -k 8765/tcp && sleep 0.5 && echo "Port freed."; \
+            fi; \
         fi; \
     fi
 
