@@ -10,6 +10,26 @@ import (
 	"database/sql"
 )
 
+const getDevice = `-- name: GetDevice :one
+SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at FROM devices
+WHERE id = ? AND deleted_at IS NULL
+`
+
+func (q *Queries) GetDevice(ctx context.Context, id string) (Device, error) {
+	row := q.db.QueryRowContext(ctx, getDevice, id)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.TokenHash,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getDeviceByTokenHash = `-- name: GetDeviceByTokenHash :one
 SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at FROM devices
 WHERE token_hash = ? AND deleted_at IS NULL

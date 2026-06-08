@@ -22,6 +22,10 @@ func New(db *sql.DB, webDir string, serverURLs []string) http.Handler {
 	mux.HandleFunc("GET /me", bearerAuth(q, handleMe))
 	mux.HandleFunc("POST /admin/pair/new", localhostOnly((&adminPairHandler{q: q, serverURLs: serverURLs}).ServeHTTP))
 
+	devH := &adminDevicesHandler{q: q}
+	mux.HandleFunc("GET /admin/devices", localhostOnly(devH.list))
+	mux.HandleFunc("DELETE /admin/devices/{id}", localhostOnly(devH.revoke))
+
 	if webDir != "" {
 		if _, err := os.Stat(webDir); err == nil {
 			mux.Handle("/", spaHandler(webDir))

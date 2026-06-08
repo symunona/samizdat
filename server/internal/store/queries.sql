@@ -8,6 +8,10 @@ SELECT * FROM devices
 WHERE token_hash = ? AND deleted_at IS NULL
 LIMIT 1;
 
+-- name: GetDevice :one
+SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at FROM devices
+WHERE id = ? AND deleted_at IS NULL;
+
 -- name: ListDevices :many
 SELECT * FROM devices WHERE deleted_at IS NULL ORDER BY created_at;
 

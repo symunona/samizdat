@@ -1,0 +1,89 @@
+package api
+
+import (
+	"database/sql"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/symunona/samizdat/server/internal/store"
+)
+
+type adminDevicesHandler struct {
+	q *store.Queries
+}
+
+func (h *adminDevicesHandler) list(w http.ResponseWriter, r *http.Request) {
+	devices, err := h.q.ListDevices(r.Context())
+	if err != nil {
+		log.Printf("list devices: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	type deviceView struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		CreatedAt string `json:"created_at"`
+		UpdatedAt string `json:"updated_at"`
+	}
+
+	views := make([]deviceView, 0, len(devices))
+	for _, d := range devices {
+		views = append(views, deviceView{
+			ID:        d.ID,
+			Name:      d.Name,
+			CreatedAt: d.CreatedAt,
+			UpdatedAt: d.UpdatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
+}
+
+func (h *adminDevicesHandler) revoke(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+
+	_, err := h.q.GetDevice(r.Context(), id)
+	if err == sql.ErrNoRows {
+		writeErr(w, http.StatusNotFound, "device not found")
+		return
+	}
+	if err != nil {
+		log.Printf("get device %s: %v", id, err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	maxRev, err := h.q.MaxDeviceRev(r.Context())
+	if err != nil {
+		log.Printf("max device rev: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	var nextRev int64
+	if v, ok := maxRev.(int64); ok {
+		nextRev = v + 1
+	} else {
+		nextRev = 1
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	err = h.q.SoftDeleteDevice(r.Context(), store.SoftDeleteDeviceParams{
+		DeletedAt: sql.NullString{String: now, Valid: true},
+		UpdatedAt: now,
+		Rev:       nextRev,
+		ID:        id,
+	})
+	if err != nil {
+		log.Printf("soft delete device %s: %v", id, err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

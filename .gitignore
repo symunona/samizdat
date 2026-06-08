@@ -44,6 +44,9 @@ web-build/
 /clipper/dist/
 /clipper/*.zip
 
+# --- Claude Code internal state ---
+.claude/
+
 # --- Editor / OS ---
 .DS_Store
 Thumbs.db
