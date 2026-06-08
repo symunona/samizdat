@@ -70,3 +70,6 @@ RETURNING *;
 
 -- name: ListDocuments :many
 SELECT * FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50;
+
+-- name: GetDocumentByID :one
+SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1;

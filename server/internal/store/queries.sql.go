@@ -107,6 +107,27 @@ func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl st
 	return i, err
 }
 
+const getDocumentByID = `-- name: GetDocumentByID :one
+SELECT id, canonical_url, title, markdown, fetched_at, created_at, updated_at, rev, deleted_at FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetDocumentByID(ctx context.Context, id string) (Document, error) {
+	row := q.db.QueryRowContext(ctx, getDocumentByID, id)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.CanonicalUrl,
+		&i.Title,
+		&i.Markdown,
+		&i.FetchedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getPairCode = `-- name: GetPairCode :one
 SELECT code, expires_at, used_at FROM pair_codes WHERE code = ?
 `

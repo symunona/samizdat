@@ -62,6 +62,13 @@ export type Document = {
   fetched_at: string
 }
 
+export async function fetchDocument(serverUrl: string, token: string, id: string): Promise<Document> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Document>(res, '/api/v1/documents/:id')
+}
+
 export async function fetchDocuments(serverUrl: string, token: string): Promise<Document[]> {
   const res = await fetch(`${base(serverUrl)}/api/v1/documents`, {
     headers: { Authorization: `Bearer ${token}` },

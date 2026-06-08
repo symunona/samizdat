@@ -37,6 +37,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string) ht
 
 	docsH := &documentsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents", bearerAuth(q, docsH.list))
+	mux.HandleFunc("GET /api/v1/documents/{id}", bearerAuth(q, docsH.get))
 
 	if webDir != "" {
 		if _, err := os.Stat(webDir); err == nil {

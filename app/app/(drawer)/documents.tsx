@@ -123,7 +123,10 @@ export default function DocumentsScreen() {
   function renderItem({ item }: { item: Document }) {
     const displayTitle = item.title?.trim() ? item.title : item.canonical_url
     return (
-      <View style={s.item}>
+      <Pressable
+        style={({ pressed }) => [s.item, pressed && s.itemPressed]}
+        onPress={() => router.push(`/document/${item.id}`)}
+      >
         <Text style={s.itemTitle} numberOfLines={2}>
           {displayTitle}
         </Text>
@@ -131,7 +134,7 @@ export default function DocumentsScreen() {
           {item.canonical_url}
         </Text>
         <Text style={s.itemDate}>Fetched {formatDate(item.fetched_at)}</Text>
-      </View>
+      </Pressable>
     )
   }
 
@@ -283,6 +286,7 @@ function buildStyles(t: Theme) {
       paddingVertical: t.spacing.md,
       backgroundColor: t.colors.background,
     },
+    itemPressed: { backgroundColor: t.colors.surface },
     itemTitle: { color: t.colors.text, fontSize: 15, fontWeight: '600', lineHeight: 20, marginBottom: 2 },
     itemUrl: { color: t.colors.muted, fontSize: 12, fontFamily: 'monospace', marginBottom: 2 },
     itemDate: { color: t.colors.placeholder, fontSize: 11 },
