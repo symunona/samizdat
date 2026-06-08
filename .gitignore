@@ -1,0 +1,57 @@
+# --- Secrets & local data (never commit) ---
+*.env
+.env
+.env.*
+config.toml
+config.local.*
+secrets.*
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+vault/
+data/
+certs/
+*.pem
+*.key
+
+# --- Go (server/, cli/) ---
+/server/bin/
+/cli/bin/
+/server/sam
+/cli/sam
+*.test
+*.out
+coverage.*
+
+# --- Node / Expo (app/, clipper/) ---
+node_modules/
+.expo/
+.expo-shared/
+dist/
+web-build/
+*.tsbuildinfo
+.metro-health-check*
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+*.orig.*
+
+# --- Clipper build output ---
+/clipper/dist/
+/clipper/*.zip
+
+# --- Editor / OS ---
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# --- Logs ---
+*.log
+npm-debug.*
+yarn-error.*
