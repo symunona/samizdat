@@ -71,12 +71,23 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	now := time.Now().UTC().Format(time.RFC3339)
 	meta, _ := json.Marshal(map[string]string{"model": c.Model})
 
+	// Prepend hero image if one has been cached for this document.
+	body := reply
+	if assets, err2 := q.ListMediaAssetsByDocument(ctx, run.DocumentID); err2 == nil {
+		for _, a := range assets {
+			if a.Kind == "hero" {
+				body = "![](/api/v1/media/" + a.ID + ")\n\n" + body
+				break
+			}
+		}
+	}
+
 	_, err = q.InsertHighlight(ctx, store.InsertHighlightParams{
 		ID:            uuid.NewString(),
 		DocumentID:    run.DocumentID,
 		PipelineRunID: run.ID,
 		Kind:          "summary",
-		Body:          reply,
+		Body:          body,
 		Metadata:      string(meta),
 		CreatedAt:     now,
 		UpdatedAt:     now,
