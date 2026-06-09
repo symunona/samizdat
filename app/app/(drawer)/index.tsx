@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useRouter } from 'expo-router'
+import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
+import type { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import { useConnection } from '../../src/ConnectionContext'
-import { fetchHighlights, deleteHighlight, pinHighlight, HighlightWithDoc } from '../../src/api'
-import MarkdownBody from '../../src/MarkdownBody'
+import { fetchHighlights, deleteHighlight, pinHighlight, createAnnotation, HighlightWithDoc } from '../../src/api'
+import HighlightCard from '../../src/HighlightCard'
 import TagSelectorModal from '../../src/TagSelectorModal'
+import AnnotationPanel from '../../src/AnnotationPanel'
 
 export default function FeedScreen() {
   const { theme } = useUnistyles()
@@ -18,6 +21,16 @@ export default function FeedScreen() {
   const [error, setError] = useState<string | null>(null)
   const [tagModalId, setTagModalId] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<Set<string>>(new Set())
+  const [annotateItem, setAnnotateItem] = useState<HighlightWithDoc | null>(null)
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
+
+  const swipeRefs = useRef<Map<string, SwipeableMethods | null>>(new Map())
+  const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  useEffect(() => {
+    const timers = deleteTimers.current
+    return () => { timers.forEach(t => clearTimeout(t)) }
+  }, [])
 
   const load = useCallback(async () => {
     if (!activeUrl || !token) return
@@ -26,7 +39,7 @@ export default function FeedScreen() {
     try {
       const data = await fetchHighlights(activeUrl, token, 200)
       setHighlights(data)
-    } catch (e) {
+    } catch {
       setError('Failed to load highlights')
     } finally {
       setLoading(false)
@@ -53,86 +66,114 @@ export default function FeedScreen() {
     }
   }, [activeUrl, token])
 
-  const handleDelete = useCallback((item: HighlightWithDoc) => {
+  const initiateDelete = useCallback((item: HighlightWithDoc) => {
     if (!activeUrl || !token) return
-    Alert.alert('Delete highlight?', item.title || item.body.slice(0, 60), [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete', style: 'destructive', onPress: async () => {
-          setActionLoading(prev => new Set(prev).add(item.id))
-          try {
-            await deleteHighlight(activeUrl, token, item.id)
-            setHighlights(prev => prev.filter(h => h.id !== item.id))
-          } catch {
-            Alert.alert('Error', 'Failed to delete highlight')
-          } finally {
-            setActionLoading(prev => { const s = new Set(prev); s.delete(item.id); return s })
-          }
-        }
-      },
-    ])
+    setDeletingIds(prev => new Set(prev).add(item.id))
+    const timer = setTimeout(async () => {
+      deleteTimers.current.delete(item.id)
+      try {
+        await deleteHighlight(activeUrl, token, item.id)
+      } catch {
+        // best-effort; remove from list either way
+      }
+      setHighlights(prev => prev.filter(h => h.id !== item.id))
+      setDeletingIds(prev => { const s = new Set(prev); s.delete(item.id); return s })
+    }, 5000)
+    deleteTimers.current.set(item.id, timer)
   }, [activeUrl, token])
 
-  const kindColor: Record<string, string> = {
-    summary: theme.colors.accent,
-    link: '#6b8cff',
-    note: '#b8a0ff',
-  }
+  const undoDelete = useCallback((id: string) => {
+    const timer = deleteTimers.current.get(id)
+    if (timer) clearTimeout(timer)
+    deleteTimers.current.delete(id)
+    setDeletingIds(prev => { const s = new Set(prev); s.delete(id); return s })
+  }, [])
 
-  const renderItem = ({ item }: { item: HighlightWithDoc }) => {
-    const busy = actionLoading.has(item.id)
-    const isPinned = item.pinned === 1
-    return (
-      <Pressable
-        style={[s.card, isPinned && s.cardPinned]}
-        onPress={() => router.push(`/document/${item.document_id}?from=/`)}
-      >
-        <View style={s.cardHeader}>
-          <View style={[s.kindBadge, { backgroundColor: kindColor[item.kind] ?? '#888' }]}>
-            <Text style={s.kindText}>{item.kind}</Text>
-          </View>
-          <Text style={s.hlTitle} numberOfLines={1}>
+  const handleAnnotateSave = useCallback(async ({ note, color }: { note: string; color: string }) => {
+    if (!activeUrl || !token || !annotateItem) return
+    try {
+      await createAnnotation(activeUrl, token, annotateItem.document_id, {
+        exact: annotateItem.body.slice(0, 300),
+        prefix: '',
+        suffix: '',
+        pos_start: 0,
+        pos_end: 0,
+        note,
+        color,
+        highlight_id: annotateItem.id,
+      })
+      setAnnotateItem(null)
+    } catch {
+      Alert.alert('Error', 'Failed to save annotation')
+    }
+  }, [activeUrl, token, annotateItem])
+
+  const renderItem = useCallback(({ item }: { item: HighlightWithDoc }) => {
+    if (deletingIds.has(item.id)) {
+      return (
+        <View style={s.deletedCard}>
+          <Text style={s.deletedTitle} numberOfLines={1}>
             {item.title || item.document_title || item.document_url}
           </Text>
-          <View style={s.actions}>
-            <Pressable
-              style={[s.actionBtn, isPinned && s.actionBtnActive]}
-              onPress={() => handlePin(item)}
-              disabled={busy}
-              hitSlop={6}
-            >
-              {busy ? (
-                <ActivityIndicator size="small" color={theme.colors.accent} />
-              ) : (
-                <Text style={[s.actionIcon, isPinned && s.actionIconActive]}>
-                  {isPinned ? '📌' : '📍'}
-                </Text>
-              )}
-            </Pressable>
-            <Pressable
-              style={s.actionBtn}
-              onPress={() => setTagModalId(item.id)}
-              hitSlop={6}
-            >
-              <Text style={s.actionIcon}>🏷</Text>
-            </Pressable>
-            <Pressable
-              style={s.actionBtn}
-              onPress={() => handleDelete(item)}
-              disabled={busy}
-              hitSlop={6}
-            >
-              <Text style={s.actionIcon}>🗑</Text>
-            </Pressable>
-          </View>
+          <Text style={s.deletedLabel}>deleted</Text>
+          <Pressable style={s.undoBtn} onPress={() => undoDelete(item.id)}>
+            <Text style={s.undoBtnText}>Undo</Text>
+          </Pressable>
         </View>
-        <MarkdownBody
+      )
+    }
+
+    const busy = actionLoading.has(item.id)
+    const isPinned = item.pinned === 1
+
+    const handleSwipeOpen = (direction: string) => {
+      const ref = swipeRefs.current.get(item.id)
+      ref?.close()
+      if (direction === 'right') {
+        initiateDelete(item)
+      } else {
+        handlePin(item)
+      }
+    }
+
+    return (
+      <ReanimatedSwipeable
+        ref={(r) => {
+          if (r) swipeRefs.current.set(item.id, r)
+          else swipeRefs.current.delete(item.id)
+        }}
+        containerStyle={s.swipeContainer}
+        renderLeftActions={() => (
+          <View style={s.deleteAction}>
+            <Text style={s.swipeIcon}>🗑</Text>
+            <Text style={s.swipeLabel}>Delete</Text>
+          </View>
+        )}
+        renderRightActions={() => (
+          <View style={[s.starAction, isPinned && s.starActionActive]}>
+            <Text style={s.swipeIcon}>{isPinned ? '★' : '☆'}</Text>
+            <Text style={s.swipeLabel}>{isPinned ? 'Unpin' : 'Star'}</Text>
+          </View>
+        )}
+        overshootLeft={false}
+        overshootRight={false}
+        onSwipeableOpen={handleSwipeOpen}
+      >
+        <HighlightCard
+          item={item}
           linkedDocuments={item.linked_documents}
+          pinned={isPinned}
+          busy={busy}
+          onPress={() => router.push(`/document/${item.document_id}?from=/`)}
+          onPin={() => handlePin(item)}
+          onDelete={() => initiateDelete(item)}
+          onAnnotate={() => setAnnotateItem(item)}
+          onTags={() => setTagModalId(item.id)}
           onDocumentPress={(docId) => router.push(`/document/${encodeURIComponent(docId)}?from=/`)}
-        >{item.body}</MarkdownBody>
-      </Pressable>
+        />
+      </ReanimatedSwipeable>
     )
-  }
+  }, [actionLoading, deletingIds, handlePin, initiateDelete, undoDelete, router, s])
 
   if (loading && highlights.length === 0) {
     return (
@@ -179,6 +220,12 @@ export default function FeedScreen() {
         objectType="highlight"
         onClose={() => setTagModalId(null)}
       />
+      <AnnotationPanel
+        visible={annotateItem !== null}
+        mode="create"
+        onSave={handleAnnotateSave}
+        onCancel={() => setAnnotateItem(null)}
+      />
     </>
   )
 }
@@ -190,33 +237,50 @@ function buildStyles(t: Theme) {
     list: { flex: 1, backgroundColor: t.colors.background },
     listContent: { padding: 12, gap: 12 },
     center: { flex: 1, backgroundColor: t.colors.background, justifyContent: 'center', alignItems: 'center', gap: 12 },
-    card: {
-      backgroundColor: t.colors.surface,
+    swipeContainer: {
       borderRadius: 10,
-      padding: 14,
-      borderWidth: 1,
-      borderColor: t.colors.border,
-      gap: 8,
+      overflow: 'hidden',
     },
-    cardPinned: {
-      borderColor: t.colors.accent,
-      borderWidth: 2,
-    },
-    cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    kindBadge: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
-    kindText: { color: '#fff', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-    hlTitle: { flex: 1, color: t.colors.text, fontSize: 13, fontWeight: '600' },
-    actions: { flexDirection: 'row', gap: 4 },
-    actionBtn: {
-      width: 28,
-      height: 28,
-      borderRadius: 6,
+    deleteAction: {
+      width: 80,
+      backgroundColor: '#ef4444',
       alignItems: 'center',
       justifyContent: 'center',
+      gap: 2,
     },
-    actionBtnActive: { backgroundColor: t.colors.accent + '22' },
-    actionIcon: { fontSize: 14 },
-    actionIconActive: { opacity: 1 },
+    starAction: {
+      width: 80,
+      backgroundColor: '#ca8a04',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 2,
+    },
+    starActionActive: { backgroundColor: t.colors.accent },
+    swipeIcon: { fontSize: 20 },
+    swipeLabel: { color: '#fff', fontSize: 11, fontWeight: '700' },
+    deletedCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: t.colors.surface,
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      opacity: 0.5,
+      gap: 8,
+    },
+    deletedTitle: { flex: 1, color: t.colors.muted, fontSize: 13, fontStyle: 'italic' },
+    deletedLabel: { color: t.colors.muted, fontSize: 11 },
+    undoBtn: {
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 6,
+      backgroundColor: t.colors.background,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+    },
+    undoBtnText: { color: t.colors.accent, fontSize: 12, fontWeight: '700' },
     placeholder: { color: t.colors.muted, fontSize: 16 },
     hint: { color: t.colors.muted, fontSize: 13, opacity: 0.6 },
     errorText: { color: '#ff6b6b', fontSize: 15 },
