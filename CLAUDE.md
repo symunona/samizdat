@@ -79,15 +79,3 @@ Detailed research + decisions live in the planning vault (outside this repo):
 - **Temporary debug data**, API response dumps, one-off scripts
 
 To run the web app in a browser with a persisted session, use `just browser-session <name>` — it launches headless Chrome loading `tmp/sessions/<name>.json` if it exists, and saves the session back on exit. Create `tmp/` with `mkdir -p tmp/sessions`.
-
-## Philosophy
-
-There is an inherent conflict of interest between you as the publisher and the for-profit platforms out there.
-
-Capitalism's incentive is that you're locked in their ecosystem.
-
-Make your own feed, that serves you.
-
----
-
-License: MIT
