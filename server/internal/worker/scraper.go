@@ -65,6 +65,7 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		ExcludeComments: true,
 		EnableFallback:  true,
 		IncludeImages:   true,
+		IncludeLinks:    true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("trafilatura: %w", err)
