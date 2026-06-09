@@ -78,11 +78,13 @@ mark.color-yellow{background-color:rgba(250,204,21,0.3)}
 mark.color-green{background-color:rgba(74,222,128,0.3)}
 mark.color-blue{background-color:rgba(96,165,250,0.3)}
 mark.color-pink{background-color:rgba(244,114,182,0.3)}
-#ann-btn{position:fixed;bottom:80px;right:16px;background:#e8743b;color:#0b0b0c;border:none;border-radius:20px;padding:8px 16px;font-weight:700;font-size:14px;cursor:pointer;display:none;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.4)}
+#ann-btn{position:fixed;bottom:80px;right:24px;background:#e8743b;color:#0b0b0c;border:none;border-radius:20px;padding:8px 16px;font-weight:700;font-size:14px;cursor:pointer;display:none;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.4)}
+#ann-gutter{position:fixed;top:0;right:0;width:6px;height:100%%;pointer-events:none;z-index:90;}
 </style>
 </head>
 <body>
 <script>window.__annotations=%s;</script>
+<div id="ann-gutter"></div>
 %s
 <button id="ann-btn">Annotate</button>
 <script>
@@ -90,24 +92,117 @@ mark.color-pink{background-color:rgba(244,114,182,0.3)}
 var anns = window.__annotations || [];
 var pendingSel = null;
 
-function applyMark(a) {
-  var body = document.body;
-  var text = body.innerText;
-  var idx = -1;
-  if (a.pos_start > 0 && a.pos_end > a.pos_start) {
-    var candidate = text.substring(a.pos_start, a.pos_end);
-    if (candidate === a.exact) idx = a.pos_start;
+function sendMsg(data) {
+  var msg = JSON.stringify(data);
+  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+  else if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
+}
+
+// Scroll tracking
+var lastFrac = -1;
+window.addEventListener('scroll', function() {
+  var max = document.body.scrollHeight - window.innerHeight;
+  if (max <= 0) return;
+  var frac = Math.min(1, Math.max(0, window.scrollY / max));
+  if (Math.abs(frac - lastFrac) > 0.01) {
+    lastFrac = frac;
+    sendMsg({ type: 'scroll', fraction: frac });
   }
-  if (idx < 0) idx = text.indexOf(a.exact);
-  if (idx < 0) return;
-  highlightTextNode(a.exact, idx, a.id, a.color || 'yellow');
+}, { passive: true });
+window.__scrollTo = function(frac) {
+  var max = document.body.scrollHeight - window.innerHeight;
+  if (max > 0) window.scrollTo(0, frac * max);
+};
+
+// Accept commands from parent (web iframe mode)
+window.addEventListener('message', function(e) {
+  if (e.source !== window.parent) return;
+  var msg; try { msg = JSON.parse(e.data); } catch(err) { return; }
+  if (msg.type === 'scrollTo') { window.__scrollTo && window.__scrollTo(msg.fraction); }
+  else if (msg.type === 'addMark') { window.addMark && window.addMark(msg.annotation); }
+  else if (msg.type === 'removeMark') { window.removeMark && window.removeMark(msg.id); }
+});
+
+// TreeWalker that skips <script>/<style>/<noscript> text nodes
+// (body.innerText also skips these — this keeps char offsets consistent)
+function visibleWalker() {
+  return document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_TEXT,
+    { acceptNode: function(node) {
+        var p = node.parentNode;
+        while (p && p !== document.body) {
+          var t = p.nodeName.toUpperCase();
+          if (t === 'SCRIPT' || t === 'STYLE' || t === 'NOSCRIPT') return NodeFilter.FILTER_REJECT;
+          p = p.parentNode;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+    }}
+  );
+}
+
+function getBodyText() {
+  var w = visibleWalker(); var parts = [];
+  while (w.nextNode()) parts.push(w.currentNode.nodeValue);
+  return parts.join('');
+}
+
+function getCharOffset(range) {
+  var w = visibleWalker(); var offset = 0;
+  while (w.nextNode()) {
+    var node = w.currentNode;
+    if (node === range.startContainer) return offset + range.startOffset;
+    offset += node.nodeValue.length;
+  }
+  return 0;
+}
+
+function getContext(range, n) {
+  var body = getBodyText();
+  var start = getCharOffset(range);
+  return {
+    prefix: body.substring(Math.max(0, start - n), start),
+    suffix: body.substring(start + range.toString().length, start + range.toString().length + n)
+  };
+}
+
+function colorForClass(cls) {
+  if (cls === 'color-yellow') return 'rgba(250,204,21,0.8)';
+  if (cls === 'color-green')  return 'rgba(74,222,128,0.8)';
+  if (cls === 'color-blue')   return 'rgba(96,165,250,0.8)';
+  if (cls === 'color-pink')   return 'rgba(244,114,182,0.8)';
+  return 'rgba(232,116,59,0.8)';
+}
+
+function updateGutter() {
+  var gutter = document.getElementById('ann-gutter');
+  if (!gutter) return;
+  gutter.innerHTML = '';
+  var total = document.body.scrollHeight;
+  if (total <= 0) return;
+  document.querySelectorAll('mark[data-ann-id]').forEach(function(m) {
+    var top = m.getBoundingClientRect().top + window.scrollY;
+    var pct = Math.min(98, (top / total) * 100);
+    var dot = document.createElement('div');
+    dot.style.cssText = 'position:absolute;right:0;left:0;height:14px;border-radius:2px 0 0 2px;cursor:pointer;pointer-events:auto;transition:left 0.12s;';
+    dot.style.top = pct + '%%';
+    dot.style.backgroundColor = colorForClass(m.className);
+    dot.dataset.annId = m.dataset.annId;
+    dot.addEventListener('mouseenter', function() { this.style.left = '-2px'; });
+    dot.addEventListener('mouseleave', function() { this.style.left = '0'; });
+    dot.addEventListener('click', function(e) {
+      e.stopPropagation();
+      m.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      sendMsg({ type: 'tap_annotation', id: m.dataset.annId });
+    });
+    gutter.appendChild(dot);
+  });
 }
 
 function highlightTextNode(exact, charIdx, annId, color) {
-  var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  var offset = 0;
-  while (walker.nextNode()) {
-    var node = walker.currentNode;
+  var w = visibleWalker(); var offset = 0;
+  while (w.nextNode()) {
+    var node = w.currentNode;
     var len = node.nodeValue.length;
     if (offset + len > charIdx) {
       var start = charIdx - offset;
@@ -125,35 +220,26 @@ function highlightTextNode(exact, charIdx, annId, color) {
   }
 }
 
-function getCharOffset(range) {
-  var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  var offset = 0;
-  while (walker.nextNode()) {
-    var node = walker.currentNode;
-    if (node === range.startContainer) return offset + range.startOffset;
-    offset += node.nodeValue.length;
+function applyMark(a) {
+  var text = getBodyText();
+  var idx = -1;
+  if (a.pos_start > 0 && a.pos_end > a.pos_start) {
+    if (text.substring(a.pos_start, a.pos_end) === a.exact) idx = a.pos_start;
   }
-  return 0;
-}
-
-function getContext(range, n) {
-  var body = document.body.innerText;
-  var start = getCharOffset(range);
-  return {
-    prefix: body.substring(Math.max(0, start - n), start),
-    suffix: body.substring(start + range.toString().length, start + range.toString().length + n)
-  };
+  if (idx < 0) idx = text.indexOf(a.exact);
+  if (idx < 0) return;
+  highlightTextNode(a.exact, idx, a.id, a.color || 'yellow');
 }
 
 anns.forEach(applyMark);
+setTimeout(updateGutter, 80);
 
 document.addEventListener('touchend', function() {
   setTimeout(function() {
     var sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.toString().trim()) {
       document.getElementById('ann-btn').style.display = 'none';
-      pendingSel = null;
-      return;
+      pendingSel = null; return;
     }
     var exact = sel.toString().trim();
     var range = sel.getRangeAt(0);
@@ -168,8 +254,7 @@ document.addEventListener('mouseup', function() {
   var sel = window.getSelection();
   if (!sel || sel.isCollapsed || !sel.toString().trim()) {
     document.getElementById('ann-btn').style.display = 'none';
-    pendingSel = null;
-    return;
+    pendingSel = null; return;
   }
   var exact = sel.toString().trim();
   var range = sel.getRangeAt(0);
@@ -182,7 +267,7 @@ document.addEventListener('mouseup', function() {
 document.getElementById('ann-btn').addEventListener('click', function() {
   if (!pendingSel) return;
   document.getElementById('ann-btn').style.display = 'none';
-  window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'selection', data: pendingSel }));
+  sendMsg({ type: 'selection', data: pendingSel });
   pendingSel = null;
   window.getSelection && window.getSelection().removeAllRanges();
 });
@@ -190,19 +275,20 @@ document.getElementById('ann-btn').addEventListener('click', function() {
 document.addEventListener('click', function(e) {
   var mark = e.target.closest && e.target.closest('mark[data-ann-id]');
   if (mark) {
-    window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'tap_annotation', id: mark.dataset.annId }));
+    sendMsg({ type: 'tap_annotation', id: mark.dataset.annId });
   }
 });
 
-window.addMark = function(a) { applyMark(a); };
+window.addMark = function(a) { applyMark(a); setTimeout(updateGutter, 50); };
 window.removeMark = function(id) {
-  var marks = document.querySelectorAll('mark[data-ann-id="' + id + '"]');
-  marks.forEach(function(m) {
-    var parent = m.parentNode;
-    while (m.firstChild) parent.insertBefore(m.firstChild, m);
-    parent.removeChild(m);
+  document.querySelectorAll('mark[data-ann-id="' + id + '"]').forEach(function(m) {
+    var p = m.parentNode;
+    while (m.firstChild) p.insertBefore(m.firstChild, m);
+    p.removeChild(m);
   });
+  updateGutter();
 };
+window.addEventListener('resize', function() { setTimeout(updateGutter, 100); });
 })();
 </script>
 </body>

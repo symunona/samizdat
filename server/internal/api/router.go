@@ -39,6 +39,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	jobsH := &jobsHandler{q: q}
 	mux.HandleFunc("POST /api/v1/jobs", bearerAuth(q, jobsH.create))
 	mux.HandleFunc("GET /api/v1/jobs", bearerAuth(q, jobsH.list))
+	mux.HandleFunc("DELETE /api/v1/jobs", bearerAuth(q, jobsH.clearCompleted))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", bearerAuth(q, jobsH.retry))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", bearerAuth(q, jobsH.softDelete))
 
@@ -56,6 +57,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	docsH := &documentsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents", bearerAuth(q, docsH.list))
 	mux.HandleFunc("GET /api/v1/documents/{id}", bearerAuth(q, docsH.get))
+	mux.HandleFunc("DELETE /api/v1/documents/{id}", bearerAuth(q, docsH.delete))
 	mux.HandleFunc("GET /api/v1/documents/{id}/media", bearerAuth(q, docsH.listMedia))
 
 	annH := &annotationsHandler{q: q}

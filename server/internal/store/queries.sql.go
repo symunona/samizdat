@@ -61,6 +61,21 @@ func (q *Queries) ClaimNextJob(ctx context.Context, arg ClaimNextJobParams) (Job
 	return i, err
 }
 
+const clearCompletedJobs = `-- name: ClearCompletedJobs :exec
+UPDATE jobs SET deleted_at = ?, updated_at = ?
+WHERE status IN ('done', 'dead') AND deleted_at IS NULL
+`
+
+type ClearCompletedJobsParams struct {
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+func (q *Queries) ClearCompletedJobs(ctx context.Context, arg ClearCompletedJobsParams) error {
+	_, err := q.db.ExecContext(ctx, clearCompletedJobs, arg.DeletedAt, arg.UpdatedAt)
+	return err
+}
+
 const deleteSubscription = `-- name: DeleteSubscription :exec
 UPDATE subscriptions SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
 `
@@ -1274,6 +1289,21 @@ func (q *Queries) SoftDeleteDevice(ctx context.Context, arg SoftDeleteDevicePara
 		arg.Rev,
 		arg.ID,
 	)
+	return err
+}
+
+const softDeleteDocument = `-- name: SoftDeleteDocument :exec
+UPDATE documents SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ? AND deleted_at IS NULL
+`
+
+type SoftDeleteDocumentParams struct {
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+	ID        string  `json:"id"`
+}
+
+func (q *Queries) SoftDeleteDocument(ctx context.Context, arg SoftDeleteDocumentParams) error {
+	_, err := q.db.ExecContext(ctx, softDeleteDocument, arg.DeletedAt, arg.UpdatedAt, arg.ID)
 	return err
 }
 

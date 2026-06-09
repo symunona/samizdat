@@ -98,6 +98,19 @@ func (h *jobsHandler) retry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
 }
 
+// DELETE /api/v1/jobs — soft-delete all done/dead jobs.
+func (h *jobsHandler) clearCompleted(w http.ResponseWriter, r *http.Request) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := h.q.ClearCompletedJobs(r.Context(), store.ClearCompletedJobsParams{
+		DeletedAt: &now,
+		UpdatedAt: now,
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // DELETE /api/v1/jobs/{id} — soft delete.
 func (h *jobsHandler) softDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

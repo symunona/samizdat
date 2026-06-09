@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/symunona/samizdat/server/internal/store"
 )
@@ -64,6 +65,24 @@ func (h *documentsHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, doc)
+}
+
+func (h *documentsHandler) delete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "missing id")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := h.q.SoftDeleteDocument(r.Context(), store.SoftDeleteDocumentParams{
+		DeletedAt: &now,
+		UpdatedAt: now,
+		ID:        id,
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *documentsHandler) listMedia(w http.ResponseWriter, r *http.Request) {

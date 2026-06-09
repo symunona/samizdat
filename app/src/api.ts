@@ -288,6 +288,22 @@ export async function retryJob(serverUrl: string, token: string, id: string): Pr
   if (!res.ok) throw new ApiError(res.status, `retry job failed: HTTP ${res.status}`)
 }
 
+export async function clearCompletedJobs(serverUrl: string, token: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `clear jobs failed: HTTP ${res.status}`)
+}
+
+export async function deleteDocument(serverUrl: string, token: string, id: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `delete document failed: HTTP ${res.status}`)
+}
+
 export async function fetchDocumentMedia(
   serverUrl: string,
   token: string,

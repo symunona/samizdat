@@ -186,6 +186,10 @@ SELECT * FROM feed_items WHERE id = ? AND deleted_at IS NULL LIMIT 1;
 -- name: UpdateFeedItemStatus :exec
 UPDATE feed_items SET status = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
+-- name: ClearCompletedJobs :exec
+UPDATE jobs SET deleted_at = ?, updated_at = ?
+WHERE status IN ('done', 'dead') AND deleted_at IS NULL;
+
 -- name: ListJobs :many
 SELECT * FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 100;
 
@@ -226,6 +230,9 @@ UPDATE annotations SET note = ?, color = ?, updated_at = ?, rev = rev + 1 WHERE 
 
 -- name: SoftDeleteAnnotation :exec
 UPDATE annotations SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: SoftDeleteDocument :exec
+UPDATE documents SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ? AND deleted_at IS NULL;
 
 -- name: ListDocumentsWithAnnotationCount :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,

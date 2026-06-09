@@ -1,6 +1,6 @@
 import { Text, View, Pressable, ScrollView } from 'react-native'
 import { Drawer } from 'expo-router/drawer'
-import { Link, useRouter, usePathname } from 'expo-router'
+import { Link, useNavigation, useRouter, usePathname } from 'expo-router'
 import { clearConnection } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
 
@@ -64,6 +64,20 @@ function DrawerContent(_props: any) {
   )
 }
 
+function DrawerToggleIcon() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const navigation = useNavigation() as any
+  return (
+    <Pressable
+      onPress={() => navigation.openDrawer?.()}
+      style={{ paddingHorizontal: 16, paddingVertical: 8 }}
+      hitSlop={8}
+    >
+      <Text style={{ color: '#f4f1ea', fontSize: 20, lineHeight: 24 }}>☰</Text>
+    </Pressable>
+  )
+}
+
 export default function DrawerLayout() {
   return (
     <Drawer
@@ -72,6 +86,7 @@ export default function DrawerLayout() {
         headerStyle: { backgroundColor: '#161618' },
         headerTintColor: '#f4f1ea',
         drawerStyle: { backgroundColor: '#161618' },
+        headerLeft: () => <DrawerToggleIcon />,
       }}
     >
       <Drawer.Screen name="index" options={{ title: 'Feed' }} />

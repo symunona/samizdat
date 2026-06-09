@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Animated,
+  Platform,
   Pressable,
   SafeAreaView,
   StyleSheet,
@@ -21,6 +22,7 @@ import {
   createAnnotation,
   updateAnnotation,
   deleteAnnotation,
+  deleteDocument,
 } from '../../../src/api'
 import type { Document, Annotation } from '../../../src/api'
 import { useConnection } from '../../../src/ConnectionContext'
@@ -29,23 +31,7 @@ import type { PendingSelection, ExistingAnnotation } from '../../../src/Annotati
 
 const DEBOUNCE_MS = 1000
 
-// Injected before content loads — posts scroll fraction + exposes __scrollTo
-const SCROLL_JS = `(function(){
-  var lastFrac = -1;
-  window.addEventListener('scroll', function() {
-    var max = document.body.scrollHeight - window.innerHeight;
-    if (max <= 0) return;
-    var frac = Math.min(1, Math.max(0, window.scrollY / max));
-    if (Math.abs(frac - lastFrac) > 0.01) {
-      lastFrac = frac;
-      window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'scroll', fraction: frac }));
-    }
-  }, { passive: true });
-  window.__scrollTo = function(frac) {
-    var max = document.body.scrollHeight - window.innerHeight;
-    if (max > 0) window.scrollTo(0, frac * max);
-  };
-})(); true;`
+type ParsedMsg = { type: string; fraction?: number; data?: PendingSelection; id?: string }
 
 export default function DocumentViewer() {
   const { id, from } = useLocalSearchParams<{ id: string; from?: string }>()
@@ -63,12 +49,33 @@ export default function DocumentViewer() {
   const { activeUrl, token, status } = useConnection()
 
   const webViewRef = useRef<WebView>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const iframeRef = useRef<any>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const savedProgressRef = useRef(0)
   const headerAnim = useRef(new Animated.Value(0)).current
   const headerHeightRef = useRef(56)
   const headerVisibleRef = useRef(true)
   const lastScrollFracRef = useRef(0)
+
+  // Meta panel state
+  const [metaVisible, setMetaVisible] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  const handleDeleteDocument = useCallback(async () => {
+    if (!activeUrl || !token) return
+    setDeleting(true)
+    try {
+      await deleteDocument(activeUrl, token, id)
+      setMetaVisible(false)
+      router.replace((from as string) ?? '/documents')
+    } catch (e) {
+      console.error('document delete failed', e)
+      setDeleting(false)
+      setDeleteConfirm(false)
+    }
+  }, [activeUrl, token, id, router, from])
 
   // Annotation panel state
   const [annVisible, setAnnVisible] = useState(false)
@@ -110,51 +117,101 @@ export default function DocumentViewer() {
     headerHeightRef.current = e.nativeEvent.layout.height
   }, [])
 
-  const handleWebViewLoad = useCallback(() => {
-    if (savedProgressRef.current > 0) {
-      const frac = savedProgressRef.current
-      setTimeout(() => {
-        webViewRef.current?.injectJavaScript(`window.__scrollTo && window.__scrollTo(${frac}); true;`)
-        savedProgressRef.current = 0
-      }, 300)
+  // Inject JS or send postMessage to iframe (platform-aware)
+  const injectScrollTo = useCallback((frac: number) => {
+    if (Platform.OS === 'web') {
+      iframeRef.current?.contentWindow?.postMessage(
+        JSON.stringify({ type: 'scrollTo', fraction: frac }), '*',
+      )
+    } else {
+      webViewRef.current?.injectJavaScript(`window.__scrollTo && window.__scrollTo(${frac}); true;`)
     }
   }, [])
 
+  const injectAddMark = useCallback((ann: Annotation) => {
+    if (Platform.OS === 'web') {
+      iframeRef.current?.contentWindow?.postMessage(
+        JSON.stringify({ type: 'addMark', annotation: ann }), '*',
+      )
+    } else {
+      webViewRef.current?.injectJavaScript(`window.addMark && window.addMark(${JSON.stringify(ann)}); true;`)
+    }
+  }, [])
+
+  const injectRemoveMark = useCallback((annId: string) => {
+    if (Platform.OS === 'web') {
+      iframeRef.current?.contentWindow?.postMessage(
+        JSON.stringify({ type: 'removeMark', id: annId }), '*',
+      )
+    } else {
+      webViewRef.current?.injectJavaScript(`window.removeMark && window.removeMark(${JSON.stringify(annId)}); true;`)
+    }
+  }, [])
+
+  const handleDocumentLoad = useCallback(() => {
+    if (savedProgressRef.current > 0) {
+      const frac = savedProgressRef.current
+      setTimeout(() => {
+        injectScrollTo(frac)
+        savedProgressRef.current = 0
+      }, 300)
+    }
+  }, [injectScrollTo])
+
+  const handleParsedMessage = useCallback((msg: ParsedMsg) => {
+    if (msg.type === 'scroll') {
+      const frac = msg.fraction ?? 0
+      setScrollProgress(frac)
+      const dy = frac - lastScrollFracRef.current
+      lastScrollFracRef.current = frac
+      if (dy > 0.005 && headerVisibleRef.current) {
+        headerVisibleRef.current = false
+        Animated.timing(headerAnim, { toValue: -headerHeightRef.current, duration: 180, useNativeDriver: true }).start()
+      } else if (dy < -0.005 && !headerVisibleRef.current) {
+        headerVisibleRef.current = true
+        Animated.timing(headerAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start()
+      }
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = setTimeout(() => {
+        if (activeUrl && token) saveReadingProgress(activeUrl, token, id, frac)
+      }, DEBOUNCE_MS)
+    } else if (msg.type === 'selection' && msg.data) {
+      setPendingSelection(msg.data)
+      setAnnMode('create')
+      setExistingAnnotation(undefined)
+      setAnnVisible(true)
+    } else if (msg.type === 'tap_annotation' && msg.id) {
+      const ann = annotations.find(a => a.id === msg.id)
+      if (ann) {
+        setExistingAnnotation({ id: ann.id, exact: ann.exact, note: ann.note, color: ann.color })
+        setAnnMode('edit')
+        setPendingSelection(undefined)
+        setAnnVisible(true)
+      }
+    }
+  }, [id, activeUrl, token, headerAnim, annotations])
+
+  // Native WebView message handler
   const handleMessage = useCallback((e: WebViewMessageEvent) => {
     try {
-      const msg = JSON.parse(e.nativeEvent.data) as { type: string; fraction?: number; data?: PendingSelection; id?: string }
-      if (msg.type === 'scroll') {
-        const frac = msg.fraction ?? 0
-        setScrollProgress(frac)
-        const dy = frac - lastScrollFracRef.current
-        lastScrollFracRef.current = frac
-        if (dy > 0.005 && headerVisibleRef.current) {
-          headerVisibleRef.current = false
-          Animated.timing(headerAnim, { toValue: -headerHeightRef.current, duration: 180, useNativeDriver: true }).start()
-        } else if (dy < -0.005 && !headerVisibleRef.current) {
-          headerVisibleRef.current = true
-          Animated.timing(headerAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start()
-        }
-        if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-        saveTimerRef.current = setTimeout(() => {
-          if (activeUrl && token) saveReadingProgress(activeUrl, token, id, frac)
-        }, DEBOUNCE_MS)
-      } else if (msg.type === 'selection' && msg.data) {
-        setPendingSelection(msg.data)
-        setAnnMode('create')
-        setExistingAnnotation(undefined)
-        setAnnVisible(true)
-      } else if (msg.type === 'tap_annotation' && msg.id) {
-        const ann = annotations.find(a => a.id === msg.id)
-        if (ann) {
-          setExistingAnnotation({ id: ann.id, exact: ann.exact, note: ann.note, color: ann.color })
-          setAnnMode('edit')
-          setPendingSelection(undefined)
-          setAnnVisible(true)
-        }
-      }
+      const msg = JSON.parse(e.nativeEvent.data) as ParsedMsg
+      handleParsedMessage(msg)
     } catch { /* ignore parse errors */ }
-  }, [id, activeUrl, token, headerAnim, annotations])
+  }, [handleParsedMessage])
+
+  // Web iframe message listener
+  useEffect(() => {
+    if (Platform.OS !== 'web') return
+    const handler = (e: MessageEvent) => {
+      if (e.source !== iframeRef.current?.contentWindow) return
+      try {
+        const msg = JSON.parse(typeof e.data === 'string' ? e.data : JSON.stringify(e.data)) as ParsedMsg
+        handleParsedMessage(msg)
+      } catch { /* ignore parse errors */ }
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [handleParsedMessage])
 
   const handleAnnSave = useCallback(async (data: { note: string; color: string }) => {
     if (!activeUrl || !token) return
@@ -163,16 +220,17 @@ export default function DocumentViewer() {
       if (annMode === 'create' && pendingSelection) {
         const ann = await createAnnotation(activeUrl, token, id, { ...pendingSelection, ...data })
         setAnnotations(prev => [...prev, ann])
-        webViewRef.current?.injectJavaScript(`window.addMark && window.addMark(${JSON.stringify(ann)}); true;`)
+        injectAddMark(ann)
       } else if (annMode === 'edit' && existingAnnotation) {
         const ann = await updateAnnotation(activeUrl, token, existingAnnotation.id, data)
         setAnnotations(prev => prev.map(a => a.id === ann.id ? ann : a))
-        webViewRef.current?.injectJavaScript(`window.removeMark && window.removeMark(${JSON.stringify(ann.id)}); window.addMark && window.addMark(${JSON.stringify(ann)}); true;`)
+        injectRemoveMark(ann.id)
+        injectAddMark(ann)
       }
     } catch (e) {
       console.error('annotation save failed', e)
     }
-  }, [annMode, pendingSelection, existingAnnotation, activeUrl, token, id])
+  }, [annMode, pendingSelection, existingAnnotation, activeUrl, token, id, injectAddMark, injectRemoveMark])
 
   const handleAnnDelete = useCallback(async () => {
     if (!activeUrl || !token || !existingAnnotation) return
@@ -180,11 +238,11 @@ export default function DocumentViewer() {
     try {
       await deleteAnnotation(activeUrl, token, existingAnnotation.id)
       setAnnotations(prev => prev.filter(a => a.id !== existingAnnotation.id))
-      webViewRef.current?.injectJavaScript(`window.removeMark && window.removeMark(${JSON.stringify(existingAnnotation.id)}); true;`)
+      injectRemoveMark(existingAnnotation.id)
     } catch (e) {
       console.error('annotation delete failed', e)
     }
-  }, [existingAnnotation, activeUrl, token])
+  }, [existingAnnotation, activeUrl, token, injectRemoveMark])
 
   const progressPct = Math.round(scrollProgress * 100)
 
@@ -197,6 +255,9 @@ export default function DocumentViewer() {
         {doc && (
           <Text style={s.headerTitle} numberOfLines={1}>{doc.title || doc.canonical_url}</Text>
         )}
+        <Pressable onPress={() => { setMetaVisible(true); setDeleteConfirm(false) }} style={s.menuBtn} hitSlop={12}>
+          <Text style={s.menuText}>⋮</Text>
+        </Pressable>
       </Animated.View>
 
       {loading ? (
@@ -207,18 +268,29 @@ export default function DocumentViewer() {
           <Pressable onPress={load} style={s.retryBtn}><Text style={s.retryText}>Retry</Text></Pressable>
         </View>
       ) : htmlContent ? (
-        <WebView
-          ref={webViewRef}
-          source={{ html: htmlContent, baseUrl: activeUrl ?? '' }}
-          style={s.webView}
-          injectedJavaScriptBeforeContentLoaded={SCROLL_JS}
-          onMessage={handleMessage}
-          onLoad={handleWebViewLoad}
-          originWhitelist={['*']}
-          allowsInlineMediaPlayback
-          scrollEnabled
-          showsVerticalScrollIndicator={false}
-        />
+        Platform.OS === 'web' ? (
+          <View style={s.webView}>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+            <iframe
+              ref={iframeRef}
+              srcDoc={htmlContent}
+              style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' } as any}
+              onLoad={handleDocumentLoad}
+            />
+          </View>
+        ) : (
+          <WebView
+            ref={webViewRef}
+            source={{ html: htmlContent, baseUrl: activeUrl ?? '' }}
+            style={s.webView}
+            onMessage={handleMessage}
+            onLoad={handleDocumentLoad}
+            originWhitelist={['*']}
+            allowsInlineMediaPlayback
+            scrollEnabled
+            showsVerticalScrollIndicator={false}
+          />
+        )
       ) : null}
 
       {doc && (
@@ -236,6 +308,51 @@ export default function DocumentViewer() {
         onDelete={annMode === 'edit' ? handleAnnDelete : undefined}
         onCancel={() => setAnnVisible(false)}
       />
+
+      {metaVisible && doc && (
+        <Pressable style={s.metaOverlay} onPress={() => setMetaVisible(false)}>
+          <Pressable style={s.metaPanel} onPress={e => e.stopPropagation()}>
+            <View style={s.metaHeader}>
+              <Text style={s.metaTitle}>Document info</Text>
+              <Pressable onPress={() => setMetaVisible(false)} hitSlop={12}>
+                <Text style={s.metaClose}>×</Text>
+              </Pressable>
+            </View>
+            <View style={s.metaRow}>
+              <Text style={s.metaLabel}>URL</Text>
+              <Text style={s.metaValue} numberOfLines={3}>{doc.canonical_url}</Text>
+            </View>
+            {doc.author ? (
+              <View style={s.metaRow}>
+                <Text style={s.metaLabel}>Author</Text>
+                <Text style={s.metaValue}>{doc.author}</Text>
+              </View>
+            ) : null}
+            <View style={s.metaRow}>
+              <Text style={s.metaLabel}>Scraped</Text>
+              <Text style={s.metaValue}>{new Date(doc.fetched_at).toLocaleString()}</Text>
+            </View>
+            <View style={s.metaDivider} />
+            {!deleteConfirm ? (
+              <Pressable style={s.deleteBtn} onPress={() => setDeleteConfirm(true)}>
+                <Text style={s.deleteBtnText}>Delete document</Text>
+              </Pressable>
+            ) : (
+              <View style={s.confirmRow}>
+                <Text style={s.confirmText}>Delete this document? It won't be scraped again.</Text>
+                <View style={s.confirmBtns}>
+                  <Pressable style={s.cancelBtn} onPress={() => setDeleteConfirm(false)} disabled={deleting}>
+                    <Text style={s.cancelBtnText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable style={[s.deleteBtn, deleting && s.btnDisabled]} onPress={handleDeleteDocument} disabled={deleting}>
+                    <Text style={s.deleteBtnText}>{deleting ? 'Deleting…' : 'Confirm delete'}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
+          </Pressable>
+        </Pressable>
+      )}
     </SafeAreaView>
   )
 }
@@ -254,6 +371,8 @@ function buildStyles(t: Theme) {
     backBtn: { flexShrink: 0, padding: t.spacing.sm },
     backText: { color: t.colors.accent, fontSize: 20, fontWeight: '400' },
     headerTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '600' },
+    menuBtn: { flexShrink: 0, padding: t.spacing.sm },
+    menuText: { color: t.colors.text, fontSize: 22, fontWeight: '400', lineHeight: 24 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
     errorText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
@@ -261,5 +380,40 @@ function buildStyles(t: Theme) {
     webView: { flex: 1, marginTop: 56, backgroundColor: t.colors.background },
     progressBar: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, overflow: 'hidden' },
     progressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: t.colors.accent, opacity: 0.6 },
+    metaOverlay: {
+      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+      backgroundColor: 'rgba(0,0,0,0.45)', zIndex: 20,
+      justifyContent: 'flex-end',
+    },
+    metaPanel: {
+      backgroundColor: t.colors.surface,
+      borderTopLeftRadius: 16, borderTopRightRadius: 16,
+      padding: t.spacing.lg,
+      paddingBottom: t.spacing.xl,
+    },
+    metaHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: t.spacing.md },
+    metaTitle: { color: t.colors.text, fontSize: 16, fontWeight: '700' },
+    metaClose: { color: t.colors.muted, fontSize: 24, lineHeight: 28 },
+    metaRow: { marginBottom: t.spacing.sm },
+    metaLabel: { color: t.colors.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
+    metaValue: { color: t.colors.text, fontSize: 14 },
+    metaDivider: { height: 1, backgroundColor: t.colors.border, marginVertical: t.spacing.md },
+    deleteBtn: {
+      backgroundColor: '#b91c1c',
+      borderRadius: 8,
+      paddingVertical: t.spacing.sm,
+      paddingHorizontal: t.spacing.md,
+      alignItems: 'center',
+    },
+    deleteBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+    confirmRow: { gap: t.spacing.sm },
+    confirmText: { color: t.colors.text, fontSize: 13, lineHeight: 18 },
+    confirmBtns: { flexDirection: 'row', gap: t.spacing.sm },
+    cancelBtn: {
+      flex: 1, borderRadius: 8, borderWidth: 1, borderColor: t.colors.border,
+      paddingVertical: t.spacing.sm, alignItems: 'center',
+    },
+    cancelBtnText: { color: t.colors.text, fontSize: 15, fontWeight: '500' },
+    btnDisabled: { opacity: 0.5 },
   })
 }
