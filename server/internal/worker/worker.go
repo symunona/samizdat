@@ -137,21 +137,24 @@ func (w *Worker) drainQueue(ctx context.Context) {
 }
 
 func (w *Worker) run(ctx context.Context, job store.Job) {
-	var err error
+	var (
+		result string
+		err    error
+	)
 	switch job.Kind {
 	case "scrape_url":
-		err = handleScrapeURL(ctx, w.q, job, w.browser)
+		result, err = handleScrapeURL(ctx, w.q, job, w.browser)
 	case "fetch_assets":
-		err = handleFetchAssets(ctx, w.q, job, w.cacheDir)
+		result, err = handleFetchAssets(ctx, w.q, job, w.cacheDir)
 	case "poll_feed":
-		err = handlePollFeed(ctx, w.q, job, w.browser, w.extractorReg)
+		result, err = handlePollFeed(ctx, w.q, job, w.browser, w.extractorReg)
 	default:
 		err = fmt.Errorf("unknown job kind: %s", job.Kind)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err == nil {
-		if e := w.q.MarkJobDone(ctx, store.MarkJobDoneParams{UpdatedAt: now, ID: job.ID}); e != nil {
+		if e := w.q.MarkJobDone(ctx, store.MarkJobDoneParams{Result: result, UpdatedAt: now, ID: job.ID}); e != nil {
 			log.Printf("worker: mark done: %v", e)
 		}
 		log.Printf("worker: job %s (%s) done", job.ID[:8], job.Kind)

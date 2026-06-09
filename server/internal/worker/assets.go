@@ -68,15 +68,15 @@ func shouldDownload(rawURL, altText string) bool {
 	return true
 }
 
-func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cacheDir string) error {
+func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cacheDir string) (string, error) {
 	var p fetchAssetsPayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
-		return fmt.Errorf("bad payload: %w", err)
+		return "", fmt.Errorf("bad payload: %w", err)
 	}
 
 	doc, err := q.GetDocumentByID(ctx, p.DocumentID)
 	if err != nil {
-		return fmt.Errorf("get document: %w", err)
+		return "", fmt.Errorf("get document: %w", err)
 	}
 
 	// Collect image candidates: hero first, then content images from markdown.
@@ -104,7 +104,7 @@ func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cac
 
 	mediaDir := filepath.Join(cacheDir, "media")
 	if err := os.MkdirAll(mediaDir, 0755); err != nil {
-		return fmt.Errorf("mkdir media: %w", err)
+		return "", fmt.Errorf("mkdir media: %w", err)
 	}
 
 	client := &http.Client{Timeout: 20 * time.Second}
@@ -161,7 +161,8 @@ func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cac
 			_ = os.Remove(fullPath)
 		}
 	}
-	return nil
+	jobResult, _ := json.Marshal(map[string]int{"assets": len(candidates)})
+	return string(jobResult), nil
 }
 
 // downloadAndThumbnail fetches the image at imgURL, resizes it to max 800px on

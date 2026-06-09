@@ -16,25 +16,25 @@ type pollFeedPayload struct {
 	FeedID string `json:"feed_id"`
 }
 
-func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, reg extractor.Registry) error {
+func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, reg extractor.Registry) (string, error) {
 	var p pollFeedPayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
-		return fmt.Errorf("bad payload: %w", err)
+		return "", fmt.Errorf("bad payload: %w", err)
 	}
 
 	feed, err := q.GetFeed(ctx, p.FeedID)
 	if err != nil {
-		return fmt.Errorf("get feed %s: %w", p.FeedID, err)
+		return "", fmt.Errorf("get feed %s: %w", p.FeedID, err)
 	}
 
 	cfg, ok := reg.LookupByURL(feed.Url)
 	if !ok {
-		return fmt.Errorf("no extractor config for %s", feed.Url)
+		return "", fmt.Errorf("no extractor config for %s", feed.Url)
 	}
 
 	adapter := extractor.AdapterFor(cfg.Kind)
 	if adapter == nil {
-		return fmt.Errorf("unknown adapter kind %q", cfg.Kind)
+		return "", fmt.Errorf("unknown adapter kind %q", cfg.Kind)
 	}
 
 	// For html_links we need to fetch the page via the browser first.
@@ -42,13 +42,13 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 	if cfg.Kind == "html_links" {
 		htmlContent, err = browser.FetchHTML(feed.Url)
 		if err != nil {
-			return fmt.Errorf("browser fetch %s: %w", feed.Url, err)
+			return "", fmt.Errorf("browser fetch %s: %w", feed.Url, err)
 		}
 	}
 
 	urls, err := adapter.Discover(ctx, feed.Url, cfg, htmlContent)
 	if err != nil {
-		return fmt.Errorf("discover: %w", err)
+		return "", fmt.Errorf("discover: %w", err)
 	}
 
 	log.Printf("poll_feed: feed %s (%s) discovered %d URLs", feed.ID[:8], feed.Url, len(urls))
@@ -75,11 +75,11 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 		// status == "pending" means not yet scraped).
 		if item.Status == "pending" && item.Rev == 0 {
 			feedID := feed.ID
-			payload, _ := json.Marshal(scrapePayload{URL: u, FeedID: &feedID})
+			itemPayload, _ := json.Marshal(scrapePayload{URL: u, FeedID: &feedID})
 			_, err = q.InsertJob(ctx, store.InsertJobParams{
 				ID:        uuid.NewString(),
 				Kind:      "scrape_url",
-				Payload:   string(payload),
+				Payload:   string(itemPayload),
 				RunAfter:  now,
 				CreatedAt: now,
 				UpdatedAt: now,
@@ -102,5 +102,6 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 		log.Printf("poll_feed: mark polled: %v", err)
 	}
 
-	return nil
+	jobResult, _ := json.Marshal(map[string]int{"discovered": len(urls), "new": newCount})
+	return string(jobResult), nil
 }

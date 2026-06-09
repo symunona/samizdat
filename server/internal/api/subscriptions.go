@@ -117,6 +117,45 @@ func (h *subscriptionsHandler) listFeedItems(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, items)
 }
 
+// GET /api/v1/feeds
+func (h *subscriptionsHandler) listFeeds(w http.ResponseWriter, r *http.Request) {
+	feeds, err := h.q.ListFeeds(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, feeds)
+}
+
+// POST /api/v1/subscriptions/{id}/poll — enqueue immediate poll_feed job.
+func (h *subscriptionsHandler) poll(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	sub, err := h.q.GetSubscription(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "subscription not found")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	payload, _ := json.Marshal(map[string]string{"feed_id": sub.FeedID})
+	job, err := h.q.InsertJob(r.Context(), store.InsertJobParams{
+		ID:        uuid.NewString(),
+		Kind:      "poll_feed",
+		Payload:   string(payload),
+		RunAfter:  now,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": job.ID})
+}
+
 // DELETE /api/v1/subscriptions/{id}
 func (h *subscriptionsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

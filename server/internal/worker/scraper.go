@@ -43,31 +43,31 @@ func canonicalize(raw string) (string, error) {
 	return u.String(), nil
 }
 
-func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool) error {
+func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool) (string, error) {
 	var p scrapePayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
-		return fmt.Errorf("bad payload: %w", err)
+		return "", fmt.Errorf("bad payload: %w", err)
 	}
 
 	canonical, err := canonicalize(p.URL)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	htmlStr, err := browser.FetchHTML(canonical)
 	if err != nil {
-		return fmt.Errorf("fetch: %w", err)
+		return "", fmt.Errorf("fetch: %w", err)
 	}
 	bodyBytes := []byte(htmlStr)
 
-	result, err := trafilatura.Extract(bytes.NewReader(bodyBytes), trafilatura.Options{
+	extracted, err := trafilatura.Extract(bytes.NewReader(bodyBytes), trafilatura.Options{
 		OriginalURL:     mustParseURL(canonical),
 		ExcludeComments: true,
 		EnableFallback:  true,
 		IncludeImages:   true,
 	})
 	if err != nil {
-		return fmt.Errorf("trafilatura: %w", err)
+		return "", fmt.Errorf("trafilatura: %w", err)
 	}
 
 	conv := converter.NewConverter(
@@ -75,17 +75,17 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	)
 	// render content node to HTML first, then convert to markdown
 	var htmlBuf strings.Builder
-	if result.ContentNode != nil {
-		if err := renderNode(&htmlBuf, result.ContentNode); err != nil {
-			return fmt.Errorf("render html: %w", err)
+	if extracted.ContentNode != nil {
+		if err := renderNode(&htmlBuf, extracted.ContentNode); err != nil {
+			return "", fmt.Errorf("render html: %w", err)
 		}
 	}
 	md, err := conv.ConvertString(htmlBuf.String())
 	if err != nil {
-		return fmt.Errorf("html→md: %w", err)
+		return "", fmt.Errorf("html→md: %w", err)
 	}
 	if strings.TrimSpace(md) == "" {
-		md = result.ContentText
+		md = extracted.ContentText
 	}
 
 	// Prepend any lead bullet lists that trafilatura skipped.
@@ -98,14 +98,14 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		md = md + "\n\n" + figureImgs
 	}
 
-	title := strings.TrimSpace(result.Metadata.Title)
+	title := strings.TrimSpace(extracted.Metadata.Title)
 
-	excerpt := strings.TrimSpace(result.Metadata.Description)
+	excerpt := strings.TrimSpace(extracted.Metadata.Description)
 	if len(excerpt) > 500 {
 		excerpt = excerpt[:500]
 	}
-	heroImageURL := strings.TrimSpace(result.Metadata.Image)
-	author := strings.TrimSpace(result.Metadata.Author)
+	heroImageURL := strings.TrimSpace(extracted.Metadata.Image)
+	author := strings.TrimSpace(extracted.Metadata.Author)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	docID := IDFromURL(canonical)
@@ -124,23 +124,25 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		UpdatedAt:    now,
 	})
 	if err != nil {
-		return fmt.Errorf("insert document: %w", err)
+		return "", fmt.Errorf("insert document: %w", err)
 	}
 
 	// Enqueue asset fetching job.
-	payload, _ := json.Marshal(map[string]string{"document_id": doc.ID})
+	assetPayload, _ := json.Marshal(map[string]string{"document_id": doc.ID})
 	_, err = q.InsertJob(ctx, store.InsertJobParams{
 		ID:        uuid.NewString(),
 		Kind:      "fetch_assets",
-		Payload:   string(payload),
+		Payload:   string(assetPayload),
 		RunAfter:  now,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
 	if err != nil {
-		return fmt.Errorf("enqueue fetch_assets: %w", err)
+		return "", fmt.Errorf("enqueue fetch_assets: %w", err)
 	}
-	return nil
+
+	jobResult, _ := json.Marshal(map[string]string{"document_id": doc.ID, "title": title})
+	return string(jobResult), nil
 }
 
 func mustParseURL(raw string) *url.URL {
