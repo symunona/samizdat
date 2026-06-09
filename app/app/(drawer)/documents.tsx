@@ -294,6 +294,6 @@ function buildStyles(t: Theme) {
     itemDate: { color: t.colors.placeholder, fontSize: 11 },
     badgeRow: { flexDirection: 'row', gap: 8, marginTop: 2 },
     annBadge: { color: '#e8743b', fontSize: 11, fontWeight: '600' },
-    hlBadge: { color: t.colors.accent, fontSize: 11, fontWeight: '600' },
+    hlBadge: { color: '#7dd3fc', fontSize: 11, fontWeight: '600' },
   })
 }

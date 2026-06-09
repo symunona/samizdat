@@ -159,15 +159,17 @@ export default function DocumentViewer() {
     setLoading(true)
     setError(null)
     try {
-      const [d, progress, html, anns] = await Promise.all([
+      const [d, progress, html, anns, hl] = await Promise.all([
         fetchDocument(activeUrl, token, id),
         fetchReadingProgress(activeUrl, token, id),
         fetchDocumentHtml(activeUrl, token, id),
         fetchAnnotations(activeUrl, token, id),
+        fetchDocumentHighlights(activeUrl, token, id),
       ])
       setDoc(d)
       setHtmlContent(html)
       setAnnotations(anns)
+      setHighlights(hl)
       if (progress && progress.scroll_y > 0) {
         savedProgressRef.current = progress.scroll_y
       }
@@ -421,30 +423,50 @@ export default function DocumentViewer() {
           <Pressable onPress={load} style={s.retryBtn}><Text style={s.retryText}>Retry</Text></Pressable>
         </View>
       ) : htmlContent ? (
-        Platform.OS === 'web' ? (
-          <View style={s.webView}>
-            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-            <iframe
-              ref={iframeRef}
-              srcDoc={htmlContent}
-              style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' } as any}
+        <View style={s.contentArea}>
+          {highlights.length > 0 && (
+            <ScrollView
+              horizontal
+              style={s.hlStrip}
+              contentContainerStyle={s.hlStripContent}
+              showsHorizontalScrollIndicator={false}
+            >
+              {highlights.map(hl => (
+                <View key={hl.id} style={s.hlCard}>
+                  <View style={s.hlCardKind}>
+                    <Text style={s.hlCardKindText}>{hl.kind}</Text>
+                  </View>
+                  {hl.title ? <Text style={s.hlCardTitle} numberOfLines={1}>{hl.title}</Text> : null}
+                  <Text style={s.hlCardBody} numberOfLines={4}>{hl.body}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+          {Platform.OS === 'web' ? (
+            <View style={s.webView}>
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+              <iframe
+                ref={iframeRef}
+                srcDoc={htmlContent}
+                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' } as any}
+                onLoad={handleDocumentLoad}
+              />
+            </View>
+          ) : (
+            <WebView
+              ref={webViewRef}
+              source={{ html: htmlContent, baseUrl: activeUrl ?? '' }}
+              style={s.webView}
+              onMessage={handleMessage}
               onLoad={handleDocumentLoad}
+              originWhitelist={['*']}
+              allowsInlineMediaPlayback
+              scrollEnabled
+              showsVerticalScrollIndicator={false}
+              onShouldStartLoadWithRequest={(req) => req.navigationType !== 'click'}
             />
-          </View>
-        ) : (
-          <WebView
-            ref={webViewRef}
-            source={{ html: htmlContent, baseUrl: activeUrl ?? '' }}
-            style={s.webView}
-            onMessage={handleMessage}
-            onLoad={handleDocumentLoad}
-            originWhitelist={['*']}
-            allowsInlineMediaPlayback
-            scrollEnabled
-            showsVerticalScrollIndicator={false}
-            onShouldStartLoadWithRequest={(req) => req.navigationType !== 'click'}
-          />
-        )
+          )}
+        </View>
       ) : null}
 
       {doc && (
@@ -590,11 +612,23 @@ function buildStyles(t: Theme) {
     openWebBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuText: { color: t.colors.text, fontSize: 22, fontWeight: '400', lineHeight: 24 },
-    centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
+    centered: { flex: 1, marginTop: 56, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
     errorText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
     retryText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
-    webView: { flex: 1, marginTop: 56, backgroundColor: t.colors.background },
+    contentArea: { flex: 1, marginTop: 56 },
+    hlStrip: { flexShrink: 0, borderBottomWidth: 1, borderBottomColor: t.colors.border, backgroundColor: t.colors.surface },
+    hlStripContent: { padding: t.spacing.sm, gap: t.spacing.sm, flexDirection: 'row' },
+    hlCard: {
+      width: 200, backgroundColor: t.colors.background,
+      borderRadius: t.radius.sm, borderWidth: 1, borderColor: t.colors.border,
+      padding: t.spacing.sm, gap: 4,
+    },
+    hlCardKind: { backgroundColor: '#1e3a5f', borderRadius: 3, paddingHorizontal: 5, paddingVertical: 2, alignSelf: 'flex-start' },
+    hlCardKindText: { color: '#7dd3fc', fontSize: 10, fontWeight: '700' },
+    hlCardTitle: { color: t.colors.text, fontSize: 12, fontWeight: '600', lineHeight: 16 },
+    hlCardBody: { color: t.colors.muted, fontSize: 12, lineHeight: 17 },
+    webView: { flex: 1, backgroundColor: t.colors.background },
     progressBar: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, overflow: 'hidden' },
     progressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: t.colors.accent, opacity: 0.6 },
     metaOverlay: {
