@@ -256,20 +256,17 @@ func extractLeadLists(rawHTML []byte, extractedMD string) string {
 }
 
 // listToMarkdown converts a <ul>/<ol> node to markdown if it looks like
-// content (no links, ≥2 items, each item ≥20 chars).
+// content (≥2 items, each item ≥20 chars). Links inside items are converted
+// to [text](url) markdown rather than being dropped.
 func listToMarkdown(n *html.Node, ordered bool) string {
 	var items []string
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		if c.Type != html.ElementNode || c.Data != "li" {
 			continue
 		}
-		// Skip if any <a> inside (link-list = navigation, not content).
-		if hasElement(c, "a") {
-			return ""
-		}
-		text := strings.TrimSpace(nodeText(c))
+		text := strings.TrimSpace(nodeToMarkdown(c))
 		if len(text) < 20 {
-			return "" // too short = icon/badge label
+			return "" // too short = icon/badge label or nav item
 		}
 		items = append(items, text)
 	}
@@ -285,6 +282,36 @@ func listToMarkdown(n *html.Node, ordered bool) string {
 		}
 	}
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+// nodeToMarkdown converts an HTML node tree to markdown text, preserving http(s) links.
+func nodeToMarkdown(n *html.Node) string {
+	if n.Type == html.TextNode {
+		return n.Data
+	}
+	if n.Type == html.ElementNode && n.Data == "a" {
+		var href string
+		for _, attr := range n.Attr {
+			if attr.Key == "href" {
+				href = attr.Val
+				break
+			}
+		}
+		inner := nodeToMarkdown_children(n)
+		if href != "" && (strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://")) {
+			return "[" + inner + "](" + href + ")"
+		}
+		return inner
+	}
+	return nodeToMarkdown_children(n)
+}
+
+func nodeToMarkdown_children(n *html.Node) string {
+	var sb strings.Builder
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		sb.WriteString(nodeToMarkdown(c))
+	}
+	return sb.String()
 }
 
 func hasElement(n *html.Node, tag string) bool {

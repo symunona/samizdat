@@ -441,6 +441,35 @@ func (q *Queries) GetPipelineRun(ctx context.Context, id string) (PipelineRun, e
 	return i, err
 }
 
+const getPipelineRunByDocumentAndPipeline = `-- name: GetPipelineRunByDocumentAndPipeline :one
+SELECT id, pipeline_id, document_id, status, step_index, state, created_at, updated_at, rev, deleted_at FROM pipeline_runs
+WHERE document_id = ? AND pipeline_id = ? AND deleted_at IS NULL
+ORDER BY created_at DESC LIMIT 1
+`
+
+type GetPipelineRunByDocumentAndPipelineParams struct {
+	DocumentID string `json:"document_id"`
+	PipelineID string `json:"pipeline_id"`
+}
+
+func (q *Queries) GetPipelineRunByDocumentAndPipeline(ctx context.Context, arg GetPipelineRunByDocumentAndPipelineParams) (PipelineRun, error) {
+	row := q.db.QueryRowContext(ctx, getPipelineRunByDocumentAndPipeline, arg.DocumentID, arg.PipelineID)
+	var i PipelineRun
+	err := row.Scan(
+		&i.ID,
+		&i.PipelineID,
+		&i.DocumentID,
+		&i.Status,
+		&i.StepIndex,
+		&i.State,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getReadState = `-- name: GetReadState :one
 SELECT id, device_id, document_id, scroll_y, created_at, updated_at, rev, deleted_at FROM read_states
 WHERE device_id = ? AND document_id = ? AND deleted_at IS NULL LIMIT 1
@@ -2263,6 +2292,21 @@ type UpdateFeedItemStatusParams struct {
 
 func (q *Queries) UpdateFeedItemStatus(ctx context.Context, arg UpdateFeedItemStatusParams) error {
 	_, err := q.db.ExecContext(ctx, updateFeedItemStatus, arg.Status, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const updateHighlightBody = `-- name: UpdateHighlightBody :exec
+UPDATE highlights SET body = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type UpdateHighlightBodyParams struct {
+	Body      string `json:"body"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) UpdateHighlightBody(ctx context.Context, arg UpdateHighlightBodyParams) error {
+	_, err := q.db.ExecContext(ctx, updateHighlightBody, arg.Body, arg.UpdatedAt, arg.ID)
 	return err
 }
 

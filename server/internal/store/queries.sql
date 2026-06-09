@@ -348,6 +348,11 @@ SELECT * FROM pipeline_runs WHERE id = ? LIMIT 1;
 -- name: ListPipelineRunsByDocument :many
 SELECT * FROM pipeline_runs WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at DESC;
 
+-- name: GetPipelineRunByDocumentAndPipeline :one
+SELECT * FROM pipeline_runs
+WHERE document_id = ? AND pipeline_id = ? AND deleted_at IS NULL
+ORDER BY created_at DESC LIMIT 1;
+
 -- name: UpdatePipelineRunProgress :exec
 UPDATE pipeline_runs SET status = ?, step_index = ?, state = ?, updated_at = ?, rev = rev + 1
 WHERE id = ?;
@@ -370,6 +375,9 @@ SELECT * FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY c
 
 -- name: ListHighlightsByPipelineRun :many
 SELECT * FROM highlights WHERE pipeline_run_id = ? AND deleted_at IS NULL ORDER BY created_at ASC;
+
+-- name: UpdateHighlightBody :exec
+UPDATE highlights SET body = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
 -- name: SoftDeleteHighlight :exec
 UPDATE highlights SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
