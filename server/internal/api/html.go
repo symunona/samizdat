@@ -2,9 +2,11 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
@@ -12,6 +14,8 @@ import (
 	ghtml "github.com/yuin/goldmark/renderer/html"
 	"github.com/symunona/samizdat/server/internal/store"
 )
+
+var reLinkTag = regexp.MustCompile(`<a href="(https?://[^"]+)"`)
 
 type htmlHandler struct{ q *store.Queries }
 
@@ -45,6 +49,7 @@ func (h *htmlHandler) render(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	body := markDocumentLinks(r.Context(), h.q, bodyBuf.String())
 	annsJSON, _ := json.Marshal(anns)
 
 	title := doc.Title
@@ -64,7 +69,8 @@ body{background:#0b0b0c;color:#f4f1ea;font-family:-apple-system,BlinkMacSystemFo
 h1,h2,h3,h4{color:#f4f1ea;margin:1.4em 0 0.5em;line-height:1.3}
 h1{font-size:1.6em}h2{font-size:1.35em}h3{font-size:1.15em}
 p{margin-bottom:1em}
-a{color:#e8743b;text-decoration:none}a:hover{text-decoration:underline}
+a{color:#e8743b;text-decoration:none;margin:0 0.15em}a:hover{text-decoration:underline}
+a.has-doc::after{content:" 📄";font-size:0.75em;opacity:0.7;margin-left:0.1em}
 code{background:#161618;border-radius:4px;padding:2px 5px;font-family:monospace;font-size:0.9em;color:#e8743b}
 pre{background:#161618;border-radius:6px;padding:14px;overflow-x:auto;margin-bottom:1em}
 pre code{background:none;padding:0;color:#f4f1ea}
@@ -286,7 +292,9 @@ document.addEventListener('click', function(e) {
   var a = e.target.closest && e.target.closest('a[href]');
   if (a && a.href && (a.href.startsWith('http://') || a.href.startsWith('https://'))) {
     e.preventDefault();
-    sendMsg({ type: 'link_press', href: a.href });
+    var msg = { type: 'link_press', href: a.href };
+    if (a.dataset.docId) msg.doc_id = a.dataset.docId;
+    sendMsg(msg);
   }
 });
 
@@ -303,11 +311,48 @@ window.addEventListener('resize', function() { setTimeout(updateGutter, 100); })
 })();
 </script>
 </body>
-</html>`, escapeHTMLAttr(title), string(annsJSON), bodyBuf.String())
+</html>`, escapeHTMLAttr(title), string(annsJSON), body)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(page))
+}
+
+// markDocumentLinks scans the rendered HTML for http(s) links, checks which
+// ones have a Document in the DB, and injects class="has-doc" data-doc-id="…"
+// on matching <a> tags so the client can show a 📄 indicator and skip a round-trip.
+func markDocumentLinks(ctx context.Context, q *store.Queries, htmlStr string) string {
+	matches := reLinkTag.FindAllStringSubmatch(htmlStr, -1)
+	if len(matches) == 0 {
+		return htmlStr
+	}
+
+	seen := map[string]bool{}
+	docsByURL := map[string]string{}
+	for _, m := range matches {
+		url := m[1]
+		if seen[url] {
+			continue
+		}
+		seen[url] = true
+		doc, err := q.GetDocumentByCanonicalURL(ctx, url)
+		if err == nil {
+			docsByURL[url] = doc.ID
+		}
+	}
+
+	if len(docsByURL) == 0 {
+		return htmlStr
+	}
+
+	return reLinkTag.ReplaceAllStringFunc(htmlStr, func(match string) string {
+		sub := reLinkTag.FindStringSubmatch(match)
+		docID, ok := docsByURL[sub[1]]
+		if !ok {
+			return match
+		}
+		return `<a class="has-doc" data-doc-id="` + docID + `" href="` + sub[1] + `"`
+	})
 }
 
 func escapeHTMLAttr(s string) string {

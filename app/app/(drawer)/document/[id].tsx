@@ -45,7 +45,7 @@ const DEBOUNCE_MS = 1000
 const POLL_INTERVAL_MS = 2000
 const POLL_MAX_TRIES = 60
 
-type ParsedMsg = { type: string; fraction?: number; data?: PendingSelection; id?: string; href?: string }
+type ParsedMsg = { type: string; fraction?: number; data?: PendingSelection; id?: string; href?: string; doc_id?: string }
 
 export default function DocumentViewer() {
   const { id, from, highlight } = useLocalSearchParams<{ id: string; from?: string; highlight?: string }>()
@@ -287,7 +287,11 @@ export default function DocumentViewer() {
         setAnnVisible(true)
       }
     } else if (msg.type === 'link_press' && msg.href) {
-      handleLinkPress(msg.href)
+      if (msg.doc_id) {
+        router.push(`/document/${encodeURIComponent(msg.doc_id)}`)
+      } else {
+        handleLinkPress(msg.href)
+      }
     }
   }, [id, activeUrl, token, headerAnim, annotations, handleLinkPress])
 
