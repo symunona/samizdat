@@ -1,5 +1,5 @@
 kind: html_links
-selector: "article h2 a, .article-title a"
+selector: "a"
 url_pattern: "/\\d{4}/\\d{2}/"
 base_url: "https://444.hu"
 max_urls: 100
