@@ -84,6 +84,7 @@ export type Document = {
   excerpt: string
   hero_image_url: string
   author: string
+  annotation_count?: number
 }
 
 export type MediaAsset = {
@@ -180,6 +181,113 @@ export async function submitScrapeJob(
   return json<{ job_id: string }>(res, '/api/v1/jobs')
 }
 
+// ── Feeds & Subscriptions ────────────────────────────────────────────────────
+
+export type Feed = {
+  id: string
+  url: string
+  kind: string
+  title: string
+  last_polled_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type Subscription = {
+  id: string
+  feed_id: string
+  interval_h: number
+  next_run_at: string
+  created_at: string
+  updated_at: string
+}
+
+export type FeedItem = {
+  id: string
+  feed_id: string
+  url: string
+  status: 'pending' | 'scraped' | 'skipped'
+  seen_at: string
+}
+
+export async function fetchFeeds(serverUrl: string, token: string): Promise<Feed[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/feeds`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Feed[]>(res, '/api/v1/feeds')
+}
+
+export async function fetchSubscriptions(serverUrl: string, token: string): Promise<Subscription[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/subscriptions`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Subscription[]>(res, '/api/v1/subscriptions')
+}
+
+export async function createSubscription(
+  serverUrl: string, token: string, url: string, intervalH = 24,
+): Promise<{ feed: Feed; subscription: Subscription }> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/subscriptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, interval_h: intervalH }),
+  })
+  return json<{ feed: Feed; subscription: Subscription }>(res, '/api/v1/subscriptions')
+}
+
+export async function deleteSubscription(serverUrl: string, token: string, id: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/subscriptions/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `delete subscription failed: HTTP ${res.status}`)
+}
+
+export async function pollSubscriptionNow(serverUrl: string, token: string, id: string): Promise<{ job_id: string }> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/subscriptions/${encodeURIComponent(id)}/poll`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<{ job_id: string }>(res, `/api/v1/subscriptions/${id}/poll`)
+}
+
+// ── Jobs ─────────────────────────────────────────────────────────────────────
+
+export type Job = {
+  id: string
+  kind: string
+  payload: string
+  status: 'queued' | 'running' | 'done' | 'dead'
+  attempts: number
+  run_after: string
+  last_error: string
+  result: string
+  created_at: string
+  updated_at: string
+}
+
+export async function fetchJobs(
+  serverUrl: string, token: string,
+  opts: { status?: string; kind?: string } = {},
+): Promise<Job[]> {
+  const params = new URLSearchParams()
+  if (opts.status) params.set('status', opts.status)
+  if (opts.kind) params.set('kind', opts.kind)
+  const qs = params.toString()
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs${qs ? `?${qs}` : ''}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Job[]>(res, '/api/v1/jobs')
+}
+
+export async function retryJob(serverUrl: string, token: string, id: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs/${encodeURIComponent(id)}/retry`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `retry job failed: HTTP ${res.status}`)
+}
+
 export async function fetchDocumentMedia(
   serverUrl: string,
   token: string,
@@ -194,4 +302,68 @@ export async function fetchDocumentMedia(
   } catch {
     return []
   }
+}
+
+// ── Annotations ──────────────────────────────────────────────────────────────
+
+export type Annotation = {
+  id: string
+  document_id: string
+  highlight_id: string | null
+  exact: string
+  prefix: string
+  suffix: string
+  pos_start: number
+  pos_end: number
+  color: string
+  note: string
+  created_at: string
+  updated_at: string
+}
+
+export async function fetchDocumentHtml(serverUrl: string, token: string, docId: string): Promise<string> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/html`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `fetchDocumentHtml failed: HTTP ${res.status}`)
+  return res.text()
+}
+
+export async function fetchAnnotations(serverUrl: string, token: string, docId: string): Promise<Annotation[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/annotations`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Annotation[]>(res, '/api/v1/documents/:id/annotations')
+}
+
+export async function createAnnotation(
+  serverUrl: string, token: string, docId: string,
+  data: { exact: string; prefix: string; suffix: string; pos_start: number; pos_end: number; color: string; note: string; highlight_id?: string },
+): Promise<Annotation> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/annotations`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return json<Annotation>(res, '/api/v1/documents/:id/annotations POST')
+}
+
+export async function updateAnnotation(
+  serverUrl: string, token: string, id: string,
+  data: { note: string; color: string },
+): Promise<Annotation> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/annotations/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return json<Annotation>(res, '/api/v1/annotations/:id PUT')
+}
+
+export async function deleteAnnotation(serverUrl: string, token: string, id: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/annotations/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `deleteAnnotation failed: HTTP ${res.status}`)
 }

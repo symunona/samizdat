@@ -10,7 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { Link, useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDocuments, submitScrapeJob } from '../../src/api'
 import type { Document } from '../../src/api'
@@ -102,10 +102,7 @@ export default function DocumentsScreen() {
   function renderItem({ item }: { item: Document }) {
     const displayTitle = item.title?.trim() ? item.title : item.canonical_url
     return (
-      <Pressable
-        style={({ pressed }) => [s.item, pressed && s.itemPressed]}
-        onPress={() => router.push(`/document/${item.id}`)}
-      >
+      <Link href={`/document/${item.id}?from=/documents`} style={s.item}>
         <Text style={s.itemTitle} numberOfLines={2}>
           {displayTitle}
         </Text>
@@ -113,7 +110,10 @@ export default function DocumentsScreen() {
           {item.canonical_url}
         </Text>
         <Text style={s.itemDate}>Fetched {formatDate(item.fetched_at)}</Text>
-      </Pressable>
+        {item.annotation_count && item.annotation_count > 0 ? (
+          <Text style={s.annBadge}>● {item.annotation_count} annotation{item.annotation_count > 1 ? 's' : ''}</Text>
+        ) : null}
+      </Link>
     )
   }
 
@@ -277,10 +277,14 @@ function buildStyles(t: Theme) {
       paddingHorizontal: t.spacing.md,
       paddingVertical: t.spacing.md,
       backgroundColor: t.colors.background,
+      display: 'flex',
+      flexDirection: 'column',
+      textDecorationLine: 'none',
     },
     itemPressed: { backgroundColor: t.colors.surface },
     itemTitle: { color: t.colors.text, fontSize: 15, fontWeight: '600', lineHeight: 20, marginBottom: 2 },
     itemUrl: { color: t.colors.muted, fontSize: 12, fontFamily: 'monospace', marginBottom: 2 },
     itemDate: { color: t.colors.placeholder, fontSize: 11 },
+    annBadge: { color: '#e8743b', fontSize: 11, marginTop: 2, fontWeight: '600' },
   })
 }
