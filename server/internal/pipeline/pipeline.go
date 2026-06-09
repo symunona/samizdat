@@ -20,8 +20,10 @@ type StepConfig struct {
 
 // PipelineFilter matches against a Document + its feed URL.
 type PipelineFilter struct {
-	FeedURLContains string `json:"feed_url_contains"`
-	SourceFeedID    string `json:"source_feed_id"`
+	FeedURLContains     string   `json:"feed_url_contains"`
+	SourceFeedID        string   `json:"source_feed_id"`
+	ExcludeFeedURLs     []string `json:"exclude_feed_url_contains"`
+	ExcludeSourceFeedIDs []string `json:"exclude_source_feed_ids"`
 }
 
 // Result returned by a step handler.
@@ -72,6 +74,17 @@ func MatchesDocument(pipeline store.Pipeline, doc store.Document, feedURL string
 	}
 	if f.FeedURLContains != "" && !strings.Contains(strings.ToLower(feedURL), strings.ToLower(f.FeedURLContains)) {
 		return false
+	}
+	for _, ex := range f.ExcludeSourceFeedIDs {
+		if doc.SourceFeedID != nil && *doc.SourceFeedID == ex {
+			return false
+		}
+	}
+	feedURLLower := strings.ToLower(feedURL)
+	for _, ex := range f.ExcludeFeedURLs {
+		if strings.Contains(feedURLLower, strings.ToLower(ex)) {
+			return false
+		}
 	}
 	return true
 }
