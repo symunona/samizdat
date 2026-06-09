@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     attempts    INTEGER NOT NULL DEFAULT 0,
     run_after   TEXT    NOT NULL,
     last_error  TEXT    NOT NULL DEFAULT '',
+    result      TEXT    NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0,
@@ -167,6 +168,25 @@ CREATE TABLE IF NOT EXISTS feed_items (
     UNIQUE(feed_id, url)
 );
 CREATE INDEX IF NOT EXISTS feed_items_feed_id ON feed_items(feed_id);
+
+CREATE TABLE IF NOT EXISTS annotations (
+    id           TEXT    PRIMARY KEY,
+    document_id  TEXT    NOT NULL REFERENCES documents(id),
+    highlight_id TEXT,
+    exact        TEXT    NOT NULL,
+    prefix       TEXT    NOT NULL DEFAULT '',
+    suffix       TEXT    NOT NULL DEFAULT '',
+    pos_start    INTEGER NOT NULL DEFAULT 0,
+    pos_end      INTEGER NOT NULL DEFAULT 0,
+    color        TEXT    NOT NULL DEFAULT 'yellow',
+    note         TEXT    NOT NULL DEFAULT '',
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL,
+    rev          INTEGER NOT NULL DEFAULT 0,
+    deleted_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS annotations_document_id ON annotations(document_id);
 `
 
 func migrate(db *sql.DB) error {
@@ -180,6 +200,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE documents ADD COLUMN hero_image_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE documents ADD COLUMN author TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE jobs ADD COLUMN last_error TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE jobs ADD COLUMN result TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE documents ADD COLUMN source_feed_id TEXT`,
 	}
 	for _, m := range additiveMigrations {

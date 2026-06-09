@@ -4,6 +4,23 @@
 
 package store
 
+type Annotation struct {
+	ID          string  `json:"id"`
+	DocumentID  string  `json:"document_id"`
+	HighlightID *string `json:"highlight_id"`
+	Exact       string  `json:"exact"`
+	Prefix      string  `json:"prefix"`
+	Suffix      string  `json:"suffix"`
+	PosStart    int64   `json:"pos_start"`
+	PosEnd      int64   `json:"pos_end"`
+	Color       string  `json:"color"`
+	Note        string  `json:"note"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
+	Rev         int64   `json:"rev"`
+	DeletedAt   *string `json:"deleted_at"`
+}
+
 type Device struct {
 	ID         string  `json:"id"`
 	Name       string  `json:"name"`
@@ -64,6 +81,7 @@ type Job struct {
 	Attempts  int64   `json:"attempts"`
 	RunAfter  string  `json:"run_after"`
 	LastError string  `json:"last_error"`
+	Result    string  `json:"result"`
 	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
 	Rev       int64   `json:"rev"`

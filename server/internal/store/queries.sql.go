@@ -33,7 +33,7 @@ WHERE id = (
     ORDER BY j2.created_at
     LIMIT 1
 )
-RETURNING id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at
+RETURNING id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at
 `
 
 type ClaimNextJobParams struct {
@@ -52,6 +52,7 @@ func (q *Queries) ClaimNextJob(ctx context.Context, arg ClaimNextJobParams) (Job
 		&i.Attempts,
 		&i.RunAfter,
 		&i.LastError,
+		&i.Result,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -73,6 +74,32 @@ type DeleteSubscriptionParams struct {
 func (q *Queries) DeleteSubscription(ctx context.Context, arg DeleteSubscriptionParams) error {
 	_, err := q.db.ExecContext(ctx, deleteSubscription, arg.DeletedAt, arg.UpdatedAt, arg.ID)
 	return err
+}
+
+const getAnnotation = `-- name: GetAnnotation :one
+SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE id = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetAnnotation(ctx context.Context, id string) (Annotation, error) {
+	row := q.db.QueryRowContext(ctx, getAnnotation, id)
+	var i Annotation
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.HighlightID,
+		&i.Exact,
+		&i.Prefix,
+		&i.Suffix,
+		&i.PosStart,
+		&i.PosEnd,
+		&i.Color,
+		&i.Note,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
 const getDevice = `-- name: GetDevice :one
@@ -243,7 +270,7 @@ func (q *Queries) GetFeedItem(ctx context.Context, id string) (FeedItem, error) 
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at FROM jobs WHERE id = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id string) (Job, error) {
@@ -257,6 +284,7 @@ func (q *Queries) GetJob(ctx context.Context, id string) (Job, error) {
 		&i.Attempts,
 		&i.RunAfter,
 		&i.LastError,
+		&i.Result,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -379,6 +407,62 @@ func (q *Queries) GetSubscription(ctx context.Context, id string) (Subscription,
 	return i, err
 }
 
+const insertAnnotation = `-- name: InsertAnnotation :one
+INSERT INTO annotations (id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev, deleted_at
+`
+
+type InsertAnnotationParams struct {
+	ID          string  `json:"id"`
+	DocumentID  string  `json:"document_id"`
+	HighlightID *string `json:"highlight_id"`
+	Exact       string  `json:"exact"`
+	Prefix      string  `json:"prefix"`
+	Suffix      string  `json:"suffix"`
+	PosStart    int64   `json:"pos_start"`
+	PosEnd      int64   `json:"pos_end"`
+	Color       string  `json:"color"`
+	Note        string  `json:"note"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
+}
+
+func (q *Queries) InsertAnnotation(ctx context.Context, arg InsertAnnotationParams) (Annotation, error) {
+	row := q.db.QueryRowContext(ctx, insertAnnotation,
+		arg.ID,
+		arg.DocumentID,
+		arg.HighlightID,
+		arg.Exact,
+		arg.Prefix,
+		arg.Suffix,
+		arg.PosStart,
+		arg.PosEnd,
+		arg.Color,
+		arg.Note,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i Annotation
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.HighlightID,
+		&i.Exact,
+		&i.Prefix,
+		&i.Suffix,
+		&i.PosStart,
+		&i.PosEnd,
+		&i.Color,
+		&i.Note,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const insertDevice = `-- name: InsertDevice :one
 INSERT INTO devices (id, name, token_hash, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -420,7 +504,7 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 const insertJob = `-- name: InsertJob :one
 INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev)
 VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, 0)
-RETURNING id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at
+RETURNING id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at
 `
 
 type InsertJobParams struct {
@@ -450,6 +534,7 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, erro
 		&i.Attempts,
 		&i.RunAfter,
 		&i.LastError,
+		&i.Result,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -508,6 +593,48 @@ func (q *Queries) InsertSubscription(ctx context.Context, arg InsertSubscription
 		&i.DeletedAt,
 	)
 	return i, err
+}
+
+const listAnnotationsByDocument = `-- name: ListAnnotationsByDocument :many
+SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE document_id = ? AND deleted_at IS NULL ORDER BY pos_start ASC
+`
+
+func (q *Queries) ListAnnotationsByDocument(ctx context.Context, documentID string) ([]Annotation, error) {
+	rows, err := q.db.QueryContext(ctx, listAnnotationsByDocument, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Annotation
+	for rows.Next() {
+		var i Annotation
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.HighlightID,
+			&i.Exact,
+			&i.Prefix,
+			&i.Suffix,
+			&i.PosStart,
+			&i.PosEnd,
+			&i.Color,
+			&i.Note,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listDevices = `-- name: ListDevices :many
@@ -573,6 +700,73 @@ func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
 			&i.UpdatedAt,
 			&i.Rev,
 			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDocumentsWithAnnotationCount = `-- name: ListDocumentsWithAnnotationCount :many
+SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
+       d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,
+       d.rev, d.deleted_at,
+       COALESCE(COUNT(a.id), 0) AS annotation_count
+FROM documents d
+LEFT JOIN annotations a ON a.document_id = d.id AND a.deleted_at IS NULL
+WHERE d.deleted_at IS NULL
+GROUP BY d.id
+ORDER BY d.created_at DESC
+`
+
+type ListDocumentsWithAnnotationCountRow struct {
+	ID              string      `json:"id"`
+	CanonicalUrl    string      `json:"canonical_url"`
+	Title           string      `json:"title"`
+	Markdown        string      `json:"markdown"`
+	FetchedAt       string      `json:"fetched_at"`
+	Excerpt         string      `json:"excerpt"`
+	HeroImageUrl    string      `json:"hero_image_url"`
+	Author          string      `json:"author"`
+	SourceFeedID    *string     `json:"source_feed_id"`
+	CreatedAt       string      `json:"created_at"`
+	UpdatedAt       string      `json:"updated_at"`
+	Rev             int64       `json:"rev"`
+	DeletedAt       *string     `json:"deleted_at"`
+	AnnotationCount interface{} `json:"annotation_count"`
+}
+
+func (q *Queries) ListDocumentsWithAnnotationCount(ctx context.Context) ([]ListDocumentsWithAnnotationCountRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDocumentsWithAnnotationCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDocumentsWithAnnotationCountRow
+	for rows.Next() {
+		var i ListDocumentsWithAnnotationCountRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CanonicalUrl,
+			&i.Title,
+			&i.Markdown,
+			&i.FetchedAt,
+			&i.Excerpt,
+			&i.HeroImageUrl,
+			&i.Author,
+			&i.SourceFeedID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+			&i.AnnotationCount,
 		); err != nil {
 			return nil, err
 		}
@@ -699,7 +893,7 @@ func (q *Queries) ListFeeds(ctx context.Context) ([]Feed, error) {
 }
 
 const listJobs = `-- name: ListJobs :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
 `
 
 func (q *Queries) ListJobs(ctx context.Context) ([]Job, error) {
@@ -719,6 +913,7 @@ func (q *Queries) ListJobs(ctx context.Context) ([]Job, error) {
 			&i.Attempts,
 			&i.RunAfter,
 			&i.LastError,
+			&i.Result,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -738,7 +933,7 @@ func (q *Queries) ListJobs(ctx context.Context) ([]Job, error) {
 }
 
 const listJobsByKind = `-- name: ListJobsByKind :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
 `
 
 func (q *Queries) ListJobsByKind(ctx context.Context, kind string) ([]Job, error) {
@@ -758,6 +953,7 @@ func (q *Queries) ListJobsByKind(ctx context.Context, kind string) ([]Job, error
 			&i.Attempts,
 			&i.RunAfter,
 			&i.LastError,
+			&i.Result,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -777,7 +973,7 @@ func (q *Queries) ListJobsByKind(ctx context.Context, kind string) ([]Job, error
 }
 
 const listJobsByStatus = `-- name: ListJobsByStatus :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
 `
 
 func (q *Queries) ListJobsByStatus(ctx context.Context, status string) ([]Job, error) {
@@ -797,6 +993,7 @@ func (q *Queries) ListJobsByStatus(ctx context.Context, status string) ([]Job, e
 			&i.Attempts,
 			&i.RunAfter,
 			&i.LastError,
+			&i.Result,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -816,7 +1013,7 @@ func (q *Queries) ListJobsByStatus(ctx context.Context, status string) ([]Job, e
 }
 
 const listJobsByStatusAndKind = `-- name: ListJobsByStatusAndKind :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
 `
 
 type ListJobsByStatusAndKindParams struct {
@@ -841,6 +1038,7 @@ func (q *Queries) ListJobsByStatusAndKind(ctx context.Context, arg ListJobsBySta
 			&i.Attempts,
 			&i.RunAfter,
 			&i.LastError,
+			&i.Result,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -950,16 +1148,17 @@ func (q *Queries) MarkFeedPolled(ctx context.Context, arg MarkFeedPolledParams) 
 }
 
 const markJobDone = `-- name: MarkJobDone :exec
-UPDATE jobs SET status = 'done', updated_at = ? WHERE id = ?
+UPDATE jobs SET status = 'done', result = ?, updated_at = ? WHERE id = ?
 `
 
 type MarkJobDoneParams struct {
+	Result    string `json:"result"`
 	UpdatedAt string `json:"updated_at"`
 	ID        string `json:"id"`
 }
 
 func (q *Queries) MarkJobDone(ctx context.Context, arg MarkJobDoneParams) error {
-	_, err := q.db.ExecContext(ctx, markJobDone, arg.UpdatedAt, arg.ID)
+	_, err := q.db.ExecContext(ctx, markJobDone, arg.Result, arg.UpdatedAt, arg.ID)
 	return err
 }
 
@@ -1041,6 +1240,21 @@ func (q *Queries) RetryJob(ctx context.Context, arg RetryJobParams) error {
 	return err
 }
 
+const softDeleteAnnotation = `-- name: SoftDeleteAnnotation :exec
+UPDATE annotations SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type SoftDeleteAnnotationParams struct {
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+	ID        string  `json:"id"`
+}
+
+func (q *Queries) SoftDeleteAnnotation(ctx context.Context, arg SoftDeleteAnnotationParams) error {
+	_, err := q.db.ExecContext(ctx, softDeleteAnnotation, arg.DeletedAt, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const softDeleteDevice = `-- name: SoftDeleteDevice :exec
 UPDATE devices SET deleted_at = ?, updated_at = ?, rev = ?
 WHERE id = ?
@@ -1075,6 +1289,27 @@ type SoftDeleteJobParams struct {
 
 func (q *Queries) SoftDeleteJob(ctx context.Context, arg SoftDeleteJobParams) error {
 	_, err := q.db.ExecContext(ctx, softDeleteJob, arg.DeletedAt, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const updateAnnotation = `-- name: UpdateAnnotation :exec
+UPDATE annotations SET note = ?, color = ?, updated_at = ?, rev = rev + 1 WHERE id = ? AND deleted_at IS NULL
+`
+
+type UpdateAnnotationParams struct {
+	Note      string `json:"note"`
+	Color     string `json:"color"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) UpdateAnnotation(ctx context.Context, arg UpdateAnnotationParams) error {
+	_, err := q.db.ExecContext(ctx, updateAnnotation,
+		arg.Note,
+		arg.Color,
+		arg.UpdatedAt,
+		arg.ID,
+	)
 	return err
 }
 

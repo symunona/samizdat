@@ -58,7 +58,7 @@ WHERE id = (
 RETURNING *;
 
 -- name: MarkJobDone :exec
-UPDATE jobs SET status = 'done', updated_at = ? WHERE id = ?;
+UPDATE jobs SET status = 'done', result = ?, updated_at = ? WHERE id = ?;
 
 -- name: MarkJobFailed :exec
 UPDATE jobs SET status = ?, attempts = ?, run_after = ?, updated_at = ? WHERE id = ?;
@@ -209,3 +209,31 @@ UPDATE jobs SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
 -- name: MarkJobLastError :exec
 UPDATE jobs SET last_error = ?, updated_at = ? WHERE id = ?;
+
+-- name: InsertAnnotation :one
+INSERT INTO annotations (id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: GetAnnotation :one
+SELECT * FROM annotations WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: ListAnnotationsByDocument :many
+SELECT * FROM annotations WHERE document_id = ? AND deleted_at IS NULL ORDER BY pos_start ASC;
+
+-- name: UpdateAnnotation :exec
+UPDATE annotations SET note = ?, color = ?, updated_at = ?, rev = rev + 1 WHERE id = ? AND deleted_at IS NULL;
+
+-- name: SoftDeleteAnnotation :exec
+UPDATE annotations SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: ListDocumentsWithAnnotationCount :many
+SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
+       d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,
+       d.rev, d.deleted_at,
+       COALESCE(COUNT(a.id), 0) AS annotation_count
+FROM documents d
+LEFT JOIN annotations a ON a.document_id = d.id AND a.deleted_at IS NULL
+WHERE d.deleted_at IS NULL
+GROUP BY d.id
+ORDER BY d.created_at DESC;

@@ -10,13 +10,42 @@ import (
 
 type documentsHandler struct{ q *store.Queries }
 
+type documentListItem struct {
+	store.Document
+	AnnotationCount interface{} `json:"annotation_count"`
+}
+
 func (h *documentsHandler) list(w http.ResponseWriter, r *http.Request) {
-	docs, err := h.q.ListDocuments(r.Context())
+	rows, err := h.q.ListDocumentsWithAnnotationCount(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	writeJSON(w, http.StatusOK, docs)
+	items := make([]documentListItem, len(rows))
+	for i, row := range rows {
+		items[i] = documentListItem{
+			Document: store.Document{
+				ID:           row.ID,
+				CanonicalUrl: row.CanonicalUrl,
+				Title:        row.Title,
+				Markdown:     row.Markdown,
+				FetchedAt:    row.FetchedAt,
+				Excerpt:      row.Excerpt,
+				HeroImageUrl: row.HeroImageUrl,
+				Author:       row.Author,
+				SourceFeedID: row.SourceFeedID,
+				CreatedAt:    row.CreatedAt,
+				UpdatedAt:    row.UpdatedAt,
+				Rev:          row.Rev,
+				DeletedAt:    row.DeletedAt,
+			},
+			AnnotationCount: row.AnnotationCount,
+		}
+	}
+	if items == nil {
+		items = []documentListItem{}
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (h *documentsHandler) get(w http.ResponseWriter, r *http.Request) {

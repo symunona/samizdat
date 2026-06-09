@@ -46,6 +46,8 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("POST /api/v1/subscriptions", bearerAuth(q, subsH.create))
 	mux.HandleFunc("GET /api/v1/subscriptions", bearerAuth(q, subsH.list))
 	mux.HandleFunc("DELETE /api/v1/subscriptions/{id}", bearerAuth(q, subsH.delete))
+	mux.HandleFunc("POST /api/v1/subscriptions/{id}/poll", bearerAuth(q, subsH.poll))
+	mux.HandleFunc("GET /api/v1/feeds", bearerAuth(q, subsH.listFeeds))
 	mux.HandleFunc("GET /api/v1/feeds/{id}/items", bearerAuth(q, subsH.listFeedItems))
 
 	adminFeedsH := &adminFeedsHandler{reg: w.ExtractorRegistry(), browser: w}
@@ -55,6 +57,15 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("GET /api/v1/documents", bearerAuth(q, docsH.list))
 	mux.HandleFunc("GET /api/v1/documents/{id}", bearerAuth(q, docsH.get))
 	mux.HandleFunc("GET /api/v1/documents/{id}/media", bearerAuth(q, docsH.listMedia))
+
+	annH := &annotationsHandler{q: q}
+	mux.HandleFunc("GET /api/v1/documents/{id}/annotations", bearerAuth(q, annH.list))
+	mux.HandleFunc("POST /api/v1/documents/{id}/annotations", bearerAuth(q, annH.create))
+	mux.HandleFunc("PUT /api/v1/annotations/{id}", bearerAuth(q, annH.update))
+	mux.HandleFunc("DELETE /api/v1/annotations/{id}", bearerAuth(q, annH.delete))
+
+	htmlH := &htmlHandler{q: q}
+	mux.HandleFunc("GET /api/v1/documents/{id}/html", bearerAuth(q, htmlH.render))
 
 	mediaH := &mediaHandler{q: q, cacheDir: cacheDir}
 	mux.HandleFunc("GET /api/v1/media/{id}", mediaH.serve)
