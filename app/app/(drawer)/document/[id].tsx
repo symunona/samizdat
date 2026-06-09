@@ -6,6 +6,7 @@ import {
   Platform,
   Pressable,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -508,7 +509,7 @@ export default function DocumentViewer() {
       {metaVisible && doc && (
         <Pressable style={s.metaOverlay} onPress={closeMetaPanel}>
           <Animated.View style={[s.metaPanel, { transform: [{ translateX: metaAnim }] }]}>
-            <Pressable style={{ flex: 1 }} onPress={e => e.stopPropagation()}>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: theme.spacing.lg, paddingBottom: theme.spacing.xl }} onStartShouldSetResponder={() => true}>
             <View style={s.metaHeader}>
               <Text style={s.metaTitle}>Document info</Text>
               <Pressable onPress={closeMetaPanel} hitSlop={12}>
@@ -564,7 +565,7 @@ export default function DocumentViewer() {
                 </View>
               </View>
             )}
-            </Pressable>
+            </ScrollView>
           </Animated.View>
         </Pressable>
       )}
@@ -603,11 +604,9 @@ function buildStyles(t: Theme) {
     },
     metaPanel: {
       width: 300,
+      flex: 1,
       backgroundColor: t.colors.surface,
       borderLeftWidth: 1, borderLeftColor: t.colors.border,
-      padding: t.spacing.lg,
-      paddingBottom: t.spacing.xl,
-      overflow: 'hidden',
     },
     metaHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: t.spacing.md },
     metaTitle: { color: t.colors.text, fontSize: 16, fontWeight: '700' },
