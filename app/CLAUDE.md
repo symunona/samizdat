@@ -93,3 +93,35 @@ useEffect(() => {
 ```
 
 **Writing connection data** (e.g. after pairing): call `reload()` from `useConnection()` — do not call `saveConnection` and forget. `reload()` re-reads storage and triggers a fresh probe, keeping the provider in sync.
+
+## Debugging with agent-browser
+
+**Always reuse the persisted debug session** — never start fresh from an unpaired state.
+
+State lives at `tmp/debug-session/state.json` (gitignored). It holds cookies + localStorage so the app starts already connected to the server.
+
+### Setup (one-time, or after wiping state)
+
+```bash
+# 1. Open a fresh browser, go through the pairing flow manually
+agent-browser open http://localhost:8765
+# ... pair device in the UI ...
+# 2. Save state for future runs
+just save-debug-session
+```
+
+### Every debug / e2e run
+
+```bash
+# Opens with saved state — app starts already paired/authenticated
+just debug-session
+# or directly:
+agent-browser --state tmp/debug-session/state.json open http://localhost:8765
+```
+
+### Rules
+
+- **Never** start a debug agent-browser session without `--state tmp/debug-session/state.json` (or via `just debug-session`).
+- After any pairing action in tests, call `just save-debug-session` to persist the new token.
+- Screenshots go to `tmp/screenshots/`, not `tmp/` root.
+- State file is gitignored — recreate from the pairing flow if missing.

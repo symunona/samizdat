@@ -66,6 +66,23 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("PUT /api/v1/annotations/{id}", bearerAuth(q, annH.update))
 	mux.HandleFunc("DELETE /api/v1/annotations/{id}", bearerAuth(q, annH.delete))
 
+	tagsH := &tagsHandler{q: q}
+	mux.HandleFunc("GET /api/v1/tags", bearerAuth(q, tagsH.list))
+	mux.HandleFunc("POST /api/v1/tags", bearerAuth(q, tagsH.create))
+	mux.HandleFunc("DELETE /api/v1/tags/{id}", bearerAuth(q, tagsH.delete))
+	mux.HandleFunc("GET /api/v1/tags/{id}/documents", bearerAuth(q, tagsH.listDocumentsByTag))
+	mux.HandleFunc("GET /api/v1/tags/{id}/annotations", bearerAuth(q, tagsH.listAnnotationsByTag))
+
+	docTagsH := &documentTagsHandler{q: q}
+	mux.HandleFunc("GET /api/v1/documents/{id}/tags", bearerAuth(q, docTagsH.list))
+	mux.HandleFunc("POST /api/v1/documents/{id}/tags", bearerAuth(q, docTagsH.add))
+	mux.HandleFunc("DELETE /api/v1/documents/{id}/tags/{tag_id}", bearerAuth(q, docTagsH.remove))
+
+	annTagsH := &annotationTagsHandler{q: q}
+	mux.HandleFunc("GET /api/v1/annotations/{id}/tags", bearerAuth(q, annTagsH.list))
+	mux.HandleFunc("POST /api/v1/annotations/{id}/tags", bearerAuth(q, annTagsH.add))
+	mux.HandleFunc("DELETE /api/v1/annotations/{id}/tags/{tag_id}", bearerAuth(q, annTagsH.remove))
+
 	htmlH := &htmlHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents/{id}/html", bearerAuth(q, htmlH.render))
 

@@ -234,6 +234,73 @@ UPDATE annotations SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = 
 -- name: SoftDeleteDocument :exec
 UPDATE documents SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ? AND deleted_at IS NULL;
 
+-- name: InsertTag :one
+INSERT INTO tags (id, name, color, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: GetTag :one
+SELECT * FROM tags WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: GetTagByName :one
+SELECT * FROM tags WHERE name = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: ListTagsWithCounts :many
+SELECT t.id, t.name, t.color, t.created_at, t.updated_at, t.rev, t.deleted_at,
+       COALESCE(SUM(CASE WHEN dt.deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS doc_count,
+       COALESCE(SUM(CASE WHEN at2.deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS ann_count
+FROM tags t
+LEFT JOIN document_tags dt ON dt.tag_id = t.id
+LEFT JOIN annotation_tags at2 ON at2.tag_id = t.id
+WHERE t.deleted_at IS NULL
+GROUP BY t.id
+ORDER BY (COALESCE(SUM(CASE WHEN dt.deleted_at IS NULL THEN 1 ELSE 0 END), 0) + COALESCE(SUM(CASE WHEN at2.deleted_at IS NULL THEN 1 ELSE 0 END), 0)) DESC, t.name ASC;
+
+-- name: SoftDeleteTag :exec
+UPDATE tags SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: InsertDocumentTag :one
+INSERT INTO document_tags (id, document_id, tag_id, created_at, rev)
+VALUES (?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: DeleteDocumentTag :exec
+UPDATE document_tags SET deleted_at = ?, rev = rev + 1
+WHERE document_id = ? AND tag_id = ? AND deleted_at IS NULL;
+
+-- name: ListTagsByDocument :many
+SELECT t.* FROM tags t
+JOIN document_tags dt ON dt.tag_id = t.id
+WHERE dt.document_id = ? AND dt.deleted_at IS NULL AND t.deleted_at IS NULL
+ORDER BY t.name ASC;
+
+-- name: ListDocumentsByTag :many
+SELECT d.* FROM documents d
+JOIN document_tags dt ON dt.document_id = d.id
+WHERE dt.tag_id = ? AND dt.deleted_at IS NULL AND d.deleted_at IS NULL
+ORDER BY d.created_at DESC;
+
+-- name: InsertAnnotationTag :one
+INSERT INTO annotation_tags (id, annotation_id, tag_id, created_at, rev)
+VALUES (?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: DeleteAnnotationTag :exec
+UPDATE annotation_tags SET deleted_at = ?, rev = rev + 1
+WHERE annotation_id = ? AND tag_id = ? AND deleted_at IS NULL;
+
+-- name: ListTagsByAnnotation :many
+SELECT t.* FROM tags t
+JOIN annotation_tags at2 ON at2.tag_id = t.id
+WHERE at2.annotation_id = ? AND at2.deleted_at IS NULL AND t.deleted_at IS NULL
+ORDER BY t.name ASC;
+
+-- name: ListAnnotationsByTag :many
+SELECT a.* FROM annotations a
+JOIN annotation_tags at2 ON at2.annotation_id = a.id
+WHERE at2.tag_id = ? AND at2.deleted_at IS NULL AND a.deleted_at IS NULL
+ORDER BY a.created_at DESC;
+
 -- name: ListDocumentsWithAnnotationCount :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
        d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,

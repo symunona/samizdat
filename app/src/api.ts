@@ -383,3 +383,108 @@ export async function deleteAnnotation(serverUrl: string, token: string, id: str
   })
   if (!res.ok) throw new ApiError(res.status, `deleteAnnotation failed: HTTP ${res.status}`)
 }
+
+// ── Tags ──────────────────────────────────────────────────────────────────────
+
+export type Tag = {
+  id: string
+  name: string
+  color: string
+  created_at: string
+  updated_at: string
+  rev: number
+  deleted_at: string | null
+  doc_count?: number
+  ann_count?: number
+}
+
+export async function fetchTags(serverUrl: string, token: string): Promise<Tag[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/tags`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Tag[]>(res, '/api/v1/tags')
+}
+
+export async function createTag(
+  serverUrl: string, token: string,
+  data: { name: string; color?: string },
+): Promise<Tag> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/tags`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return json<Tag>(res, '/api/v1/tags POST')
+}
+
+export async function deleteTag(serverUrl: string, token: string, id: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/tags/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `deleteTag failed: HTTP ${res.status}`)
+}
+
+export async function fetchTagDocuments(serverUrl: string, token: string, tagId: string): Promise<Document[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/tags/${encodeURIComponent(tagId)}/documents`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Document[]>(res, '/api/v1/tags/:id/documents')
+}
+
+export async function fetchTagAnnotations(serverUrl: string, token: string, tagId: string): Promise<Annotation[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/tags/${encodeURIComponent(tagId)}/annotations`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Annotation[]>(res, '/api/v1/tags/:id/annotations')
+}
+
+export async function fetchDocumentTags(serverUrl: string, token: string, docId: string): Promise<Tag[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/tags`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Tag[]>(res, '/api/v1/documents/:id/tags')
+}
+
+export async function addDocumentTag(serverUrl: string, token: string, docId: string, tagId: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/tags`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag_id: tagId }),
+  })
+  if (!res.ok) throw new ApiError(res.status, `addDocumentTag failed: HTTP ${res.status}`)
+}
+
+export async function removeDocumentTag(serverUrl: string, token: string, docId: string, tagId: string): Promise<void> {
+  const res = await fetch(
+    `${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/tags/${encodeURIComponent(tagId)}`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+  )
+  if (!res.ok) throw new ApiError(res.status, `removeDocumentTag failed: HTTP ${res.status}`)
+}
+
+export async function fetchAnnotationTags(serverUrl: string, token: string, annId: string): Promise<Tag[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/annotations/${encodeURIComponent(annId)}/tags`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Tag[]>(res, '/api/v1/annotations/:id/tags')
+}
+
+export async function addAnnotationTag(serverUrl: string, token: string, annId: string, tagId: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/annotations/${encodeURIComponent(annId)}/tags`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag_id: tagId }),
+  })
+  if (!res.ok) throw new ApiError(res.status, `addAnnotationTag failed: HTTP ${res.status}`)
+}
+
+export async function removeAnnotationTag(
+  serverUrl: string, token: string, annId: string, tagId: string,
+): Promise<void> {
+  const res = await fetch(
+    `${base(serverUrl)}/api/v1/annotations/${encodeURIComponent(annId)}/tags/${encodeURIComponent(tagId)}`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+  )
+  if (!res.ok) throw new ApiError(res.status, `removeAnnotationTag failed: HTTP ${res.status}`)
+}

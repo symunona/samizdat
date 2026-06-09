@@ -30,13 +30,14 @@ import type { Document, Annotation } from '../../../src/api'
 import { useConnection } from '../../../src/ConnectionContext'
 import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
+import TagSelectorModal from '../../../src/TagSelectorModal'
 
 const DEBOUNCE_MS = 1000
 
 type ParsedMsg = { type: string; fraction?: number; data?: PendingSelection; id?: string }
 
 export default function DocumentViewer() {
-  const { id, from } = useLocalSearchParams<{ id: string; from?: string }>()
+  const { id, from, highlight } = useLocalSearchParams<{ id: string; from?: string; highlight?: string }>()
   const router = useRouter()
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
@@ -99,6 +100,16 @@ export default function DocumentViewer() {
   const [annMode, setAnnMode] = useState<'create' | 'edit'>('create')
   const [pendingSelection, setPendingSelection] = useState<PendingSelection | undefined>()
   const [existingAnnotation, setExistingAnnotation] = useState<ExistingAnnotation | undefined>()
+
+  // Tag selector modal state
+  const [tagModalVisible, setTagModalVisible] = useState(false)
+  const [tagTargetId, setTagTargetId] = useState<string>('')
+
+  const handleOpenTagModal = useCallback((annotationId: string) => {
+    setTagTargetId(annotationId)
+    setAnnVisible(false)
+    setTagModalVisible(true)
+  }, [])
 
   const load = useCallback(async () => {
     if (!activeUrl || !token) return
@@ -165,15 +176,29 @@ export default function DocumentViewer() {
     }
   }, [])
 
+  const injectHighlightAnnotation = useCallback((annId: string) => {
+    if (Platform.OS === 'web') {
+      iframeRef.current?.contentWindow?.postMessage(
+        JSON.stringify({ type: 'highlightAnnotation', id: annId }), '*',
+      )
+    } else {
+      webViewRef.current?.injectJavaScript(
+        `(function(){var m=document.querySelector('mark[data-ann-id="${annId}"]');if(m){m.classList.add('focused');m.scrollIntoView({behavior:'smooth',block:'center'});}})(); true;`,
+      )
+    }
+  }, [])
+
   const handleDocumentLoad = useCallback(() => {
-    if (savedProgressRef.current > 0) {
+    if (highlight) {
+      setTimeout(() => injectHighlightAnnotation(highlight), 400)
+    } else if (savedProgressRef.current > 0) {
       const frac = savedProgressRef.current
       setTimeout(() => {
         injectScrollTo(frac)
         savedProgressRef.current = 0
       }, 300)
     }
-  }, [injectScrollTo])
+  }, [injectScrollTo, injectHighlightAnnotation, highlight])
 
   const handleParsedMessage = useCallback((msg: ParsedMsg) => {
     if (msg.type === 'scroll') {
@@ -332,6 +357,14 @@ export default function DocumentViewer() {
         onSave={handleAnnSave}
         onDelete={annMode === 'edit' ? handleAnnDelete : undefined}
         onCancel={() => setAnnVisible(false)}
+        onTag={handleOpenTagModal}
+      />
+
+      <TagSelectorModal
+        visible={tagModalVisible}
+        objectId={tagTargetId}
+        objectType="annotation"
+        onClose={() => setTagModalVisible(false)}
       />
 
       {metaVisible && doc && (

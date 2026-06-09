@@ -187,6 +187,36 @@ CREATE TABLE IF NOT EXISTS annotations (
 );
 
 CREATE INDEX IF NOT EXISTS annotations_document_id ON annotations(document_id);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    color      TEXT NOT NULL DEFAULT 'default',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    rev        INTEGER NOT NULL DEFAULT 0,
+    deleted_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS document_tags (
+    id          TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES documents(id),
+    tag_id      TEXT NOT NULL REFERENCES tags(id),
+    created_at  TEXT NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0,
+    deleted_at  TEXT,
+    UNIQUE(document_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS annotation_tags (
+    id            TEXT PRIMARY KEY,
+    annotation_id TEXT NOT NULL REFERENCES annotations(id),
+    tag_id        TEXT NOT NULL REFERENCES tags(id),
+    created_at    TEXT NOT NULL,
+    rev           INTEGER NOT NULL DEFAULT 0,
+    deleted_at    TEXT,
+    UNIQUE(annotation_id, tag_id)
+);
 `
 
 func migrate(db *sql.DB) error {

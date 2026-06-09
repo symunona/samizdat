@@ -236,6 +236,31 @@ tooling-all: tooling-build
 # ── Browser sessions ──────────────────────────────────────────────────────────
 
 [group('debug')]
+[doc('Open app in agent-browser with persisted debug session (auto-restores login state from tmp/debug-session/state.json)')]
+debug-session:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{justfile_directory()}}/tmp/debug-session"
+    STATE="{{justfile_directory()}}/tmp/debug-session/state.json"
+    URL="${URL:-http://localhost:8765}"
+    echo "Opening $URL with debug session (state: $STATE)"
+    if [ -f "$STATE" ]; then
+        agent-browser --state "$STATE" open "$URL"
+    else
+        echo "No saved state — opening fresh. After pairing, run: just save-debug-session"
+        agent-browser open "$URL"
+    fi
+
+[group('debug')]
+[doc('Save current agent-browser session state to tmp/debug-session/state.json')]
+save-debug-session:
+    #!/usr/bin/env bash
+    mkdir -p "{{justfile_directory()}}/tmp/debug-session"
+    STATE="{{justfile_directory()}}/tmp/debug-session/state.json"
+    agent-browser state save "$STATE"
+    echo "Session saved: $STATE"
+
+[group('debug')]
 [doc('Launch Chrome with a named session from tmp/sessions/<name>.json (creates tmp/ if missing)')]
 browser-session name="default":
     #!/usr/bin/env bash

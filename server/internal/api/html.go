@@ -78,6 +78,7 @@ mark.color-yellow{background-color:rgba(250,204,21,0.3)}
 mark.color-green{background-color:rgba(74,222,128,0.3)}
 mark.color-blue{background-color:rgba(96,165,250,0.3)}
 mark.color-pink{background-color:rgba(244,114,182,0.3)}
+mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);transition:filter 0.3s;}
 #ann-btn{position:fixed;bottom:80px;right:24px;background:#e8743b;color:#0b0b0c;border:none;border-radius:20px;padding:8px 16px;font-weight:700;font-size:14px;cursor:pointer;display:none;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.4)}
 #ann-gutter{position:fixed;top:0;right:0;width:6px;height:100%%;pointer-events:none;z-index:90;}
 </style>
@@ -121,6 +122,10 @@ window.addEventListener('message', function(e) {
   if (msg.type === 'scrollTo') { window.__scrollTo && window.__scrollTo(msg.fraction); }
   else if (msg.type === 'addMark') { window.addMark && window.addMark(msg.annotation); }
   else if (msg.type === 'removeMark') { window.removeMark && window.removeMark(msg.id); }
+  else if (msg.type === 'highlightAnnotation') {
+    var m = document.querySelector('mark[data-ann-id="' + msg.id + '"]');
+    if (m) { m.classList.add('focused'); m.scrollIntoView({behavior:'smooth', block:'center'}); }
+  }
 });
 
 // TreeWalker that skips <script>/<style>/<noscript> text nodes
