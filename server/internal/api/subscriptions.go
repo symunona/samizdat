@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,8 +14,9 @@ import (
 )
 
 type subscriptionsHandler struct {
-	q   *store.Queries
-	reg extractor.Registry
+	q             *store.Queries
+	reg           extractor.Registry
+	extractorsDir string
 }
 
 // POST /api/v1/subscriptions
@@ -37,8 +40,23 @@ func (h *subscriptionsHandler) create(w http.ResponseWriter, r *http.Request) {
 
 	cfg, ok := h.reg.LookupByURL(body.URL)
 	if !ok {
-		writeErr(w, http.StatusBadRequest, "no extractor config found for this domain — create extractors/<domain>/feed.yaml first")
-		return
+		detected, err := extractor.AutoDetectFeedURL(r.Context(), body.URL)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "no extractor config and RSS auto-detection failed: "+err.Error())
+			return
+		}
+		u, _ := url.Parse(body.URL)
+		domain := u.Hostname()
+		cfg = extractor.ExtractorConfig{Kind: "rss", FeedURL: detected, MaxURLs: 100}
+		if h.extractorsDir != "" {
+			if saveErr := h.reg.SaveConfig(h.extractorsDir, domain, cfg); saveErr != nil {
+				log.Printf("subscriptions: auto-save config for %s: %v", domain, saveErr)
+				h.reg[domain] = cfg
+			}
+		} else {
+			h.reg[domain] = cfg
+		}
+		log.Printf("subscriptions: auto-detected RSS feed for %s → %s", domain, detected)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)

@@ -43,7 +43,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", bearerAuth(q, jobsH.retry))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", bearerAuth(q, jobsH.softDelete))
 
-	subsH := &subscriptionsHandler{q: q, reg: w.ExtractorRegistry()}
+	subsH := &subscriptionsHandler{q: q, reg: w.ExtractorRegistry(), extractorsDir: extractorDir}
 	mux.HandleFunc("POST /api/v1/subscriptions", bearerAuth(q, subsH.create))
 	mux.HandleFunc("GET /api/v1/subscriptions", bearerAuth(q, subsH.list))
 	mux.HandleFunc("DELETE /api/v1/subscriptions/{id}", bearerAuth(q, subsH.delete))

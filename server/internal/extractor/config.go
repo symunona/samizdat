@@ -15,13 +15,13 @@ type ExtractorConfig struct {
 	Kind string `yaml:"kind"`
 
 	// html_links fields
-	Selector   string `yaml:"selector"`
-	URLPattern string `yaml:"url_pattern"`
-	BaseURL    string `yaml:"base_url"`
-	MaxURLs    int    `yaml:"max_urls"`
+	Selector   string `yaml:"selector,omitempty"`
+	URLPattern string `yaml:"url_pattern,omitempty"`
+	BaseURL    string `yaml:"base_url,omitempty"`
+	MaxURLs    int    `yaml:"max_urls,omitempty"`
 
 	// rss fields
-	FeedURL string `yaml:"feed_url"`
+	FeedURL string `yaml:"feed_url,omitempty"`
 
 	// js_script: script loaded separately as ScriptBytes
 	ScriptBytes []byte `yaml:"-"`
@@ -72,6 +72,24 @@ func LoadAll(dir string) (Registry, error) {
 		reg[domain] = cfg
 	}
 	return reg, nil
+}
+
+// SaveConfig writes cfg to extractorsDir/<domain>/feed.yaml and registers it in memory.
+func (r Registry) SaveConfig(extractorsDir, domain string, cfg ExtractorConfig) error {
+	dir := filepath.Join(extractorsDir, domain)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %q: %w", dir, err)
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	path := filepath.Join(dir, "feed.yaml")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write %q: %w", path, err)
+	}
+	r[domain] = cfg
+	return nil
 }
 
 // LookupByURL resolves the domain from rawURL and looks it up in the registry.

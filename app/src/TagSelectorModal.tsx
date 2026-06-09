@@ -139,10 +139,11 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={s.backdrop} />
-      </TouchableWithoutFeedback>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={s.kav}>
+      <View style={s.overlay}>
+        <TouchableWithoutFeedback onPress={onClose}>
+          <View style={s.backdrop} />
+        </TouchableWithoutFeedback>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={s.kav}>
         <View style={s.panel}>
           <View style={s.handle} />
           <View style={s.header}>
@@ -221,7 +222,8 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
             </View>
           </View>
         </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   )
 }
@@ -229,15 +231,16 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
 type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
-    backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
-    kav: { justifyContent: 'flex-end' },
+    overlay: { flex: 1, justifyContent: 'flex-end' },
+    backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
+    kav: { width: '100%' as unknown as number },
     panel: {
       backgroundColor: t.colors.surface,
       borderTopLeftRadius: 18,
       borderTopRightRadius: 18,
       paddingHorizontal: t.spacing.lg,
       paddingBottom: 40,
-      maxHeight: '75%' as unknown as number,
+      maxHeight: '85%' as unknown as number,
     },
     handle: {
       width: 36,
@@ -264,7 +267,7 @@ function buildStyles(t: Theme) {
     },
     xBtnText: { color: t.colors.muted, fontSize: 14, fontWeight: '600' },
     loadingRow: { paddingVertical: t.spacing.xl, alignItems: 'center' },
-    list: { maxHeight: 400 },
+    list: { minHeight: 200, maxHeight: 440 },
     tagRow: {
       flexDirection: 'row',
       alignItems: 'center',
