@@ -20,14 +20,22 @@ const (
 type Worker struct {
 	q        *store.Queries
 	cacheDir string
+	browser  *BrowserPool
 }
 
 func New(q *store.Queries, cacheDir string) *Worker {
-	return &Worker{q: q, cacheDir: cacheDir}
+	browser, err := NewBrowserPool()
+	if err != nil {
+		log.Fatalf("worker: browser init failed: %v", err)
+	}
+	return &Worker{q: q, cacheDir: cacheDir, browser: browser}
 }
 
 func (w *Worker) Start(ctx context.Context) {
-	go w.loop(ctx)
+	go func() {
+		w.loop(ctx)
+		w.browser.Close()
+	}()
 }
 
 func (w *Worker) loop(ctx context.Context) {
@@ -65,7 +73,7 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	var err error
 	switch job.Kind {
 	case "scrape_url":
-		err = handleScrapeURL(ctx, w.q, job)
+		err = handleScrapeURL(ctx, w.q, job, w.browser)
 	case "fetch_assets":
 		err = handleFetchAssets(ctx, w.q, job, w.cacheDir)
 	default:
