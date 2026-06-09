@@ -110,8 +110,15 @@ export default function DocumentsScreen() {
           {item.canonical_url}
         </Text>
         <Text style={s.itemDate}>Fetched {formatDate(item.fetched_at)}</Text>
-        {item.annotation_count && item.annotation_count > 0 ? (
-          <Text style={s.annBadge}>● {item.annotation_count} annotation{item.annotation_count > 1 ? 's' : ''}</Text>
+        {(item.highlight_count && item.highlight_count > 0) || (item.annotation_count && item.annotation_count > 0) ? (
+          <View style={s.badgeRow}>
+            {item.highlight_count && item.highlight_count > 0 ? (
+              <Text style={s.hlBadge}>◆ {item.highlight_count} highlight{item.highlight_count > 1 ? 's' : ''}</Text>
+            ) : null}
+            {item.annotation_count && item.annotation_count > 0 ? (
+              <Text style={s.annBadge}>● {item.annotation_count} annotation{item.annotation_count > 1 ? 's' : ''}</Text>
+            ) : null}
+          </View>
         ) : null}
       </Link>
     )
@@ -285,6 +292,8 @@ function buildStyles(t: Theme) {
     itemTitle: { color: t.colors.text, fontSize: 15, fontWeight: '600', lineHeight: 20, marginBottom: 2 },
     itemUrl: { color: t.colors.muted, fontSize: 12, fontFamily: 'monospace', marginBottom: 2 },
     itemDate: { color: t.colors.placeholder, fontSize: 11 },
-    annBadge: { color: '#e8743b', fontSize: 11, marginTop: 2, fontWeight: '600' },
+    badgeRow: { flexDirection: 'row', gap: 8, marginTop: 2 },
+    annBadge: { color: '#e8743b', fontSize: 11, fontWeight: '600' },
+    hlBadge: { color: t.colors.accent, fontSize: 11, fontWeight: '600' },
   })
 }

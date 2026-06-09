@@ -85,6 +85,7 @@ export type Document = {
   hero_image_url: string
   author: string
   annotation_count?: number
+  highlight_count?: number
 }
 
 export type MediaAsset = {

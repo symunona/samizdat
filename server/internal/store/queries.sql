@@ -305,9 +305,11 @@ ORDER BY a.created_at DESC;
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
        d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,
        d.rev, d.deleted_at,
-       COALESCE(COUNT(a.id), 0) AS annotation_count
+       COALESCE(COUNT(DISTINCT a.id), 0) AS annotation_count,
+       COALESCE(COUNT(DISTINCT h.id), 0) AS highlight_count
 FROM documents d
 LEFT JOIN annotations a ON a.document_id = d.id AND a.deleted_at IS NULL
+LEFT JOIN highlights h ON h.document_id = d.id AND h.deleted_at IS NULL
 WHERE d.deleted_at IS NULL
 GROUP BY d.id
 ORDER BY d.created_at DESC;

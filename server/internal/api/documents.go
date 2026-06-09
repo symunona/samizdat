@@ -14,6 +14,7 @@ type documentsHandler struct{ q *store.Queries }
 type documentListItem struct {
 	store.Document
 	AnnotationCount interface{} `json:"annotation_count"`
+	HighlightCount  interface{} `json:"highlight_count"`
 }
 
 func (h *documentsHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +42,7 @@ func (h *documentsHandler) list(w http.ResponseWriter, r *http.Request) {
 				DeletedAt:    row.DeletedAt,
 			},
 			AnnotationCount: row.AnnotationCount,
+			HighlightCount:  row.HighlightCount,
 		}
 	}
 	if items == nil {
