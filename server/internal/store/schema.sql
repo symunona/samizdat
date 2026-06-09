@@ -208,6 +208,7 @@ CREATE TABLE IF NOT EXISTS highlights (
     document_id     TEXT    NOT NULL REFERENCES documents(id),
     pipeline_run_id TEXT    NOT NULL REFERENCES pipeline_runs(id),
     kind            TEXT    NOT NULL DEFAULT 'note',
+    title           TEXT    NOT NULL DEFAULT '',
     body            TEXT    NOT NULL DEFAULT '',
     metadata        TEXT    NOT NULL DEFAULT '{}',
     created_at      TEXT    NOT NULL,

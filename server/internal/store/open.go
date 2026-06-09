@@ -252,6 +252,7 @@ CREATE TABLE IF NOT EXISTS highlights (
     document_id     TEXT    NOT NULL REFERENCES documents(id),
     pipeline_run_id TEXT    NOT NULL REFERENCES pipeline_runs(id),
     kind            TEXT    NOT NULL DEFAULT 'note',
+    title           TEXT    NOT NULL DEFAULT '',
     body            TEXT    NOT NULL DEFAULT '',
     metadata        TEXT    NOT NULL DEFAULT '{}',
     created_at      TEXT    NOT NULL,
@@ -281,7 +282,8 @@ func migrate(db *sql.DB) error {
 		// These ALTER TABLE lines are no-ops on fresh DBs but keep old DBs current.
 		`CREATE TABLE IF NOT EXISTS pipelines (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, trigger TEXT NOT NULL DEFAULT 'on_new_document', filter TEXT NOT NULL DEFAULT '{}', steps TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, deleted_at TEXT)`,
 		`CREATE TABLE IF NOT EXISTS pipeline_runs (id TEXT PRIMARY KEY, pipeline_id TEXT NOT NULL, document_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', step_index INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, deleted_at TEXT)`,
-		`CREATE TABLE IF NOT EXISTS highlights (id TEXT PRIMARY KEY, document_id TEXT NOT NULL, pipeline_run_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'note', body TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, deleted_at TEXT)`,
+		`CREATE TABLE IF NOT EXISTS highlights (id TEXT PRIMARY KEY, document_id TEXT NOT NULL, pipeline_run_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'note', title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, deleted_at TEXT)`,
+		`ALTER TABLE highlights ADD COLUMN title TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS pipeline_runs_document_id ON pipeline_runs(document_id)`,
 		`CREATE INDEX IF NOT EXISTS pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id)`,
 		`CREATE INDEX IF NOT EXISTS highlights_document_id ON highlights(document_id)`,

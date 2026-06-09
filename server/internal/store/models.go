@@ -96,6 +96,7 @@ type Highlight struct {
 	DocumentID    string  `json:"document_id"`
 	PipelineRunID string  `json:"pipeline_run_id"`
 	Kind          string  `json:"kind"`
+	Title         string  `json:"title"`
 	Body          string  `json:"body"`
 	Metadata      string  `json:"metadata"`
 	CreatedAt     string  `json:"created_at"`

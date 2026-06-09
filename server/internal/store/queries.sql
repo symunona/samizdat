@@ -363,8 +363,8 @@ UPDATE pipeline_runs SET deleted_at = ?, updated_at = ? WHERE document_id = ? AN
 --  Highlights
 
 -- name: InsertHighlight :one
-INSERT INTO highlights (id, document_id, pipeline_run_id, kind, body, metadata, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+INSERT INTO highlights (id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 RETURNING *;
 
 -- name: ListHighlights :many

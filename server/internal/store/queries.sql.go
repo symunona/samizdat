@@ -725,9 +725,9 @@ func (q *Queries) InsertDocumentTag(ctx context.Context, arg InsertDocumentTagPa
 
 const insertHighlight = `-- name: InsertHighlight :one
 
-INSERT INTO highlights (id, document_id, pipeline_run_id, kind, body, metadata, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-RETURNING id, document_id, pipeline_run_id, kind, body, metadata, created_at, updated_at, rev, deleted_at
+INSERT INTO highlights (id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev, deleted_at
 `
 
 type InsertHighlightParams struct {
@@ -735,6 +735,7 @@ type InsertHighlightParams struct {
 	DocumentID    string `json:"document_id"`
 	PipelineRunID string `json:"pipeline_run_id"`
 	Kind          string `json:"kind"`
+	Title         string `json:"title"`
 	Body          string `json:"body"`
 	Metadata      string `json:"metadata"`
 	CreatedAt     string `json:"created_at"`
@@ -748,6 +749,7 @@ func (q *Queries) InsertHighlight(ctx context.Context, arg InsertHighlightParams
 		arg.DocumentID,
 		arg.PipelineRunID,
 		arg.Kind,
+		arg.Title,
 		arg.Body,
 		arg.Metadata,
 		arg.CreatedAt,
@@ -759,6 +761,7 @@ func (q *Queries) InsertHighlight(ctx context.Context, arg InsertHighlightParams
 		&i.DocumentID,
 		&i.PipelineRunID,
 		&i.Kind,
+		&i.Title,
 		&i.Body,
 		&i.Metadata,
 		&i.CreatedAt,
@@ -1409,7 +1412,7 @@ func (q *Queries) ListFeeds(ctx context.Context) ([]Feed, error) {
 }
 
 const listHighlights = `-- name: ListHighlights :many
-SELECT id, document_id, pipeline_run_id, kind, body, metadata, created_at, updated_at, rev, deleted_at FROM highlights WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev, deleted_at FROM highlights WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?
 `
 
 func (q *Queries) ListHighlights(ctx context.Context, limit int64) ([]Highlight, error) {
@@ -1426,6 +1429,7 @@ func (q *Queries) ListHighlights(ctx context.Context, limit int64) ([]Highlight,
 			&i.DocumentID,
 			&i.PipelineRunID,
 			&i.Kind,
+			&i.Title,
 			&i.Body,
 			&i.Metadata,
 			&i.CreatedAt,
@@ -1447,7 +1451,7 @@ func (q *Queries) ListHighlights(ctx context.Context, limit int64) ([]Highlight,
 }
 
 const listHighlightsByDocument = `-- name: ListHighlightsByDocument :many
-SELECT id, document_id, pipeline_run_id, kind, body, metadata, created_at, updated_at, rev, deleted_at FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev, deleted_at FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
 `
 
 func (q *Queries) ListHighlightsByDocument(ctx context.Context, documentID string) ([]Highlight, error) {
@@ -1464,6 +1468,7 @@ func (q *Queries) ListHighlightsByDocument(ctx context.Context, documentID strin
 			&i.DocumentID,
 			&i.PipelineRunID,
 			&i.Kind,
+			&i.Title,
 			&i.Body,
 			&i.Metadata,
 			&i.CreatedAt,
@@ -1485,7 +1490,7 @@ func (q *Queries) ListHighlightsByDocument(ctx context.Context, documentID strin
 }
 
 const listHighlightsByPipelineRun = `-- name: ListHighlightsByPipelineRun :many
-SELECT id, document_id, pipeline_run_id, kind, body, metadata, created_at, updated_at, rev, deleted_at FROM highlights WHERE pipeline_run_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev, deleted_at FROM highlights WHERE pipeline_run_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
 `
 
 func (q *Queries) ListHighlightsByPipelineRun(ctx context.Context, pipelineRunID string) ([]Highlight, error) {
@@ -1502,6 +1507,7 @@ func (q *Queries) ListHighlightsByPipelineRun(ctx context.Context, pipelineRunID
 			&i.DocumentID,
 			&i.PipelineRunID,
 			&i.Kind,
+			&i.Title,
 			&i.Body,
 			&i.Metadata,
 			&i.CreatedAt,

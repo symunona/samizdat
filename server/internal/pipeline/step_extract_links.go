@@ -176,6 +176,7 @@ func createLinkHighlight(ctx context.Context, q *store.Queries, run store.Pipeli
 		DocumentID:    run.DocumentID,
 		PipelineRunID: run.ID,
 		Kind:          "link",
+		Title:         "",
 		Body:          body,
 		Metadata:      string(meta),
 		CreatedAt:     now,

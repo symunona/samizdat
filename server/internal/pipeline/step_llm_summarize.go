@@ -87,6 +87,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 		DocumentID:    run.DocumentID,
 		PipelineRunID: run.ID,
 		Kind:          "summary",
+		Title:         doc.Title,
 		Body:          body,
 		Metadata:      string(meta),
 		CreatedAt:     now,

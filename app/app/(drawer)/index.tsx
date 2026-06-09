@@ -49,7 +49,9 @@ export default function FeedScreen() {
         <View style={[s.kindBadge, { backgroundColor: kindColor[item.kind] ?? '#888' }]}>
           <Text style={s.kindText}>{item.kind}</Text>
         </View>
-        <Text style={s.docTitle} numberOfLines={1}>{item.document_title || item.document_url}</Text>
+        <Text style={s.hlTitle} numberOfLines={1}>
+          {item.title || item.document_title || item.document_url}
+        </Text>
       </View>
       <MarkdownBody>{item.body}</MarkdownBody>
     </Pressable>
@@ -114,7 +116,7 @@ function buildStyles(t: Theme) {
     cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     kindBadge: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
     kindText: { color: '#fff', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-    docTitle: { flex: 1, color: t.colors.muted, fontSize: 12 },
+    hlTitle: { flex: 1, color: t.colors.text, fontSize: 13, fontWeight: '600' },
     placeholder: { color: t.colors.muted, fontSize: 16 },
     hint: { color: t.colors.muted, fontSize: 13, opacity: 0.6 },
     errorText: { color: '#ff6b6b', fontSize: 15 },

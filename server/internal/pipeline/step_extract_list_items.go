@@ -105,6 +105,7 @@ func initItems(ctx context.Context, q *store.Queries, run store.PipelineRun) (ex
 			DocumentID:    run.DocumentID,
 			PipelineRunID: run.ID,
 			Kind:          "item",
+			Title:         doc.Title,
 			Body:          body,
 			Metadata:      "{}",
 			CreatedAt:     now,

@@ -536,7 +536,8 @@ export type Highlight = {
   id: string
   document_id: string
   pipeline_run_id: string
-  kind: string    // 'summary' | 'link' | 'note'
+  kind: string    // 'summary' | 'item' | 'link' | 'note'
+  title: string
   body: string
   metadata: string  // JSON string
   created_at: string
