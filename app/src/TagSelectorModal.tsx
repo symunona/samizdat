@@ -264,7 +264,7 @@ function buildStyles(t: Theme) {
     },
     xBtnText: { color: t.colors.muted, fontSize: 14, fontWeight: '600' },
     loadingRow: { paddingVertical: t.spacing.xl, alignItems: 'center' },
-    list: { maxHeight: 260 },
+    list: { maxHeight: 400 },
     tagRow: {
       flexDirection: 'row',
       alignItems: 'center',
