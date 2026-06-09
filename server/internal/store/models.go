@@ -99,10 +99,20 @@ type Highlight struct {
 	Title         string  `json:"title"`
 	Body          string  `json:"body"`
 	Metadata      string  `json:"metadata"`
+	Pinned        int64   `json:"pinned"`
 	CreatedAt     string  `json:"created_at"`
 	UpdatedAt     string  `json:"updated_at"`
 	Rev           int64   `json:"rev"`
 	DeletedAt     *string `json:"deleted_at"`
+}
+
+type HighlightTag struct {
+	ID          string  `json:"id"`
+	HighlightID string  `json:"highlight_id"`
+	TagID       string  `json:"tag_id"`
+	CreatedAt   string  `json:"created_at"`
+	Rev         int64   `json:"rev"`
+	DeletedAt   *string `json:"deleted_at"`
 }
 
 type Job struct {

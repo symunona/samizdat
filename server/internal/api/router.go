@@ -116,6 +116,12 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("GET /api/v1/documents/{id}/pipeline-runs", bearerAuth(q, hlH.listRunsByDocument))
 	mux.HandleFunc("DELETE /api/v1/documents/{id}/highlights", bearerAuth(q, hlH.deleteAllByDocument))
 	mux.HandleFunc("DELETE /api/v1/highlights/{id}", bearerAuth(q, hlH.deleteOne))
+	mux.HandleFunc("PATCH /api/v1/highlights/{id}", bearerAuth(q, hlH.patchOne))
+
+	hlTagsH := &highlightTagsHandler{q: q}
+	mux.HandleFunc("GET /api/v1/highlights/{id}/tags", bearerAuth(q, hlTagsH.list))
+	mux.HandleFunc("POST /api/v1/highlights/{id}/tags", bearerAuth(q, hlTagsH.add))
+	mux.HandleFunc("DELETE /api/v1/highlights/{id}/tags/{tag_id}", bearerAuth(q, hlTagsH.remove))
 
 	if webDir != "" {
 		if _, err := os.Stat(webDir); err == nil {

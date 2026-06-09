@@ -108,6 +108,22 @@ func (q *Queries) DeleteDocumentTag(ctx context.Context, arg DeleteDocumentTagPa
 	return err
 }
 
+const deleteHighlightTag = `-- name: DeleteHighlightTag :exec
+UPDATE highlight_tags SET deleted_at = ?, rev = rev + 1
+WHERE highlight_id = ? AND tag_id = ? AND deleted_at IS NULL
+`
+
+type DeleteHighlightTagParams struct {
+	DeletedAt   *string `json:"deleted_at"`
+	HighlightID string  `json:"highlight_id"`
+	TagID       string  `json:"tag_id"`
+}
+
+func (q *Queries) DeleteHighlightTag(ctx context.Context, arg DeleteHighlightTagParams) error {
+	_, err := q.db.ExecContext(ctx, deleteHighlightTag, arg.DeletedAt, arg.HighlightID, arg.TagID)
+	return err
+}
+
 const deleteSubscription = `-- name: DeleteSubscription :exec
 UPDATE subscriptions SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
 `
@@ -727,7 +743,7 @@ const insertHighlight = `-- name: InsertHighlight :one
 
 INSERT INTO highlights (id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-RETURNING id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev, deleted_at
+RETURNING id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at
 `
 
 type InsertHighlightParams struct {
@@ -764,8 +780,41 @@ func (q *Queries) InsertHighlight(ctx context.Context, arg InsertHighlightParams
 		&i.Title,
 		&i.Body,
 		&i.Metadata,
+		&i.Pinned,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const insertHighlightTag = `-- name: InsertHighlightTag :one
+INSERT INTO highlight_tags (id, highlight_id, tag_id, created_at, rev)
+VALUES (?, ?, ?, ?, 0)
+RETURNING id, highlight_id, tag_id, created_at, rev, deleted_at
+`
+
+type InsertHighlightTagParams struct {
+	ID          string `json:"id"`
+	HighlightID string `json:"highlight_id"`
+	TagID       string `json:"tag_id"`
+	CreatedAt   string `json:"created_at"`
+}
+
+func (q *Queries) InsertHighlightTag(ctx context.Context, arg InsertHighlightTagParams) (HighlightTag, error) {
+	row := q.db.QueryRowContext(ctx, insertHighlightTag,
+		arg.ID,
+		arg.HighlightID,
+		arg.TagID,
+		arg.CreatedAt,
+	)
+	var i HighlightTag
+	err := row.Scan(
+		&i.ID,
+		&i.HighlightID,
+		&i.TagID,
+		&i.CreatedAt,
 		&i.Rev,
 		&i.DeletedAt,
 	)
@@ -1412,7 +1461,7 @@ func (q *Queries) ListFeeds(ctx context.Context) ([]Feed, error) {
 }
 
 const listHighlights = `-- name: ListHighlights :many
-SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev, deleted_at FROM highlights WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at FROM highlights WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?
 `
 
 func (q *Queries) ListHighlights(ctx context.Context, limit int64) ([]Highlight, error) {
@@ -1432,6 +1481,7 @@ func (q *Queries) ListHighlights(ctx context.Context, limit int64) ([]Highlight,
 			&i.Title,
 			&i.Body,
 			&i.Metadata,
+			&i.Pinned,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -1451,7 +1501,7 @@ func (q *Queries) ListHighlights(ctx context.Context, limit int64) ([]Highlight,
 }
 
 const listHighlightsByDocument = `-- name: ListHighlightsByDocument :many
-SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev, deleted_at FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
 `
 
 func (q *Queries) ListHighlightsByDocument(ctx context.Context, documentID string) ([]Highlight, error) {
@@ -1471,6 +1521,7 @@ func (q *Queries) ListHighlightsByDocument(ctx context.Context, documentID strin
 			&i.Title,
 			&i.Body,
 			&i.Metadata,
+			&i.Pinned,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -1490,7 +1541,7 @@ func (q *Queries) ListHighlightsByDocument(ctx context.Context, documentID strin
 }
 
 const listHighlightsByPipelineRun = `-- name: ListHighlightsByPipelineRun :many
-SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev, deleted_at FROM highlights WHERE pipeline_run_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at FROM highlights WHERE pipeline_run_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
 `
 
 func (q *Queries) ListHighlightsByPipelineRun(ctx context.Context, pipelineRunID string) ([]Highlight, error) {
@@ -1510,6 +1561,50 @@ func (q *Queries) ListHighlightsByPipelineRun(ctx context.Context, pipelineRunID
 			&i.Title,
 			&i.Body,
 			&i.Metadata,
+			&i.Pinned,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHighlightsByTag = `-- name: ListHighlightsByTag :many
+SELECT h.id, h.document_id, h.pipeline_run_id, h.kind, h.title, h.body, h.metadata, h.pinned, h.created_at, h.updated_at, h.rev, h.deleted_at FROM highlights h
+JOIN highlight_tags ht ON ht.highlight_id = h.id
+WHERE ht.tag_id = ? AND ht.deleted_at IS NULL AND h.deleted_at IS NULL
+ORDER BY h.created_at DESC
+`
+
+func (q *Queries) ListHighlightsByTag(ctx context.Context, tagID string) ([]Highlight, error) {
+	rows, err := q.db.QueryContext(ctx, listHighlightsByTag, tagID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Highlight
+	for rows.Next() {
+		var i Highlight
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.PipelineRunID,
+			&i.Kind,
+			&i.Title,
+			&i.Body,
+			&i.Metadata,
+			&i.Pinned,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -1891,6 +1986,44 @@ ORDER BY t.name ASC
 
 func (q *Queries) ListTagsByDocument(ctx context.Context, documentID string) ([]Tag, error) {
 	rows, err := q.db.QueryContext(ctx, listTagsByDocument, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Tag
+	for rows.Next() {
+		var i Tag
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Color,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTagsByHighlight = `-- name: ListTagsByHighlight :many
+SELECT t.id, t.name, t.color, t.created_at, t.updated_at, t.rev, t.deleted_at FROM tags t
+JOIN highlight_tags ht ON ht.tag_id = t.id
+WHERE ht.highlight_id = ? AND ht.deleted_at IS NULL AND t.deleted_at IS NULL
+ORDER BY t.name ASC
+`
+
+func (q *Queries) ListTagsByHighlight(ctx context.Context, highlightID string) ([]Tag, error) {
+	rows, err := q.db.QueryContext(ctx, listTagsByHighlight, highlightID)
 	if err != nil {
 		return nil, err
 	}
@@ -2313,6 +2446,21 @@ type UpdateHighlightBodyParams struct {
 
 func (q *Queries) UpdateHighlightBody(ctx context.Context, arg UpdateHighlightBodyParams) error {
 	_, err := q.db.ExecContext(ctx, updateHighlightBody, arg.Body, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const updateHighlightPinned = `-- name: UpdateHighlightPinned :exec
+UPDATE highlights SET pinned = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type UpdateHighlightPinnedParams struct {
+	Pinned    int64  `json:"pinned"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) UpdateHighlightPinned(ctx context.Context, arg UpdateHighlightPinnedParams) error {
+	_, err := q.db.ExecContext(ctx, updateHighlightPinned, arg.Pinned, arg.UpdatedAt, arg.ID)
 	return err
 }
 

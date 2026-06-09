@@ -385,3 +385,27 @@ UPDATE highlights SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
 -- name: SoftDeleteHighlightsByPipelineRun :exec
 UPDATE highlights SET deleted_at = ?, updated_at = ?, rev = rev + 1
 WHERE pipeline_run_id = ? AND deleted_at IS NULL;
+
+-- name: UpdateHighlightPinned :exec
+UPDATE highlights SET pinned = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: InsertHighlightTag :one
+INSERT INTO highlight_tags (id, highlight_id, tag_id, created_at, rev)
+VALUES (?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: DeleteHighlightTag :exec
+UPDATE highlight_tags SET deleted_at = ?, rev = rev + 1
+WHERE highlight_id = ? AND tag_id = ? AND deleted_at IS NULL;
+
+-- name: ListTagsByHighlight :many
+SELECT t.* FROM tags t
+JOIN highlight_tags ht ON ht.tag_id = t.id
+WHERE ht.highlight_id = ? AND ht.deleted_at IS NULL AND t.deleted_at IS NULL
+ORDER BY t.name ASC;
+
+-- name: ListHighlightsByTag :many
+SELECT h.* FROM highlights h
+JOIN highlight_tags ht ON ht.highlight_id = h.id
+WHERE ht.tag_id = ? AND ht.deleted_at IS NULL AND h.deleted_at IS NULL
+ORDER BY h.created_at DESC;

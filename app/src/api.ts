@@ -540,6 +540,7 @@ export type Highlight = {
   title: string
   body: string
   metadata: string  // JSON string
+  pinned: number    // 0 | 1
   created_at: string
   updated_at: string
 }
@@ -578,6 +579,7 @@ export async function runPipelineOnDocument(
 export type HighlightWithDoc = Highlight & {
   document_title: string
   document_url: string
+  linked_documents?: Record<string, string>
 }
 
 export async function fetchHighlights(serverUrl: string, token: string, limit = 100): Promise<HighlightWithDoc[]> {
@@ -615,4 +617,37 @@ export async function deleteDocumentHighlights(serverUrl: string, token: string,
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) throw new ApiError(res.status, `deleteDocumentHighlights failed: HTTP ${res.status}`)
+}
+
+export async function pinHighlight(serverUrl: string, token: string, id: string, pinned: boolean): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/highlights/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned: pinned ? 1 : 0 }),
+  })
+  if (!res.ok) throw new ApiError(res.status, `pinHighlight failed: HTTP ${res.status}`)
+}
+
+export async function fetchHighlightTags(serverUrl: string, token: string, hlId: string): Promise<Tag[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/highlights/${encodeURIComponent(hlId)}/tags`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Tag[]>(res, '/api/v1/highlights/:id/tags')
+}
+
+export async function addHighlightTag(serverUrl: string, token: string, hlId: string, tagId: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/highlights/${encodeURIComponent(hlId)}/tags`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag_id: tagId }),
+  })
+  if (!res.ok) throw new ApiError(res.status, `addHighlightTag failed: HTTP ${res.status}`)
+}
+
+export async function removeHighlightTag(serverUrl: string, token: string, hlId: string, tagId: string): Promise<void> {
+  const res = await fetch(
+    `${base(serverUrl)}/api/v1/highlights/${encodeURIComponent(hlId)}/tags/${encodeURIComponent(tagId)}`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+  )
+  if (!res.ok) throw new ApiError(res.status, `removeHighlightTag failed: HTTP ${res.status}`)
 }

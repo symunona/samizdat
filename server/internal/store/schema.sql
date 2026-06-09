@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS highlights (
     title           TEXT    NOT NULL DEFAULT '',
     body            TEXT    NOT NULL DEFAULT '',
     metadata        TEXT    NOT NULL DEFAULT '{}',
+    pinned          INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT    NOT NULL,
     updated_at      TEXT    NOT NULL,
     rev             INTEGER NOT NULL DEFAULT 0,
@@ -219,3 +220,13 @@ CREATE TABLE IF NOT EXISTS highlights (
 
 CREATE INDEX IF NOT EXISTS highlights_document_id ON highlights(document_id);
 CREATE INDEX IF NOT EXISTS highlights_pipeline_run_id ON highlights(pipeline_run_id);
+
+CREATE TABLE IF NOT EXISTS highlight_tags (
+  id           TEXT PRIMARY KEY,
+  highlight_id TEXT NOT NULL REFERENCES highlights(id),
+  tag_id       TEXT NOT NULL REFERENCES tags(id),
+  created_at   TEXT NOT NULL,
+  rev          INTEGER NOT NULL DEFAULT 0,
+  deleted_at   TEXT,
+  UNIQUE(highlight_id, tag_id)
+);

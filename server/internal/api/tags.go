@@ -249,3 +249,72 @@ func (h *annotationTagsHandler) remove(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// Highlight tag handlers
+
+type highlightTagsHandler struct{ q *store.Queries }
+
+func (h *highlightTagsHandler) list(w http.ResponseWriter, r *http.Request) {
+	hlID := r.PathValue("id")
+	if hlID == "" {
+		writeErr(w, http.StatusBadRequest, "missing id")
+		return
+	}
+	tags, err := h.q.ListTagsByHighlight(r.Context(), hlID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if tags == nil {
+		tags = []store.Tag{}
+	}
+	writeJSON(w, http.StatusOK, tags)
+}
+
+func (h *highlightTagsHandler) add(w http.ResponseWriter, r *http.Request) {
+	hlID := r.PathValue("id")
+	if hlID == "" {
+		writeErr(w, http.StatusBadRequest, "missing id")
+		return
+	}
+	var inp tagObjectInput
+	if err := json.NewDecoder(r.Body).Decode(&inp); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if inp.TagID == "" {
+		writeErr(w, http.StatusBadRequest, "tag_id is required")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	ht, err := h.q.InsertHighlightTag(r.Context(), store.InsertHighlightTagParams{
+		ID:          uuid.New().String(),
+		HighlightID: hlID,
+		TagID:       inp.TagID,
+		CreatedAt:   now,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, ht)
+}
+
+func (h *highlightTagsHandler) remove(w http.ResponseWriter, r *http.Request) {
+	hlID := r.PathValue("id")
+	tagID := r.PathValue("tag_id")
+	if hlID == "" || tagID == "" {
+		writeErr(w, http.StatusBadRequest, "missing id or tag_id")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := h.q.DeleteHighlightTag(r.Context(), store.DeleteHighlightTagParams{
+		DeletedAt:   &now,
+		HighlightID: hlID,
+		TagID:       tagID,
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -18,10 +18,13 @@ import {
   fetchTags,
   fetchDocumentTags,
   fetchAnnotationTags,
+  fetchHighlightTags,
   addDocumentTag,
   removeDocumentTag,
   addAnnotationTag,
   removeAnnotationTag,
+  addHighlightTag,
+  removeHighlightTag,
   createTag,
 } from './api'
 import type { Tag } from './api'
@@ -29,7 +32,7 @@ import type { Tag } from './api'
 type Props = {
   visible: boolean
   objectId: string
-  objectType: 'document' | 'annotation'
+  objectType: 'document' | 'annotation' | 'highlight'
   onClose: () => void
 }
 
@@ -70,7 +73,9 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
         fetchTags(activeUrl, token),
         objectType === 'document'
           ? fetchDocumentTags(activeUrl, token, objectId)
-          : fetchAnnotationTags(activeUrl, token, objectId),
+          : objectType === 'annotation'
+            ? fetchAnnotationTags(activeUrl, token, objectId)
+            : fetchHighlightTags(activeUrl, token, objectId),
       ])
       setAllTags(all)
       setAppliedIds(new Set(applied.map(t => t.id)))
@@ -97,15 +102,19 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
       if (applied) {
         if (objectType === 'document') {
           await removeDocumentTag(activeUrl, token, objectId, tag.id)
-        } else {
+        } else if (objectType === 'annotation') {
           await removeAnnotationTag(activeUrl, token, objectId, tag.id)
+        } else {
+          await removeHighlightTag(activeUrl, token, objectId, tag.id)
         }
         setAppliedIds(prev => { const s = new Set(prev); s.delete(tag.id); return s })
       } else {
         if (objectType === 'document') {
           await addDocumentTag(activeUrl, token, objectId, tag.id)
-        } else {
+        } else if (objectType === 'annotation') {
           await addAnnotationTag(activeUrl, token, objectId, tag.id)
+        } else {
+          await addHighlightTag(activeUrl, token, objectId, tag.id)
         }
         setAppliedIds(prev => new Set(prev).add(tag.id))
       }
@@ -123,11 +132,12 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
       const tag = await createTag(activeUrl, token, { name: newTagName.trim(), color: newTagColor })
       setAllTags(prev => [tag, ...prev])
       setNewTagName('')
-      // Auto-apply the new tag
       if (objectType === 'document') {
         await addDocumentTag(activeUrl, token, objectId, tag.id)
-      } else {
+      } else if (objectType === 'annotation') {
         await addAnnotationTag(activeUrl, token, objectId, tag.id)
+      } else {
+        await addHighlightTag(activeUrl, token, objectId, tag.id)
       }
       setAppliedIds(prev => new Set(prev).add(tag.id))
     } catch (e) {
