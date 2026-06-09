@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/jpeg"
 	_ "image/png"
+	_ "golang.org/x/image/webp"
 	"log"
 	"net/http"
 	"net/url"
@@ -17,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/symunona/samizdat/server/internal/store"
 	"golang.org/x/image/draw"
 )
@@ -59,9 +59,9 @@ func shouldDownload(rawURL, altText string) bool {
 		}
 	}
 
-	// Skip by alt text.
+	// Skip decorative alt labels; empty alt is fine (common in real content images).
 	alt := strings.ToLower(strings.TrimSpace(altText))
-	if alt == "" || alt == "logo" || alt == "icon" {
+	if alt == "logo" || alt == "icon" {
 		return false
 	}
 
@@ -132,7 +132,7 @@ func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cac
 			continue // already have it
 		}
 
-		assetID := uuid.NewString()
+		assetID := IDFromURL(c.url)
 		localPath := filepath.Join("media", assetID+".jpg")
 		fullPath := filepath.Join(cacheDir, localPath)
 
@@ -145,7 +145,7 @@ func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cac
 		now := time.Now().UTC().Format(time.RFC3339)
 		w64 := int64(width)
 		h64 := int64(height)
-		_, err = q.InsertMediaAsset(ctx, store.InsertMediaAssetParams{
+		_, err = q.UpsertMediaAsset(ctx, store.UpsertMediaAssetParams{
 			ID:          assetID,
 			DocumentID:  doc.ID,
 			OriginalUrl: c.url,

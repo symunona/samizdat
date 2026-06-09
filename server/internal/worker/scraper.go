@@ -3,12 +3,9 @@ package worker
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -45,7 +42,7 @@ func canonicalize(raw string) (string, error) {
 	return u.String(), nil
 }
 
-func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job) error {
+func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool) error {
 	var p scrapePayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 		return fmt.Errorf("bad payload: %w", err)
@@ -56,41 +53,17 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job) error
 		return err
 	}
 
-	_, err = q.GetDocumentByCanonicalURL(ctx, canonical)
-	if err == nil {
-		return nil // already scraped
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("db lookup: %w", err)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, canonical, nil)
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("User-Agent", "Samizdat/1 (+https://github.com/symunona/samizdat)")
-
-	resp, err := client.Do(req)
+	htmlStr, err := browser.FetchHTML(canonical)
 	if err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("http %d", resp.StatusCode)
-	}
-
-	// Buffer body so we can parse it twice: once for trafilatura, once for
-	// lead list extraction (trafilatura drops link-free summary bullets).
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read body: %w", err)
-	}
+	bodyBytes := []byte(htmlStr)
 
 	result, err := trafilatura.Extract(bytes.NewReader(bodyBytes), trafilatura.Options{
 		OriginalURL:     mustParseURL(canonical),
 		ExcludeComments: true,
 		EnableFallback:  true,
+		IncludeImages:   true,
 	})
 	if err != nil {
 		return fmt.Errorf("trafilatura: %w", err)
@@ -119,6 +92,11 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job) error
 		md = leadLists + "\n\n" + md
 	}
 
+	// Append content images from <figure> tags that trafilatura skips.
+	if figureImgs := extractFigureImages(bodyBytes, md); figureImgs != "" {
+		md = md + "\n\n" + figureImgs
+	}
+
 	title := strings.TrimSpace(result.Metadata.Title)
 
 	excerpt := strings.TrimSpace(result.Metadata.Description)
@@ -129,9 +107,9 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job) error
 	author := strings.TrimSpace(result.Metadata.Author)
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	docID := uuid.NewString()
+	docID := IDFromURL(canonical)
 
-	doc, err := q.InsertDocument(ctx, store.InsertDocumentParams{
+	doc, err := q.UpsertDocument(ctx, store.UpsertDocumentParams{
 		ID:           docID,
 		CanonicalUrl: canonical,
 		Title:        title,
@@ -281,4 +259,74 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// extractFigureImages scans raw HTML for <figure> elements containing <img src="...">
+// and returns them as markdown image lines not already present in extractedMD.
+// This recovers content images that trafilatura skips when they're wrapped in figures.
+func extractFigureImages(rawHTML []byte, extractedMD string) string {
+	root, err := html.Parse(bytes.NewReader(rawHTML))
+	if err != nil {
+		return ""
+	}
+
+	seen := map[string]struct{}{}
+	var srcs []string
+
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			tag := n.Data
+			if tag == "nav" || tag == "header" || tag == "footer" ||
+				tag == "aside" || tag == "script" || tag == "style" || tag == "noscript" {
+				return
+			}
+			if tag == "figure" {
+				// collect first meaningful <img> inside this figure
+				var figWalk func(*html.Node)
+				figWalk = func(fn *html.Node) {
+					if fn.Type == html.ElementNode && fn.Data == "img" {
+						src := attrVal(fn, "src")
+						if src == "" {
+							src = attrVal(fn, "data-src")
+						}
+						if src != "" && strings.HasPrefix(src, "http") && shouldDownload(src, "") {
+							if _, dup := seen[src]; !dup && !strings.Contains(extractedMD, src) {
+								seen[src] = struct{}{}
+								srcs = append(srcs, src)
+							}
+						}
+						return
+					}
+					for c := fn.FirstChild; c != nil; c = c.NextSibling {
+						figWalk(c)
+					}
+				}
+				figWalk(n)
+				return // don't recurse into figure again
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(root)
+
+	if len(srcs) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, src := range srcs {
+		fmt.Fprintf(&sb, "![](%s)\n", src)
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func attrVal(n *html.Node, key string) string {
+	for _, a := range n.Attr {
+		if a.Key == key {
+			return a.Val
+		}
+	}
+	return ""
 }

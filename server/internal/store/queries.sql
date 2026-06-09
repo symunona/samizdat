@@ -66,9 +66,18 @@ UPDATE jobs SET status = ?, attempts = ?, run_after = ?, updated_at = ? WHERE id
 -- name: GetDocumentByCanonicalURL :one
 SELECT * FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1;
 
--- name: InsertDocument :one
+-- name: UpsertDocument :one
 INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(canonical_url) DO UPDATE SET
+  title          = excluded.title,
+  markdown       = excluded.markdown,
+  fetched_at     = excluded.fetched_at,
+  excerpt        = excluded.excerpt,
+  hero_image_url = excluded.hero_image_url,
+  author         = excluded.author,
+  updated_at     = excluded.updated_at,
+  rev            = documents.rev + 1
 RETURNING *;
 
 -- name: UpdateDocumentExcerptHero :exec
@@ -93,9 +102,17 @@ RETURNING *;
 SELECT * FROM read_states
 WHERE device_id = ? AND document_id = ? AND deleted_at IS NULL LIMIT 1;
 
--- name: InsertMediaAsset :one
+-- name: UpsertMediaAsset :one
 INSERT INTO media_assets (id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(original_url) DO UPDATE SET
+  document_id = excluded.document_id,
+  local_path  = excluded.local_path,
+  kind        = excluded.kind,
+  width       = excluded.width,
+  height      = excluded.height,
+  updated_at  = excluded.updated_at,
+  rev         = media_assets.rev + 1
 RETURNING *;
 
 -- name: GetMediaAssetByOriginalURL :one

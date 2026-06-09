@@ -276,56 +276,6 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 	return i, err
 }
 
-const insertDocument = `-- name: InsertDocument :one
-INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-RETURNING id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev, deleted_at
-`
-
-type InsertDocumentParams struct {
-	ID           string `json:"id"`
-	CanonicalUrl string `json:"canonical_url"`
-	Title        string `json:"title"`
-	Markdown     string `json:"markdown"`
-	FetchedAt    string `json:"fetched_at"`
-	Excerpt      string `json:"excerpt"`
-	HeroImageUrl string `json:"hero_image_url"`
-	Author       string `json:"author"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-}
-
-func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) (Document, error) {
-	row := q.db.QueryRowContext(ctx, insertDocument,
-		arg.ID,
-		arg.CanonicalUrl,
-		arg.Title,
-		arg.Markdown,
-		arg.FetchedAt,
-		arg.Excerpt,
-		arg.HeroImageUrl,
-		arg.Author,
-		arg.CreatedAt,
-		arg.UpdatedAt,
-	)
-	var i Document
-	err := row.Scan(
-		&i.ID,
-		&i.CanonicalUrl,
-		&i.Title,
-		&i.Markdown,
-		&i.FetchedAt,
-		&i.Excerpt,
-		&i.HeroImageUrl,
-		&i.Author,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Rev,
-		&i.DeletedAt,
-	)
-	return i, err
-}
-
 const insertJob = `-- name: InsertJob :one
 INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev)
 VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, 0)
@@ -358,53 +308,6 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, erro
 		&i.Status,
 		&i.Attempts,
 		&i.RunAfter,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Rev,
-		&i.DeletedAt,
-	)
-	return i, err
-}
-
-const insertMediaAsset = `-- name: InsertMediaAsset :one
-INSERT INTO media_assets (id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-RETURNING id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev, deleted_at
-`
-
-type InsertMediaAssetParams struct {
-	ID          string `json:"id"`
-	DocumentID  string `json:"document_id"`
-	OriginalUrl string `json:"original_url"`
-	LocalPath   string `json:"local_path"`
-	Kind        string `json:"kind"`
-	Width       *int64 `json:"width"`
-	Height      *int64 `json:"height"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-}
-
-func (q *Queries) InsertMediaAsset(ctx context.Context, arg InsertMediaAssetParams) (MediaAsset, error) {
-	row := q.db.QueryRowContext(ctx, insertMediaAsset,
-		arg.ID,
-		arg.DocumentID,
-		arg.OriginalUrl,
-		arg.LocalPath,
-		arg.Kind,
-		arg.Width,
-		arg.Height,
-		arg.CreatedAt,
-		arg.UpdatedAt,
-	)
-	var i MediaAsset
-	err := row.Scan(
-		&i.ID,
-		&i.DocumentID,
-		&i.OriginalUrl,
-		&i.LocalPath,
-		&i.Kind,
-		&i.Width,
-		&i.Height,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -661,6 +564,120 @@ func (q *Queries) UpdateDocumentExcerptHero(ctx context.Context, arg UpdateDocum
 		arg.ID,
 	)
 	return err
+}
+
+const upsertDocument = `-- name: UpsertDocument :one
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(canonical_url) DO UPDATE SET
+  title          = excluded.title,
+  markdown       = excluded.markdown,
+  fetched_at     = excluded.fetched_at,
+  excerpt        = excluded.excerpt,
+  hero_image_url = excluded.hero_image_url,
+  author         = excluded.author,
+  updated_at     = excluded.updated_at,
+  rev            = documents.rev + 1
+RETURNING id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev, deleted_at
+`
+
+type UpsertDocumentParams struct {
+	ID           string `json:"id"`
+	CanonicalUrl string `json:"canonical_url"`
+	Title        string `json:"title"`
+	Markdown     string `json:"markdown"`
+	FetchedAt    string `json:"fetched_at"`
+	Excerpt      string `json:"excerpt"`
+	HeroImageUrl string `json:"hero_image_url"`
+	Author       string `json:"author"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) (Document, error) {
+	row := q.db.QueryRowContext(ctx, upsertDocument,
+		arg.ID,
+		arg.CanonicalUrl,
+		arg.Title,
+		arg.Markdown,
+		arg.FetchedAt,
+		arg.Excerpt,
+		arg.HeroImageUrl,
+		arg.Author,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.CanonicalUrl,
+		&i.Title,
+		&i.Markdown,
+		&i.FetchedAt,
+		&i.Excerpt,
+		&i.HeroImageUrl,
+		&i.Author,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const upsertMediaAsset = `-- name: UpsertMediaAsset :one
+INSERT INTO media_assets (id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(original_url) DO UPDATE SET
+  document_id = excluded.document_id,
+  local_path  = excluded.local_path,
+  kind        = excluded.kind,
+  width       = excluded.width,
+  height      = excluded.height,
+  updated_at  = excluded.updated_at,
+  rev         = media_assets.rev + 1
+RETURNING id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev, deleted_at
+`
+
+type UpsertMediaAssetParams struct {
+	ID          string `json:"id"`
+	DocumentID  string `json:"document_id"`
+	OriginalUrl string `json:"original_url"`
+	LocalPath   string `json:"local_path"`
+	Kind        string `json:"kind"`
+	Width       *int64 `json:"width"`
+	Height      *int64 `json:"height"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+func (q *Queries) UpsertMediaAsset(ctx context.Context, arg UpsertMediaAssetParams) (MediaAsset, error) {
+	row := q.db.QueryRowContext(ctx, upsertMediaAsset,
+		arg.ID,
+		arg.DocumentID,
+		arg.OriginalUrl,
+		arg.LocalPath,
+		arg.Kind,
+		arg.Width,
+		arg.Height,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i MediaAsset
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.OriginalUrl,
+		&i.LocalPath,
+		&i.Kind,
+		&i.Width,
+		&i.Height,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
 const upsertReadState = `-- name: UpsertReadState :one
