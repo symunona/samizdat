@@ -11,16 +11,23 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/symunona/samizdat/server/internal/config"
+	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
 	"github.com/symunona/samizdat/server/internal/worker"
 )
 
 // New returns the root HTTP handler. webDir may be empty (API-only mode).
 // serverURLs is the ordered list of reachable base URLs for this server.
-func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, cacheDir string, extractorDir string) http.Handler {
+func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, cacheDir string, extractorDir string, llmCfg ...config.LLMSection) http.Handler {
 	q := store.New(db)
 
-	w := worker.New(q, cacheDir, extractorDir)
+	var llmClient llm.Client
+	if len(llmCfg) > 0 {
+		llmClient = llm.New(llmCfg[0])
+	}
+
+	w := worker.New(q, cacheDir, extractorDir, llmClient)
 	w.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -39,6 +46,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	jobsH := &jobsHandler{q: q}
 	mux.HandleFunc("POST /api/v1/jobs", bearerAuth(q, jobsH.create))
 	mux.HandleFunc("GET /api/v1/jobs", bearerAuth(q, jobsH.list))
+	mux.HandleFunc("GET /api/v1/jobs/{id}", bearerAuth(q, jobsH.get))
 	mux.HandleFunc("DELETE /api/v1/jobs", bearerAuth(q, jobsH.clearCompleted))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", bearerAuth(q, jobsH.retry))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", bearerAuth(q, jobsH.softDelete))
@@ -56,6 +64,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 
 	docsH := &documentsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents", bearerAuth(q, docsH.list))
+	mux.HandleFunc("GET /api/v1/documents/by-url", bearerAuth(q, docsH.lookupByURL))
 	mux.HandleFunc("GET /api/v1/documents/{id}", bearerAuth(q, docsH.get))
 	mux.HandleFunc("DELETE /api/v1/documents/{id}", bearerAuth(q, docsH.delete))
 	mux.HandleFunc("GET /api/v1/documents/{id}/media", bearerAuth(q, docsH.listMedia))
@@ -92,6 +101,21 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	rsH := &readStatesHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents/{id}/progress", bearerAuth(q, rsH.get))
 	mux.HandleFunc("PUT /api/v1/documents/{id}/progress", bearerAuth(q, rsH.put))
+
+	plH := &pipelinesHandler{q: q}
+	mux.HandleFunc("GET /api/v1/pipelines", bearerAuth(q, plH.list))
+	mux.HandleFunc("POST /api/v1/pipelines", bearerAuth(q, plH.create))
+	mux.HandleFunc("GET /api/v1/pipelines/{id}", bearerAuth(q, plH.get))
+	mux.HandleFunc("PUT /api/v1/pipelines/{id}", bearerAuth(q, plH.update))
+	mux.HandleFunc("DELETE /api/v1/pipelines/{id}", bearerAuth(q, plH.delete))
+	mux.HandleFunc("POST /api/v1/pipelines/{id}/run", bearerAuth(q, plH.run))
+
+	hlH := &highlightsHandler{q: q}
+	mux.HandleFunc("GET /api/v1/highlights", bearerAuth(q, hlH.listAll))
+	mux.HandleFunc("GET /api/v1/documents/{id}/highlights", bearerAuth(q, hlH.listByDocument))
+	mux.HandleFunc("GET /api/v1/documents/{id}/pipeline-runs", bearerAuth(q, hlH.listRunsByDocument))
+	mux.HandleFunc("DELETE /api/v1/documents/{id}/highlights", bearerAuth(q, hlH.deleteAllByDocument))
+	mux.HandleFunc("DELETE /api/v1/highlights/{id}", bearerAuth(q, hlH.deleteOne))
 
 	if webDir != "" {
 		if _, err := os.Stat(webDir); err == nil {

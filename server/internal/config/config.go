@@ -15,11 +15,19 @@ type Config struct {
 	CacheDir      string        `toml:"cache_dir"`
 	ExtractorsDir string        `toml:"extractors_dir"`
 	Server        ServerSection `toml:"server"`
+	LLM           LLMSection    `toml:"llm"`
 }
 
 type ServerSection struct {
 	Port   int    `toml:"port"`
 	WebDir string `toml:"web_dir"`
+}
+
+type LLMSection struct {
+	Provider     string `toml:"provider"`      // "anthropic" | "openai_compat"
+	APIKey       string `toml:"api_key"`
+	BaseURL      string `toml:"base_url"`      // for openai_compat: e.g. "http://localhost:11434/v1"
+	DefaultModel string `toml:"default_model"` // fallback when step config omits model
 }
 
 func DefaultPath() (string, error) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
 	"github.com/google/uuid"
 	trafilatura "github.com/markusmobius/go-trafilatura"
+	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
 	"golang.org/x/net/html"
 )
@@ -142,8 +144,57 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		return "", fmt.Errorf("enqueue fetch_assets: %w", err)
 	}
 
+	// Trigger matching pipelines.
+	triggerPipelines(ctx, q, doc, now)
+
 	jobResult, _ := json.Marshal(map[string]string{"document_id": doc.ID, "title": title})
 	return string(jobResult), nil
+}
+
+// triggerPipelines checks all enabled on_new_document pipelines and enqueues runs for matches.
+func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document, now string) {
+	pipelines, err := q.ListEnabledPipelines(ctx)
+	if err != nil {
+		log.Printf("pipeline trigger: list pipelines: %v", err)
+		return
+	}
+	if len(pipelines) == 0 {
+		return
+	}
+
+	// Resolve feed URL if document came from a feed.
+	feedURL := ""
+	if doc.SourceFeedID != nil {
+		if feed, err := q.GetFeed(ctx, *doc.SourceFeedID); err == nil {
+			feedURL = feed.Url
+		}
+	}
+
+	for _, pl := range pipelines {
+		if pl.Trigger != "on_new_document" {
+			continue
+		}
+		if !pipelineMatchesDocument(pl, doc, feedURL) {
+			continue
+		}
+		payload, _ := json.Marshal(map[string]string{
+			"pipeline_id": pl.ID,
+			"document_id": doc.ID,
+		})
+		_, err := q.InsertJob(ctx, store.InsertJobParams{
+			ID:        uuid.NewString(),
+			Kind:      "run_pipeline",
+			Payload:   string(payload),
+			RunAfter:  now,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			log.Printf("pipeline trigger: enqueue run for pipeline %s: %v", pl.ID, err)
+		} else {
+			log.Printf("pipeline trigger: enqueued run_pipeline for pipeline %s (%s)", pl.ID, pl.Name)
+		}
+	}
 }
 
 func mustParseURL(raw string) *url.URL {
@@ -334,4 +385,8 @@ func attrVal(n *html.Node, key string) string {
 		}
 	}
 	return ""
+}
+
+func pipelineMatchesDocument(pl store.Pipeline, doc store.Document, feedURL string) bool {
+	return pipeline.MatchesDocument(pl, doc, feedURL)
 }

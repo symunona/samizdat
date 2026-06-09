@@ -50,6 +50,21 @@ func (h *jobsHandler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": job.ID})
 }
 
+// GET /api/v1/jobs/:id — get single job by ID.
+func (h *jobsHandler) get(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	job, err := h.q.GetJob(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
+}
+
 // GET /api/v1/jobs — list with optional ?status= and ?kind= query params.
 func (h *jobsHandler) list(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")

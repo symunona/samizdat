@@ -280,6 +280,25 @@ export async function fetchJobs(
   return json<Job[]>(res, '/api/v1/jobs')
 }
 
+export async function fetchJob(serverUrl: string, token: string, jobId: string): Promise<Job> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs/${encodeURIComponent(jobId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Job>(res, '/api/v1/jobs/:id')
+}
+
+export async function lookupDocumentByURL(serverUrl: string, token: string, url: string): Promise<Document | null> {
+  try {
+    const res = await fetch(`${base(serverUrl)}/api/v1/documents/by-url?url=${encodeURIComponent(url)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (res.status === 404) return null
+    return json<Document>(res, '/api/v1/documents/by-url')
+  } catch {
+    return null
+  }
+}
+
 export async function retryJob(serverUrl: string, token: string, id: string): Promise<void> {
   const res = await fetch(`${base(serverUrl)}/api/v1/jobs/${encodeURIComponent(id)}/retry`, {
     method: 'POST',
@@ -487,4 +506,112 @@ export async function removeAnnotationTag(
     { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
   )
   if (!res.ok) throw new ApiError(res.status, `removeAnnotationTag failed: HTTP ${res.status}`)
+}
+
+// ── Pipelines ────────────────────────────────────────────────────────────────
+
+export type Pipeline = {
+  id: string
+  name: string
+  enabled: number  // 1 = enabled, 0 = disabled
+  trigger: string
+  filter: string   // JSON string
+  steps: string    // JSON string
+  created_at: string
+  updated_at: string
+}
+
+export type PipelineRun = {
+  id: string
+  pipeline_id: string
+  document_id: string
+  status: 'queued' | 'running' | 'done' | 'failed'
+  step_index: number
+  state: string
+  created_at: string
+  updated_at: string
+}
+
+export type Highlight = {
+  id: string
+  document_id: string
+  pipeline_run_id: string
+  kind: string    // 'summary' | 'link' | 'note'
+  body: string
+  metadata: string  // JSON string
+  created_at: string
+  updated_at: string
+}
+
+export async function fetchPipelines(serverUrl: string, token: string): Promise<Pipeline[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/pipelines`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Pipeline[]>(res, '/api/v1/pipelines')
+}
+
+export async function createPipeline(
+  serverUrl: string, token: string,
+  data: { name: string; filter: string; steps: string; trigger?: string },
+): Promise<Pipeline> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/pipelines`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return json<Pipeline>(res, '/api/v1/pipelines POST')
+}
+
+export async function runPipelineOnDocument(
+  serverUrl: string, token: string,
+  pipelineId: string, documentId: string,
+): Promise<{ job_id: string }> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/pipelines/${encodeURIComponent(pipelineId)}/run`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ document_id: documentId }),
+  })
+  return json<{ job_id: string }>(res, `/api/v1/pipelines/${pipelineId}/run`)
+}
+
+export type HighlightWithDoc = Highlight & {
+  document_title: string
+  document_url: string
+}
+
+export async function fetchHighlights(serverUrl: string, token: string, limit = 100): Promise<HighlightWithDoc[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/highlights?limit=${limit}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<HighlightWithDoc[]>(res, '/api/v1/highlights')
+}
+
+export async function fetchDocumentHighlights(serverUrl: string, token: string, docId: string): Promise<Highlight[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/highlights`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Highlight[]>(res, '/api/v1/documents/:id/highlights')
+}
+
+export async function fetchDocumentPipelineRuns(serverUrl: string, token: string, docId: string): Promise<PipelineRun[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/pipeline-runs`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<PipelineRun[]>(res, '/api/v1/documents/:id/pipeline-runs')
+}
+
+export async function deleteHighlight(serverUrl: string, token: string, id: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/highlights/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `deleteHighlight failed: HTTP ${res.status}`)
+}
+
+export async function deleteDocumentHighlights(serverUrl: string, token: string, docId: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/highlights`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `deleteDocumentHighlights failed: HTTP ${res.status}`)
 }

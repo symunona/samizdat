@@ -85,6 +85,24 @@ func (h *documentsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *documentsHandler) lookupByURL(w http.ResponseWriter, r *http.Request) {
+	rawURL := r.URL.Query().Get("url")
+	if rawURL == "" {
+		writeErr(w, http.StatusBadRequest, "url required")
+		return
+	}
+	doc, err := h.q.GetDocumentByCanonicalURL(r.Context(), rawURL)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
 func (h *documentsHandler) listMedia(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {

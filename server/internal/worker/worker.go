@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/symunona/samizdat/server/internal/extractor"
+	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -26,9 +27,10 @@ type Worker struct {
 	cacheDir     string
 	browser      *BrowserPool
 	extractorReg extractor.Registry
+	llmClient    llm.Client
 }
 
-func New(q *store.Queries, cacheDir string, extractorDir string) *Worker {
+func New(q *store.Queries, cacheDir string, extractorDir string, llmClient llm.Client) *Worker {
 	browser, err := NewBrowserPool()
 	if err != nil {
 		log.Fatalf("worker: browser init failed: %v", err)
@@ -39,7 +41,7 @@ func New(q *store.Queries, cacheDir string, extractorDir string) *Worker {
 		reg = make(extractor.Registry)
 	}
 	log.Printf("worker: loaded %d extractor configs from %s", len(reg), extractorDir)
-	return &Worker{q: q, cacheDir: cacheDir, browser: browser, extractorReg: reg}
+	return &Worker{q: q, cacheDir: cacheDir, browser: browser, extractorReg: reg, llmClient: llmClient}
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -148,6 +150,10 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 		result, err = handleFetchAssets(ctx, w.q, job, w.cacheDir)
 	case "poll_feed":
 		result, err = handlePollFeed(ctx, w.q, job, w.browser, w.extractorReg)
+	case "run_pipeline":
+		result, err = handleRunPipeline(ctx, w.q, job, w.llmClient)
+	case "run_pipeline_step":
+		result, err = handleRunPipelineStep(ctx, w.q, job, w.llmClient)
 	default:
 		err = fmt.Errorf("unknown job kind: %s", job.Kind)
 	}

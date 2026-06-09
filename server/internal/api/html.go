@@ -281,6 +281,12 @@ document.addEventListener('click', function(e) {
   var mark = e.target.closest && e.target.closest('mark[data-ann-id]');
   if (mark) {
     sendMsg({ type: 'tap_annotation', id: mark.dataset.annId });
+    return;
+  }
+  var a = e.target.closest && e.target.closest('a[href]');
+  if (a && a.href && (a.href.startsWith('http://') || a.href.startsWith('https://'))) {
+    e.preventDefault();
+    sendMsg({ type: 'link_press', href: a.href });
   }
 });
 

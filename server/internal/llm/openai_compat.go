@@ -1,0 +1,68 @@
+package llm
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+)
+
+type openAICompatClient struct {
+	baseURL string
+	apiKey  string
+}
+
+func (c *openAICompatClient) Complete(ctx context.Context, model string, messages []Message) (string, error) {
+	type oaiMsg struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	type reqBody struct {
+		Model    string   `json:"model"`
+		Messages []oaiMsg `json:"messages"`
+	}
+
+	msgs := make([]oaiMsg, len(messages))
+	for i, m := range messages {
+		msgs[i] = oaiMsg{Role: m.Role, Content: m.Content}
+	}
+	body, _ := json.Marshal(reqBody{Model: model, Messages: msgs})
+
+	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("openai_compat request: %w", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("openai_compat %d: %s", resp.StatusCode, string(data))
+	}
+
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return "", fmt.Errorf("openai_compat parse: %w", err)
+	}
+	if len(out.Choices) == 0 {
+		return "", fmt.Errorf("openai_compat: no choices in response")
+	}
+	return out.Choices[0].Message.Content, nil
+}

@@ -311,3 +311,69 @@ LEFT JOIN annotations a ON a.document_id = d.id AND a.deleted_at IS NULL
 WHERE d.deleted_at IS NULL
 GROUP BY d.id
 ORDER BY d.created_at DESC;
+
+--  Pipelines
+
+-- name: InsertPipeline :one
+INSERT INTO pipelines (id, name, enabled, trigger, filter, steps, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: GetPipeline :one
+SELECT * FROM pipelines WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: ListPipelines :many
+SELECT * FROM pipelines WHERE deleted_at IS NULL ORDER BY created_at DESC;
+
+-- name: ListEnabledPipelines :many
+SELECT * FROM pipelines WHERE enabled = 1 AND deleted_at IS NULL ORDER BY created_at;
+
+-- name: UpdatePipeline :exec
+UPDATE pipelines SET name = ?, enabled = ?, trigger = ?, filter = ?, steps = ?, updated_at = ?, rev = rev + 1
+WHERE id = ?;
+
+-- name: SoftDeletePipeline :exec
+UPDATE pipelines SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+--  PipelineRuns
+
+-- name: InsertPipelineRun :one
+INSERT INTO pipeline_runs (id, pipeline_id, document_id, status, step_index, state, created_at, updated_at, rev)
+VALUES (?, ?, ?, 'queued', 0, '{}', ?, ?, 0)
+RETURNING *;
+
+-- name: GetPipelineRun :one
+SELECT * FROM pipeline_runs WHERE id = ? LIMIT 1;
+
+-- name: ListPipelineRunsByDocument :many
+SELECT * FROM pipeline_runs WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at DESC;
+
+-- name: UpdatePipelineRunProgress :exec
+UPDATE pipeline_runs SET status = ?, step_index = ?, state = ?, updated_at = ?, rev = rev + 1
+WHERE id = ?;
+
+-- name: SoftDeletePipelineRunsByDocument :exec
+UPDATE pipeline_runs SET deleted_at = ?, updated_at = ? WHERE document_id = ? AND deleted_at IS NULL;
+
+--  Highlights
+
+-- name: InsertHighlight :one
+INSERT INTO highlights (id, document_id, pipeline_run_id, kind, body, metadata, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: ListHighlights :many
+SELECT * FROM highlights WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?;
+
+-- name: ListHighlightsByDocument :many
+SELECT * FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at ASC;
+
+-- name: ListHighlightsByPipelineRun :many
+SELECT * FROM highlights WHERE pipeline_run_id = ? AND deleted_at IS NULL ORDER BY created_at ASC;
+
+-- name: SoftDeleteHighlight :exec
+UPDATE highlights SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: SoftDeleteHighlightsByPipelineRun :exec
+UPDATE highlights SET deleted_at = ?, updated_at = ?, rev = rev + 1
+WHERE pipeline_run_id = ? AND deleted_at IS NULL;

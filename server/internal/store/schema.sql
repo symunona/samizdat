@@ -173,3 +173,48 @@ CREATE TABLE IF NOT EXISTS annotation_tags (
   deleted_at    TEXT,
   UNIQUE(annotation_id, tag_id)
 );
+
+CREATE TABLE IF NOT EXISTS pipelines (
+    id          TEXT    PRIMARY KEY,
+    name        TEXT    NOT NULL DEFAULT '',
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    trigger     TEXT    NOT NULL DEFAULT 'on_new_document',
+    filter      TEXT    NOT NULL DEFAULT '{}',
+    steps       TEXT    NOT NULL DEFAULT '[]',
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0,
+    deleted_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id          TEXT    PRIMARY KEY,
+    pipeline_id TEXT    NOT NULL REFERENCES pipelines(id),
+    document_id TEXT    NOT NULL REFERENCES documents(id),
+    status      TEXT    NOT NULL DEFAULT 'queued',
+    step_index  INTEGER NOT NULL DEFAULT 0,
+    state       TEXT    NOT NULL DEFAULT '{}',
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0,
+    deleted_at  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS pipeline_runs_document_id ON pipeline_runs(document_id);
+CREATE INDEX IF NOT EXISTS pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id);
+
+CREATE TABLE IF NOT EXISTS highlights (
+    id              TEXT    PRIMARY KEY,
+    document_id     TEXT    NOT NULL REFERENCES documents(id),
+    pipeline_run_id TEXT    NOT NULL REFERENCES pipeline_runs(id),
+    kind            TEXT    NOT NULL DEFAULT 'note',
+    body            TEXT    NOT NULL DEFAULT '',
+    metadata        TEXT    NOT NULL DEFAULT '{}',
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL,
+    rev             INTEGER NOT NULL DEFAULT 0,
+    deleted_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS highlights_document_id ON highlights(document_id);
+CREATE INDEX IF NOT EXISTS highlights_pipeline_run_id ON highlights(pipeline_run_id);
