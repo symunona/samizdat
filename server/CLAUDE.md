@@ -107,6 +107,10 @@ Run `sqlc generate` before `go build`. `just server::gen` wraps this. Generated 
 `Document` · `Highlight` · `Annotation` · `Note` · `Feed` · `Subscription` · `Scraper` · `Pipeline` · `PipelineStep` · `Job` · `Schedule` · `Tag` · `UserProfile`
 Banned: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`
 
+## Highlight vs Annotation (critical distinction)
+- **`Highlight`** — LLM-extracted unit from a Document. Machine data. Server→phone **one-way**. Created by `Pipeline`.
+- **`Annotation`** — user-created text selection on a `Document` or `Highlight`. Has a text anchor (W3C TextQuoteSelector JSON) + optional note body (markdown). User-authored → **two-way sync** (LWW push). Never machine-generated.
+
 ## LLM routing
 - Two adapters only: Anthropic Messages API + OpenAI-compatible
 - Tier routing: triage→Haiku (`claude-haiku-4-5-20251001`), breakdown→Sonnet (`claude-sonnet-4-6`), digest→Opus (`claude-opus-4-8`)

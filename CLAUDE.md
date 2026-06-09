@@ -20,7 +20,7 @@ Self-hostable read → curate → cite → publish pipeline. Single-user, server
 6. **Single static binary, no Docker, no nginx** on the happy path. TLS via CertMagic in-binary.
 
 ## Domain vocabulary (use these exact names)
-`Document` (scraped source, 1 per canonical URL) · `Highlight` (feed-sized unit anchored in a Document) · `Annotation` (note on any Annotatable) · `Note` (user-authored vault md) · `Feed` (pollable source) · `Subscription` (user↔Feed + Schedule) · `Scraper` (URL→Document) · `Pipeline`/`PipelineStep` (Document→Highlights) · `Job` (queued work w/ cost metering) · `Schedule` · `Tag` · `UserProfile` (master prompt/persona). Conventions: PascalCase singular types, snake_case plural tables, `<singular>_id` FKs. Banned name fragments: `Content`, `Memory`, `Source` (ambiguous), `Parsed*`, `Cron`, `Url`.
+`Document` (scraped source, 1 per canonical URL) · `Highlight` (**LLM-extracted** bite-sized unit from a Document; machine data, server→phone one-way) · `Annotation` (**user-created** text selection on a Document or Highlight, with optional note body + W3C TextQuoteSelector anchor; user-authored, two-way sync) · `Note` (user-authored vault md) · `Feed` (pollable source) · `Subscription` (user↔Feed + Schedule) · `Scraper` (URL→Document) · `Pipeline`/`PipelineStep` (Document→Highlights) · `Job` (queued work w/ cost metering) · `Schedule` · `Tag` · `UserProfile` (master prompt/persona). Conventions: PascalCase singular types, snake_case plural tables, `<singular>_id` FKs. Banned name fragments: `Content`, `Memory`, `Source` (ambiguous), `Parsed*`, `Cron`, `Url`.
 
 ## Stack decisions (locked)
 - **Server:** Go, single static binary. SQLite via pure-Go `modernc.org/sqlite` (no CGO). Job queue = a `jobs` table (no Redis). TLS = CertMagic.
