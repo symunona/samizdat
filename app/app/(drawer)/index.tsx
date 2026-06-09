@@ -4,6 +4,7 @@ import { useUnistyles } from 'react-native-unistyles'
 import { useRouter } from 'expo-router'
 import { useConnection } from '../../src/ConnectionContext'
 import { fetchHighlights, HighlightWithDoc } from '../../src/api'
+import MarkdownBody from '../../src/MarkdownBody'
 
 export default function FeedScreen() {
   const { theme } = useUnistyles()
@@ -50,7 +51,7 @@ export default function FeedScreen() {
         </View>
         <Text style={s.docTitle} numberOfLines={1}>{item.document_title || item.document_url}</Text>
       </View>
-      <Text style={s.body} numberOfLines={6}>{item.body}</Text>
+      <MarkdownBody>{item.body}</MarkdownBody>
     </Pressable>
   )
 
@@ -114,7 +115,6 @@ function buildStyles(t: Theme) {
     kindBadge: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
     kindText: { color: '#fff', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
     docTitle: { flex: 1, color: t.colors.muted, fontSize: 12 },
-    body: { color: t.colors.text, fontSize: 14, lineHeight: 20 },
     placeholder: { color: t.colors.muted, fontSize: 16 },
     hint: { color: t.colors.muted, fontSize: 13, opacity: 0.6 },
     errorText: { color: '#ff6b6b', fontSize: 15 },
