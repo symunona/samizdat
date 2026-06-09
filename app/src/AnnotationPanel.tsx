@@ -13,16 +13,6 @@ import {
 } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 
-const COLORS = ['yellow', 'green', 'blue', 'pink'] as const
-type AnnotationColor = typeof COLORS[number]
-
-const COLOR_HEX: Record<AnnotationColor, string> = {
-  yellow: '#fde68a',
-  green:  '#bbf7d0',
-  blue:   '#bfdbfe',
-  pink:   '#fbcfe8',
-}
-
 export type PendingSelection = {
   exact: string
   prefix: string
@@ -41,56 +31,57 @@ export type ExistingAnnotation = {
 type Props = {
   visible: boolean
   mode: 'create' | 'edit'
-  pending?: PendingSelection
   existing?: ExistingAnnotation
   onSave: (data: { note: string; color: string }) => void
   onDelete?: () => void
   onCancel: () => void
+  onTag?: (annotationId: string) => void
 }
 
-export default function AnnotationPanel({ visible, mode, pending, existing, onSave, onDelete, onCancel }: Props) {
+export default function AnnotationPanel({ visible, mode, existing, onSave, onDelete, onCancel, onTag }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const [note, setNote] = useState(existing?.note ?? '')
-  const [color, setColor] = useState<AnnotationColor>((existing?.color as AnnotationColor) ?? 'yellow')
+  const [moreOpen, setMoreOpen] = useState(false)
 
-  // Reset when panel opens
   useMemo(() => {
     if (visible) {
       setNote(existing?.note ?? '')
-      setColor((existing?.color as AnnotationColor) ?? 'yellow')
+      setMoreOpen(false)
     }
   }, [visible, existing])
 
-  const quote = mode === 'create' ? pending?.exact : existing?.exact
+  function handleSave() {
+    Keyboard.dismiss()
+    onSave({ note, color: existing?.color ?? 'yellow' })
+  }
+
+  function handleDelete() {
+    setMoreOpen(false)
+    onDelete?.()
+  }
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}>
-      <TouchableWithoutFeedback onPress={onCancel}>
+      <TouchableWithoutFeedback onPress={() => { setMoreOpen(false); onCancel() }}>
         <View style={s.backdrop} />
       </TouchableWithoutFeedback>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={s.kvContainer}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={s.kav}>
         <View style={s.panel}>
-          <View style={s.handle} />
-          {quote ? (
-            <Text style={s.quote} numberOfLines={3}>"{quote}"</Text>
-          ) : null}
 
-          {/* Color picker */}
-          <View style={s.colorRow}>
-            {COLORS.map((c) => (
-              <Pressable
-                key={c}
-                style={[s.colorDot, { backgroundColor: COLOR_HEX[c] }, color === c && s.colorDotSelected]}
-                onPress={() => setColor(c)}
-              />
-            ))}
+          {/* Header */}
+          <View style={s.header}>
+            <View style={s.handle} />
+            <Text style={s.headerTitle}>Annotation</Text>
+            <Pressable onPress={onCancel} style={s.xBtn} hitSlop={10}>
+              <Text style={s.xBtnText}>✕</Text>
+            </Pressable>
           </View>
 
           {/* Note input */}
           <TextInput
             style={s.noteInput}
-            placeholder="Add a note… (optional)"
+            placeholder="Add a note…"
             placeholderTextColor={theme.colors.placeholder}
             multiline
             value={note}
@@ -100,26 +91,44 @@ export default function AnnotationPanel({ visible, mode, pending, existing, onSa
             blurOnSubmit
           />
 
-          {/* Actions */}
-          <View style={s.actions}>
-            {mode === 'edit' && onDelete ? (
-              <Pressable style={s.deleteBtn} onPress={onDelete}>
-                <Text style={s.deleteBtnText}>Delete</Text>
+          {/* Footer row */}
+          <View style={s.footer}>
+
+            {/* ··· more menu */}
+            <View>
+              <Pressable
+                style={[s.iconBtn, moreOpen && s.iconBtnActive]}
+                onPress={() => setMoreOpen(v => !v)}
+                hitSlop={8}
+              >
+                <Text style={s.iconBtnText}>···</Text>
               </Pressable>
-            ) : (
-              <Pressable style={s.cancelBtn} onPress={onCancel}>
-                <Text style={s.cancelBtnText}>Cancel</Text>
-              </Pressable>
-            )}
-            <Pressable style={s.saveBtn} onPress={() => { Keyboard.dismiss(); onSave({ note, color }) }}>
-              <Text style={s.saveBtnText}>{mode === 'create' ? 'Save annotation' : 'Update'}</Text>
+              {moreOpen && onDelete && (
+                <View style={s.moreMenu}>
+                  <Pressable style={s.deleteMenuItem} onPress={handleDelete}>
+                    <Text style={s.deleteMenuText}>🗑  Delete</Text>
+                  </Pressable>
+                </View>
+              )}
+            </View>
+
+            {/* Tag button (tagger will wire this up) */}
+            <Pressable
+              style={s.iconBtn}
+              onPress={() => existing?.id && onTag?.(existing.id)}
+              hitSlop={8}
+            >
+              <Text style={s.iconBtnText}># Tags</Text>
             </Pressable>
+
+            <View style={s.spacer} />
+
+            {/* Primary action */}
+            <Pressable style={s.saveBtn} onPress={handleSave}>
+              <Text style={s.saveBtnText}>{mode === 'create' ? 'Save' : 'Update'}</Text>
+            </Pressable>
+
           </View>
-          {mode === 'edit' && (
-            <Pressable style={[s.cancelBtn, { marginTop: 8 }]} onPress={onCancel}>
-              <Text style={s.cancelBtnText}>Cancel</Text>
-            </Pressable>
-          )}
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -130,20 +139,42 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
     backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
-    kvContainer: { justifyContent: 'flex-end' },
+    kav: { justifyContent: 'flex-end' },
     panel: {
       backgroundColor: t.colors.surface,
-      borderTopLeftRadius: 16,
-      borderTopRightRadius: 16,
-      padding: t.spacing.lg,
+      borderTopLeftRadius: 18,
+      borderTopRightRadius: 18,
+      paddingHorizontal: t.spacing.lg,
       paddingBottom: 32,
       gap: t.spacing.md,
     },
-    handle: { width: 36, height: 4, backgroundColor: t.colors.border, borderRadius: 2, alignSelf: 'center', marginBottom: 4 },
-    quote: { color: t.colors.muted, fontSize: 13, fontStyle: 'italic', lineHeight: 18, borderLeftWidth: 2, borderLeftColor: t.colors.accent, paddingLeft: 10 },
-    colorRow: { flexDirection: 'row', gap: 12 },
-    colorDot: { width: 28, height: 28, borderRadius: 14 },
-    colorDotSelected: { borderWidth: 2.5, borderColor: t.colors.text },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingTop: t.spacing.md,
+      gap: t.spacing.sm,
+    },
+    handle: {
+      width: 36,
+      height: 4,
+      backgroundColor: t.colors.border,
+      borderRadius: 2,
+      position: 'absolute',
+      top: -14,
+      alignSelf: 'center',
+      left: '50%' as unknown as number,
+      marginLeft: -18,
+    },
+    headerTitle: { flex: 1, color: t.colors.text, fontSize: 16, fontWeight: '700' },
+    xBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: t.colors.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    xBtnText: { color: t.colors.muted, fontSize: 14, fontWeight: '600' },
     noteInput: {
       backgroundColor: t.colors.background,
       color: t.colors.text,
@@ -152,15 +183,54 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.border,
       padding: t.spacing.md,
       fontSize: 15,
-      minHeight: 80,
+      minHeight: 90,
       textAlignVertical: 'top',
     },
-    actions: { flexDirection: 'row', gap: t.spacing.sm },
-    saveBtn: { flex: 1, backgroundColor: t.colors.accent, borderRadius: t.radius.sm, padding: t.spacing.sm, alignItems: 'center' },
+    footer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.spacing.sm,
+    },
+    iconBtn: {
+      paddingHorizontal: t.spacing.sm + 2,
+      paddingVertical: t.spacing.sm,
+      borderRadius: t.radius.sm,
+      backgroundColor: t.colors.background,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+    },
+    iconBtnActive: { borderColor: t.colors.accent },
+    iconBtnText: { color: t.colors.muted, fontSize: 13, fontWeight: '600' },
+    spacer: { flex: 1 },
+    saveBtn: {
+      backgroundColor: t.colors.accent,
+      borderRadius: t.radius.sm,
+      paddingHorizontal: t.spacing.lg,
+      paddingVertical: t.spacing.sm,
+      alignItems: 'center',
+    },
     saveBtnText: { color: t.colors.background, fontSize: 15, fontWeight: '700' },
-    cancelBtn: { backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border, borderRadius: t.radius.sm, padding: t.spacing.sm, alignItems: 'center', minWidth: 80 },
-    cancelBtnText: { color: t.colors.muted, fontSize: 15 },
-    deleteBtn: { backgroundColor: '#450a0a', borderRadius: t.radius.sm, padding: t.spacing.sm, alignItems: 'center', minWidth: 80 },
-    deleteBtnText: { color: t.colors.error, fontSize: 15, fontWeight: '600' },
+    moreMenu: {
+      position: 'absolute',
+      bottom: 44,
+      left: 0,
+      backgroundColor: t.colors.surface,
+      borderRadius: t.radius.sm,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      paddingVertical: 4,
+      minWidth: 130,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: -2 },
+      shadowOpacity: 0.25,
+      shadowRadius: 6,
+      elevation: 8,
+      zIndex: 100,
+    },
+    deleteMenuItem: {
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.sm + 2,
+    },
+    deleteMenuText: { color: '#f87171', fontSize: 14, fontWeight: '600' },
   })
 }

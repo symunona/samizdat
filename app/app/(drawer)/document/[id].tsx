@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Animated,
+  Linking,
   Platform,
   Pressable,
   SafeAreaView,
@@ -9,6 +10,7 @@ import {
   Text,
   View,
 } from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import WebView from 'react-native-webview'
@@ -62,20 +64,35 @@ export default function DocumentViewer() {
   const [metaVisible, setMetaVisible] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const metaAnim = useRef(new Animated.Value(320)).current
+
+  const openMetaPanel = useCallback(() => {
+    setMetaVisible(true)
+    setDeleteConfirm(false)
+    metaAnim.setValue(320)
+    Animated.timing(metaAnim, { toValue: 0, duration: 220, useNativeDriver: true }).start()
+  }, [metaAnim])
+
+  const closeMetaPanel = useCallback(() => {
+    Animated.timing(metaAnim, { toValue: 320, duration: 180, useNativeDriver: true }).start(() => {
+      setMetaVisible(false)
+      setDeleteConfirm(false)
+    })
+  }, [metaAnim])
 
   const handleDeleteDocument = useCallback(async () => {
     if (!activeUrl || !token) return
     setDeleting(true)
     try {
       await deleteDocument(activeUrl, token, id)
-      setMetaVisible(false)
+      closeMetaPanel()
       router.replace((from as string) ?? '/documents')
     } catch (e) {
       console.error('document delete failed', e)
       setDeleting(false)
       setDeleteConfirm(false)
     }
-  }, [activeUrl, token, id, router, from])
+  }, [activeUrl, token, id, router, from, closeMetaPanel])
 
   // Annotation panel state
   const [annVisible, setAnnVisible] = useState(false)
@@ -244,6 +261,10 @@ export default function DocumentViewer() {
     }
   }, [existingAnnotation, activeUrl, token, injectRemoveMark])
 
+  const openInWeb = useCallback(() => {
+    if (doc?.canonical_url) Linking.openURL(doc.canonical_url)
+  }, [doc])
+
   const progressPct = Math.round(scrollProgress * 100)
 
   return (
@@ -255,7 +276,12 @@ export default function DocumentViewer() {
         {doc && (
           <Text style={s.headerTitle} numberOfLines={1}>{doc.title || doc.canonical_url}</Text>
         )}
-        <Pressable onPress={() => { setMetaVisible(true); setDeleteConfirm(false) }} style={s.menuBtn} hitSlop={12}>
+        {doc && (
+          <Pressable onPress={openInWeb} style={s.openWebBtn} hitSlop={12}>
+            <Ionicons name="open-outline" size={22} color={theme.colors.accent} />
+          </Pressable>
+        )}
+        <Pressable onPress={openMetaPanel} style={s.menuBtn} hitSlop={12}>
           <Text style={s.menuText}>⋮</Text>
         </Pressable>
       </Animated.View>
@@ -302,7 +328,6 @@ export default function DocumentViewer() {
       <AnnotationPanel
         visible={annVisible}
         mode={annMode}
-        pending={pendingSelection}
         existing={existingAnnotation}
         onSave={handleAnnSave}
         onDelete={annMode === 'edit' ? handleAnnDelete : undefined}
@@ -310,11 +335,12 @@ export default function DocumentViewer() {
       />
 
       {metaVisible && doc && (
-        <Pressable style={s.metaOverlay} onPress={() => setMetaVisible(false)}>
-          <Pressable style={s.metaPanel} onPress={e => e.stopPropagation()}>
+        <Pressable style={s.metaOverlay} onPress={closeMetaPanel}>
+          <Animated.View style={[s.metaPanel, { transform: [{ translateX: metaAnim }] }]}>
+            <Pressable style={{ flex: 1 }} onPress={e => e.stopPropagation()}>
             <View style={s.metaHeader}>
               <Text style={s.metaTitle}>Document info</Text>
-              <Pressable onPress={() => setMetaVisible(false)} hitSlop={12}>
+              <Pressable onPress={closeMetaPanel} hitSlop={12}>
                 <Text style={s.metaClose}>×</Text>
               </Pressable>
             </View>
@@ -333,6 +359,11 @@ export default function DocumentViewer() {
               <Text style={s.metaValue}>{new Date(doc.fetched_at).toLocaleString()}</Text>
             </View>
             <View style={s.metaDivider} />
+            <Pressable style={s.viewWebBtn} onPress={() => { closeMetaPanel(); openInWeb() }}>
+              <Ionicons name="open-outline" size={18} color={theme.colors.accent} />
+              <Text style={s.viewWebBtnText}>View on web</Text>
+            </Pressable>
+            <View style={s.metaDivider} />
             {!deleteConfirm ? (
               <Pressable style={s.deleteBtn} onPress={() => setDeleteConfirm(true)}>
                 <Text style={s.deleteBtnText}>Delete document</Text>
@@ -350,7 +381,8 @@ export default function DocumentViewer() {
                 </View>
               </View>
             )}
-          </Pressable>
+            </Pressable>
+          </Animated.View>
         </Pressable>
       )}
     </SafeAreaView>
@@ -371,6 +403,7 @@ function buildStyles(t: Theme) {
     backBtn: { flexShrink: 0, padding: t.spacing.sm },
     backText: { color: t.colors.accent, fontSize: 20, fontWeight: '400' },
     headerTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '600' },
+    openWebBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuText: { color: t.colors.text, fontSize: 22, fontWeight: '400', lineHeight: 24 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
@@ -383,13 +416,15 @@ function buildStyles(t: Theme) {
     metaOverlay: {
       position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
       backgroundColor: 'rgba(0,0,0,0.45)', zIndex: 20,
-      justifyContent: 'flex-end',
+      flexDirection: 'row', justifyContent: 'flex-end',
     },
     metaPanel: {
+      width: 300,
       backgroundColor: t.colors.surface,
-      borderTopLeftRadius: 16, borderTopRightRadius: 16,
+      borderLeftWidth: 1, borderLeftColor: t.colors.border,
       padding: t.spacing.lg,
       paddingBottom: t.spacing.xl,
+      overflow: 'hidden',
     },
     metaHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: t.spacing.md },
     metaTitle: { color: t.colors.text, fontSize: 16, fontWeight: '700' },
@@ -398,6 +433,12 @@ function buildStyles(t: Theme) {
     metaLabel: { color: t.colors.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
     metaValue: { color: t.colors.text, fontSize: 14 },
     metaDivider: { height: 1, backgroundColor: t.colors.border, marginVertical: t.spacing.md },
+    viewWebBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,
+      borderRadius: 8, borderWidth: 1, borderColor: t.colors.accent,
+      paddingVertical: t.spacing.sm, paddingHorizontal: t.spacing.md,
+    },
+    viewWebBtnText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
     deleteBtn: {
       backgroundColor: '#b91c1c',
       borderRadius: 8,
