@@ -3,32 +3,43 @@ package worker
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"math"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
 const (
-	pollInterval = 5 * time.Second
-	maxAttempts  = 3
+	pollInterval     = 5 * time.Second
+	schedulerInterval = 60 * time.Second
+	maxAttempts      = 3
 )
 
 type Worker struct {
-	q        *store.Queries
-	cacheDir string
-	browser  *BrowserPool
+	q            *store.Queries
+	cacheDir     string
+	browser      *BrowserPool
+	extractorReg extractor.Registry
 }
 
-func New(q *store.Queries, cacheDir string) *Worker {
+func New(q *store.Queries, cacheDir string, extractorDir string) *Worker {
 	browser, err := NewBrowserPool()
 	if err != nil {
 		log.Fatalf("worker: browser init failed: %v", err)
 	}
-	return &Worker{q: q, cacheDir: cacheDir, browser: browser}
+	reg, err := extractor.LoadAll(extractorDir)
+	if err != nil {
+		log.Printf("worker: extractor registry load error: %v", err)
+		reg = make(extractor.Registry)
+	}
+	log.Printf("worker: loaded %d extractor configs from %s", len(reg), extractorDir)
+	return &Worker{q: q, cacheDir: cacheDir, browser: browser, extractorReg: reg}
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -36,6 +47,62 @@ func (w *Worker) Start(ctx context.Context) {
 		w.loop(ctx)
 		w.browser.Close()
 	}()
+	go func() {
+		t := time.NewTicker(schedulerInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				w.schedulePollFeeds(ctx)
+			}
+		}
+	}()
+}
+
+// ExtractorRegistry returns the loaded extractor registry.
+func (w *Worker) ExtractorRegistry() extractor.Registry {
+	return w.extractorReg
+}
+
+// FetchHTML fetches the fully-rendered HTML for the given URL via the browser pool.
+func (w *Worker) FetchHTML(url string) (string, error) {
+	return w.browser.FetchHTML(url)
+}
+
+func (w *Worker) schedulePollFeeds(ctx context.Context) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	subs, err := w.q.ListDueSubscriptions(ctx, now)
+	if err != nil {
+		log.Printf("scheduler: list due subscriptions: %v", err)
+		return
+	}
+	for _, sub := range subs {
+		payload, _ := json.Marshal(map[string]string{"feed_id": sub.FeedID})
+		_, err := w.q.InsertJob(ctx, store.InsertJobParams{
+			ID:        uuid.NewString(),
+			Kind:      "poll_feed",
+			Payload:   string(payload),
+			RunAfter:  now,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		if err != nil {
+			log.Printf("scheduler: enqueue poll_feed for sub %s: %v", sub.ID, err)
+			continue
+		}
+		// Bump next_run_at so we don't double-enqueue on the next tick.
+		nextRun := time.Now().UTC().Add(time.Duration(sub.IntervalH) * time.Hour).Format(time.RFC3339)
+		if err := w.q.BumpSubscriptionNextRun(ctx, store.BumpSubscriptionNextRunParams{
+			NextRunAt: nextRun,
+			UpdatedAt: now,
+			ID:        sub.ID,
+		}); err != nil {
+			log.Printf("scheduler: bump next_run_at for sub %s: %v", sub.ID, err)
+		}
+		log.Printf("scheduler: enqueued poll_feed for feed %s (sub %s)", sub.FeedID, sub.ID)
+	}
 }
 
 func (w *Worker) loop(ctx context.Context) {
@@ -76,6 +143,8 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 		err = handleScrapeURL(ctx, w.q, job, w.browser)
 	case "fetch_assets":
 		err = handleFetchAssets(ctx, w.q, job, w.cacheDir)
+	case "poll_feed":
+		err = handlePollFeed(ctx, w.q, job, w.browser, w.extractorReg)
 	default:
 		err = fmt.Errorf("unknown job kind: %s", job.Kind)
 	}
@@ -90,6 +159,15 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	}
 
 	log.Printf("worker: job %s (%s) attempt %d failed: %v", job.ID[:8], job.Kind, job.Attempts, err)
+
+	// Record the error message on the job for operator visibility.
+	if e := w.q.MarkJobLastError(ctx, store.MarkJobLastErrorParams{
+		LastError: err.Error(),
+		UpdatedAt: now,
+		ID:        job.ID,
+	}); e != nil {
+		log.Printf("worker: mark last_error: %v", e)
+	}
 
 	status := "queued"
 	if job.Attempts >= maxAttempts {

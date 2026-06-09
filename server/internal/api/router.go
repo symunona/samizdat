@@ -17,10 +17,10 @@ import (
 
 // New returns the root HTTP handler. webDir may be empty (API-only mode).
 // serverURLs is the ordered list of reachable base URLs for this server.
-func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, cacheDir string) http.Handler {
+func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, cacheDir string, extractorDir string) http.Handler {
 	q := store.New(db)
 
-	w := worker.New(q, cacheDir)
+	w := worker.New(q, cacheDir, extractorDir)
 	w.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -38,6 +38,18 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 
 	jobsH := &jobsHandler{q: q}
 	mux.HandleFunc("POST /api/v1/jobs", bearerAuth(q, jobsH.create))
+	mux.HandleFunc("GET /api/v1/jobs", bearerAuth(q, jobsH.list))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", bearerAuth(q, jobsH.retry))
+	mux.HandleFunc("DELETE /api/v1/jobs/{id}", bearerAuth(q, jobsH.softDelete))
+
+	subsH := &subscriptionsHandler{q: q, reg: w.ExtractorRegistry()}
+	mux.HandleFunc("POST /api/v1/subscriptions", bearerAuth(q, subsH.create))
+	mux.HandleFunc("GET /api/v1/subscriptions", bearerAuth(q, subsH.list))
+	mux.HandleFunc("DELETE /api/v1/subscriptions/{id}", bearerAuth(q, subsH.delete))
+	mux.HandleFunc("GET /api/v1/feeds/{id}/items", bearerAuth(q, subsH.listFeedItems))
+
+	adminFeedsH := &adminFeedsHandler{reg: w.ExtractorRegistry(), browser: w}
+	mux.HandleFunc("POST /api/v1/admin/feeds/preview", localhostOnly(adminFeedsH.preview))
 
 	docsH := &documentsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents", bearerAuth(q, docsH.list))

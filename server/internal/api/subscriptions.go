@@ -1,0 +1,137 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/symunona/samizdat/server/internal/extractor"
+	"github.com/symunona/samizdat/server/internal/store"
+	"github.com/symunona/samizdat/server/internal/worker"
+)
+
+type subscriptionsHandler struct {
+	q   *store.Queries
+	reg extractor.Registry
+}
+
+// POST /api/v1/subscriptions
+// Body: {url, interval_h?}
+func (h *subscriptionsHandler) create(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		URL       string `json:"url"`
+		IntervalH int    `json:"interval_h"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if body.URL == "" {
+		writeErr(w, http.StatusBadRequest, "url required")
+		return
+	}
+	if body.IntervalH <= 0 {
+		body.IntervalH = 24
+	}
+
+	cfg, ok := h.reg.LookupByURL(body.URL)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "no extractor config found for this domain — create extractors/<domain>/feed.yaml first")
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	feedID := worker.IDFromURL(body.URL)
+
+	feed, err := h.q.UpsertFeed(r.Context(), store.UpsertFeedParams{
+		ID:        feedID,
+		Url:       body.URL,
+		Kind:      cfg.Kind,
+		Title:     "",
+		Config:    "{}",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error creating feed")
+		return
+	}
+
+	sub, err := h.q.InsertSubscription(r.Context(), store.InsertSubscriptionParams{
+		ID:        uuid.NewString(),
+		FeedID:    feed.ID,
+		IntervalH: int64(body.IntervalH),
+		NextRunAt: now,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error creating subscription")
+		return
+	}
+
+	// Enqueue an immediate poll_feed job.
+	payload, _ := json.Marshal(map[string]string{"feed_id": feed.ID})
+	_, err = h.q.InsertJob(r.Context(), store.InsertJobParams{
+		ID:        uuid.NewString(),
+		Kind:      "poll_feed",
+		Payload:   string(payload),
+		RunAfter:  now,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error enqueueing poll")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"feed":         feed,
+		"subscription": sub,
+	})
+}
+
+// GET /api/v1/subscriptions
+func (h *subscriptionsHandler) list(w http.ResponseWriter, r *http.Request) {
+	subs, err := h.q.ListSubscriptions(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, subs)
+}
+
+// GET /api/v1/feeds/{id}/items
+func (h *subscriptionsHandler) listFeedItems(w http.ResponseWriter, r *http.Request) {
+	feedID := r.PathValue("id")
+	if feedID == "" {
+		writeErr(w, http.StatusBadRequest, "feed id required")
+		return
+	}
+	items, err := h.q.ListFeedItemsByFeed(r.Context(), feedID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// DELETE /api/v1/subscriptions/{id}
+func (h *subscriptionsHandler) delete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := h.q.DeleteSubscription(r.Context(), store.DeleteSubscriptionParams{
+		DeletedAt: &now,
+		UpdatedAt: now,
+		ID:        id,
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

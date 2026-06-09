@@ -9,6 +9,21 @@ import (
 	"context"
 )
 
+const bumpSubscriptionNextRun = `-- name: BumpSubscriptionNextRun :exec
+UPDATE subscriptions SET next_run_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type BumpSubscriptionNextRunParams struct {
+	NextRunAt string `json:"next_run_at"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) BumpSubscriptionNextRun(ctx context.Context, arg BumpSubscriptionNextRunParams) error {
+	_, err := q.db.ExecContext(ctx, bumpSubscriptionNextRun, arg.NextRunAt, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const claimNextJob = `-- name: ClaimNextJob :one
 UPDATE jobs
 SET status = 'running', attempts = attempts + 1, updated_at = ?
@@ -18,7 +33,7 @@ WHERE id = (
     ORDER BY j2.created_at
     LIMIT 1
 )
-RETURNING id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, deleted_at
+RETURNING id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at
 `
 
 type ClaimNextJobParams struct {
@@ -36,12 +51,28 @@ func (q *Queries) ClaimNextJob(ctx context.Context, arg ClaimNextJobParams) (Job
 		&i.Status,
 		&i.Attempts,
 		&i.RunAfter,
+		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
 		&i.DeletedAt,
 	)
 	return i, err
+}
+
+const deleteSubscription = `-- name: DeleteSubscription :exec
+UPDATE subscriptions SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type DeleteSubscriptionParams struct {
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+	ID        string  `json:"id"`
+}
+
+func (q *Queries) DeleteSubscription(ctx context.Context, arg DeleteSubscriptionParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSubscription, arg.DeletedAt, arg.UpdatedAt, arg.ID)
+	return err
 }
 
 const getDevice = `-- name: GetDevice :one
@@ -97,7 +128,7 @@ func (q *Queries) GetDeviceByTokenHash(ctx context.Context, tokenHash string) (D
 }
 
 const getDocumentByCanonicalURL = `-- name: GetDocumentByCanonicalURL :one
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev, deleted_at FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, source_feed_id, created_at, updated_at, rev, deleted_at FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl string) (Document, error) {
@@ -112,6 +143,7 @@ func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl st
 		&i.Excerpt,
 		&i.HeroImageUrl,
 		&i.Author,
+		&i.SourceFeedID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -121,7 +153,7 @@ func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl st
 }
 
 const getDocumentByID = `-- name: GetDocumentByID :one
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev, deleted_at FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, source_feed_id, created_at, updated_at, rev, deleted_at FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetDocumentByID(ctx context.Context, id string) (Document, error) {
@@ -136,6 +168,95 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id string) (Document, err
 		&i.Excerpt,
 		&i.HeroImageUrl,
 		&i.Author,
+		&i.SourceFeedID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getFeed = `-- name: GetFeed :one
+SELECT id, url, kind, title, config, last_polled_at, created_at, updated_at, rev, deleted_at FROM feeds WHERE id = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetFeed(ctx context.Context, id string) (Feed, error) {
+	row := q.db.QueryRowContext(ctx, getFeed, id)
+	var i Feed
+	err := row.Scan(
+		&i.ID,
+		&i.Url,
+		&i.Kind,
+		&i.Title,
+		&i.Config,
+		&i.LastPolledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getFeedByURL = `-- name: GetFeedByURL :one
+SELECT id, url, kind, title, config, last_polled_at, created_at, updated_at, rev, deleted_at FROM feeds WHERE url = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetFeedByURL(ctx context.Context, url string) (Feed, error) {
+	row := q.db.QueryRowContext(ctx, getFeedByURL, url)
+	var i Feed
+	err := row.Scan(
+		&i.ID,
+		&i.Url,
+		&i.Kind,
+		&i.Title,
+		&i.Config,
+		&i.LastPolledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getFeedItem = `-- name: GetFeedItem :one
+SELECT id, feed_id, url, status, seen_at, created_at, updated_at, rev, deleted_at FROM feed_items WHERE id = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetFeedItem(ctx context.Context, id string) (FeedItem, error) {
+	row := q.db.QueryRowContext(ctx, getFeedItem, id)
+	var i FeedItem
+	err := row.Scan(
+		&i.ID,
+		&i.FeedID,
+		&i.Url,
+		&i.Status,
+		&i.SeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getJob = `-- name: GetJob :one
+SELECT id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at FROM jobs WHERE id = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetJob(ctx context.Context, id string) (Job, error) {
+	row := q.db.QueryRowContext(ctx, getJob, id)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Payload,
+		&i.Status,
+		&i.Attempts,
+		&i.RunAfter,
+		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -238,6 +359,26 @@ func (q *Queries) GetSetting(ctx context.Context, key string) (string, error) {
 	return value, err
 }
 
+const getSubscription = `-- name: GetSubscription :one
+SELECT id, feed_id, interval_h, next_run_at, created_at, updated_at, rev, deleted_at FROM subscriptions WHERE id = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetSubscription(ctx context.Context, id string) (Subscription, error) {
+	row := q.db.QueryRowContext(ctx, getSubscription, id)
+	var i Subscription
+	err := row.Scan(
+		&i.ID,
+		&i.FeedID,
+		&i.IntervalH,
+		&i.NextRunAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const insertDevice = `-- name: InsertDevice :one
 INSERT INTO devices (id, name, token_hash, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?)
@@ -279,7 +420,7 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 const insertJob = `-- name: InsertJob :one
 INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev)
 VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, 0)
-RETURNING id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, deleted_at
+RETURNING id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at
 `
 
 type InsertJobParams struct {
@@ -308,6 +449,7 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, erro
 		&i.Status,
 		&i.Attempts,
 		&i.RunAfter,
+		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -328,6 +470,44 @@ type InsertPairCodeParams struct {
 func (q *Queries) InsertPairCode(ctx context.Context, arg InsertPairCodeParams) error {
 	_, err := q.db.ExecContext(ctx, insertPairCode, arg.Code, arg.ExpiresAt)
 	return err
+}
+
+const insertSubscription = `-- name: InsertSubscription :one
+INSERT INTO subscriptions (id, feed_id, interval_h, next_run_at, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, 0)
+RETURNING id, feed_id, interval_h, next_run_at, created_at, updated_at, rev, deleted_at
+`
+
+type InsertSubscriptionParams struct {
+	ID        string `json:"id"`
+	FeedID    string `json:"feed_id"`
+	IntervalH int64  `json:"interval_h"`
+	NextRunAt string `json:"next_run_at"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func (q *Queries) InsertSubscription(ctx context.Context, arg InsertSubscriptionParams) (Subscription, error) {
+	row := q.db.QueryRowContext(ctx, insertSubscription,
+		arg.ID,
+		arg.FeedID,
+		arg.IntervalH,
+		arg.NextRunAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i Subscription
+	err := row.Scan(
+		&i.ID,
+		&i.FeedID,
+		&i.IntervalH,
+		&i.NextRunAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
 const listDevices = `-- name: ListDevices :many
@@ -367,7 +547,7 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 }
 
 const listDocuments = `-- name: ListDocuments :many
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev, deleted_at FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, source_feed_id, created_at, updated_at, rev, deleted_at FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50
 `
 
 func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
@@ -388,6 +568,279 @@ func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
 			&i.Excerpt,
 			&i.HeroImageUrl,
 			&i.Author,
+			&i.SourceFeedID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDueSubscriptions = `-- name: ListDueSubscriptions :many
+SELECT id, feed_id, interval_h, next_run_at, created_at, updated_at, rev, deleted_at FROM subscriptions WHERE next_run_at <= ? AND deleted_at IS NULL
+`
+
+func (q *Queries) ListDueSubscriptions(ctx context.Context, nextRunAt string) ([]Subscription, error) {
+	rows, err := q.db.QueryContext(ctx, listDueSubscriptions, nextRunAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Subscription
+	for rows.Next() {
+		var i Subscription
+		if err := rows.Scan(
+			&i.ID,
+			&i.FeedID,
+			&i.IntervalH,
+			&i.NextRunAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFeedItemsByFeed = `-- name: ListFeedItemsByFeed :many
+SELECT id, feed_id, url, status, seen_at, created_at, updated_at, rev, deleted_at FROM feed_items WHERE feed_id = ? AND deleted_at IS NULL ORDER BY seen_at DESC
+`
+
+func (q *Queries) ListFeedItemsByFeed(ctx context.Context, feedID string) ([]FeedItem, error) {
+	rows, err := q.db.QueryContext(ctx, listFeedItemsByFeed, feedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FeedItem
+	for rows.Next() {
+		var i FeedItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.FeedID,
+			&i.Url,
+			&i.Status,
+			&i.SeenAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFeeds = `-- name: ListFeeds :many
+SELECT id, url, kind, title, config, last_polled_at, created_at, updated_at, rev, deleted_at FROM feeds WHERE deleted_at IS NULL ORDER BY created_at DESC
+`
+
+func (q *Queries) ListFeeds(ctx context.Context) ([]Feed, error) {
+	rows, err := q.db.QueryContext(ctx, listFeeds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Feed
+	for rows.Next() {
+		var i Feed
+		if err := rows.Scan(
+			&i.ID,
+			&i.Url,
+			&i.Kind,
+			&i.Title,
+			&i.Config,
+			&i.LastPolledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobs = `-- name: ListJobs :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+`
+
+func (q *Queries) ListJobs(ctx context.Context) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listJobs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobsByKind = `-- name: ListJobsByKind :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+`
+
+func (q *Queries) ListJobsByKind(ctx context.Context, kind string) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listJobsByKind, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobsByStatus = `-- name: ListJobsByStatus :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+`
+
+func (q *Queries) ListJobsByStatus(ctx context.Context, status string) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listJobsByStatus, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobsByStatusAndKind = `-- name: ListJobsByStatusAndKind :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, created_at, updated_at, rev, deleted_at FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+`
+
+type ListJobsByStatusAndKindParams struct {
+	Status string `json:"status"`
+	Kind   string `json:"kind"`
+}
+
+func (q *Queries) ListJobsByStatusAndKind(ctx context.Context, arg ListJobsByStatusAndKindParams) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listJobsByStatusAndKind, arg.Status, arg.Kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -445,6 +898,57 @@ func (q *Queries) ListMediaAssetsByDocument(ctx context.Context, documentID stri
 	return items, nil
 }
 
+const listSubscriptions = `-- name: ListSubscriptions :many
+SELECT id, feed_id, interval_h, next_run_at, created_at, updated_at, rev, deleted_at FROM subscriptions WHERE deleted_at IS NULL ORDER BY created_at DESC
+`
+
+func (q *Queries) ListSubscriptions(ctx context.Context) ([]Subscription, error) {
+	rows, err := q.db.QueryContext(ctx, listSubscriptions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Subscription
+	for rows.Next() {
+		var i Subscription
+		if err := rows.Scan(
+			&i.ID,
+			&i.FeedID,
+			&i.IntervalH,
+			&i.NextRunAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markFeedPolled = `-- name: MarkFeedPolled :exec
+UPDATE feeds SET last_polled_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type MarkFeedPolledParams struct {
+	LastPolledAt *string `json:"last_polled_at"`
+	UpdatedAt    string  `json:"updated_at"`
+	ID           string  `json:"id"`
+}
+
+func (q *Queries) MarkFeedPolled(ctx context.Context, arg MarkFeedPolledParams) error {
+	_, err := q.db.ExecContext(ctx, markFeedPolled, arg.LastPolledAt, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const markJobDone = `-- name: MarkJobDone :exec
 UPDATE jobs SET status = 'done', updated_at = ? WHERE id = ?
 `
@@ -482,6 +986,21 @@ func (q *Queries) MarkJobFailed(ctx context.Context, arg MarkJobFailedParams) er
 	return err
 }
 
+const markJobLastError = `-- name: MarkJobLastError :exec
+UPDATE jobs SET last_error = ?, updated_at = ? WHERE id = ?
+`
+
+type MarkJobLastErrorParams struct {
+	LastError string `json:"last_error"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) MarkJobLastError(ctx context.Context, arg MarkJobLastErrorParams) error {
+	_, err := q.db.ExecContext(ctx, markJobLastError, arg.LastError, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const markPairCodeUsed = `-- name: MarkPairCodeUsed :exec
 UPDATE pair_codes SET used_at = ? WHERE code = ?
 `
@@ -507,6 +1026,21 @@ func (q *Queries) MaxDeviceRev(ctx context.Context) (interface{}, error) {
 	return rev, err
 }
 
+const retryJob = `-- name: RetryJob :exec
+UPDATE jobs SET status = 'queued', attempts = 0, run_after = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type RetryJobParams struct {
+	RunAfter  string `json:"run_after"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) RetryJob(ctx context.Context, arg RetryJobParams) error {
+	_, err := q.db.ExecContext(ctx, retryJob, arg.RunAfter, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const softDeleteDevice = `-- name: SoftDeleteDevice :exec
 UPDATE devices SET deleted_at = ?, updated_at = ?, rev = ?
 WHERE id = ?
@@ -526,6 +1060,21 @@ func (q *Queries) SoftDeleteDevice(ctx context.Context, arg SoftDeleteDevicePara
 		arg.Rev,
 		arg.ID,
 	)
+	return err
+}
+
+const softDeleteJob = `-- name: SoftDeleteJob :exec
+UPDATE jobs SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type SoftDeleteJobParams struct {
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+	ID        string  `json:"id"`
+}
+
+func (q *Queries) SoftDeleteJob(ctx context.Context, arg SoftDeleteJobParams) error {
+	_, err := q.db.ExecContext(ctx, softDeleteJob, arg.DeletedAt, arg.UpdatedAt, arg.ID)
 	return err
 }
 
@@ -566,9 +1115,24 @@ func (q *Queries) UpdateDocumentExcerptHero(ctx context.Context, arg UpdateDocum
 	return err
 }
 
+const updateFeedItemStatus = `-- name: UpdateFeedItemStatus :exec
+UPDATE feed_items SET status = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type UpdateFeedItemStatusParams struct {
+	Status    string `json:"status"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) UpdateFeedItemStatus(ctx context.Context, arg UpdateFeedItemStatusParams) error {
+	_, err := q.db.ExecContext(ctx, updateFeedItemStatus, arg.Status, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const upsertDocument = `-- name: UpsertDocument :one
-INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, source_feed_id, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 ON CONFLICT(canonical_url) DO UPDATE SET
   title          = excluded.title,
   markdown       = excluded.markdown,
@@ -576,22 +1140,24 @@ ON CONFLICT(canonical_url) DO UPDATE SET
   excerpt        = excluded.excerpt,
   hero_image_url = excluded.hero_image_url,
   author         = excluded.author,
+  source_feed_id = COALESCE(excluded.source_feed_id, documents.source_feed_id),
   updated_at     = excluded.updated_at,
   rev            = documents.rev + 1
-RETURNING id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev, deleted_at
+RETURNING id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, source_feed_id, created_at, updated_at, rev, deleted_at
 `
 
 type UpsertDocumentParams struct {
-	ID           string `json:"id"`
-	CanonicalUrl string `json:"canonical_url"`
-	Title        string `json:"title"`
-	Markdown     string `json:"markdown"`
-	FetchedAt    string `json:"fetched_at"`
-	Excerpt      string `json:"excerpt"`
-	HeroImageUrl string `json:"hero_image_url"`
-	Author       string `json:"author"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID           string  `json:"id"`
+	CanonicalUrl string  `json:"canonical_url"`
+	Title        string  `json:"title"`
+	Markdown     string  `json:"markdown"`
+	FetchedAt    string  `json:"fetched_at"`
+	Excerpt      string  `json:"excerpt"`
+	HeroImageUrl string  `json:"hero_image_url"`
+	Author       string  `json:"author"`
+	SourceFeedID *string `json:"source_feed_id"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
 }
 
 func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) (Document, error) {
@@ -604,6 +1170,7 @@ func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) 
 		arg.Excerpt,
 		arg.HeroImageUrl,
 		arg.Author,
+		arg.SourceFeedID,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -617,6 +1184,100 @@ func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) 
 		&i.Excerpt,
 		&i.HeroImageUrl,
 		&i.Author,
+		&i.SourceFeedID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const upsertFeed = `-- name: UpsertFeed :one
+INSERT INTO feeds (id, url, kind, title, config, last_polled_at, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(url) DO UPDATE SET
+  kind           = excluded.kind,
+  title          = excluded.title,
+  config         = excluded.config,
+  updated_at     = excluded.updated_at,
+  rev            = feeds.rev + 1
+RETURNING id, url, kind, title, config, last_polled_at, created_at, updated_at, rev, deleted_at
+`
+
+type UpsertFeedParams struct {
+	ID           string  `json:"id"`
+	Url          string  `json:"url"`
+	Kind         string  `json:"kind"`
+	Title        string  `json:"title"`
+	Config       string  `json:"config"`
+	LastPolledAt *string `json:"last_polled_at"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
+}
+
+func (q *Queries) UpsertFeed(ctx context.Context, arg UpsertFeedParams) (Feed, error) {
+	row := q.db.QueryRowContext(ctx, upsertFeed,
+		arg.ID,
+		arg.Url,
+		arg.Kind,
+		arg.Title,
+		arg.Config,
+		arg.LastPolledAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i Feed
+	err := row.Scan(
+		&i.ID,
+		&i.Url,
+		&i.Kind,
+		&i.Title,
+		&i.Config,
+		&i.LastPolledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const upsertFeedItem = `-- name: UpsertFeedItem :one
+INSERT INTO feed_items (id, feed_id, url, status, seen_at, created_at, updated_at, rev)
+VALUES (?, ?, ?, 'pending', ?, ?, ?, 0)
+ON CONFLICT(feed_id, url) DO UPDATE SET
+  seen_at    = excluded.seen_at,
+  updated_at = excluded.updated_at,
+  rev        = feed_items.rev + 1
+RETURNING id, feed_id, url, status, seen_at, created_at, updated_at, rev, deleted_at
+`
+
+type UpsertFeedItemParams struct {
+	ID        string `json:"id"`
+	FeedID    string `json:"feed_id"`
+	Url       string `json:"url"`
+	SeenAt    string `json:"seen_at"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func (q *Queries) UpsertFeedItem(ctx context.Context, arg UpsertFeedItemParams) (FeedItem, error) {
+	row := q.db.QueryRowContext(ctx, upsertFeedItem,
+		arg.ID,
+		arg.FeedID,
+		arg.Url,
+		arg.SeenAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i FeedItem
+	err := row.Scan(
+		&i.ID,
+		&i.FeedID,
+		&i.Url,
+		&i.Status,
+		&i.SeenAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,

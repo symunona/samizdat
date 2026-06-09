@@ -1,0 +1,16 @@
+# kind: rss | html_links | js_script
+
+# --- html_links ---
+kind: html_links
+selector: "article h2 a"
+url_pattern: "/\\d{4}/"
+base_url: "https://example.com"
+max_urls: 100
+
+# --- rss / atom ---
+# kind: rss
+# feed_url: "https://example.com/feed.xml"  # may differ from subscription URL
+
+# --- js_script ---
+# kind: js_script
+# (no extra fields — script path is always extractor.js in same dir)

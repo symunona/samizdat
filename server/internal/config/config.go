@@ -9,11 +9,12 @@ import (
 )
 
 type Config struct {
-	DataDir  string        `toml:"data_dir"`
-	VaultDir string        `toml:"vault_dir"`
-	DBPath   string        `toml:"db_path"`
-	CacheDir string        `toml:"cache_dir"`
-	Server   ServerSection `toml:"server"`
+	DataDir       string        `toml:"data_dir"`
+	VaultDir      string        `toml:"vault_dir"`
+	DBPath        string        `toml:"db_path"`
+	CacheDir      string        `toml:"cache_dir"`
+	ExtractorsDir string        `toml:"extractors_dir"`
+	Server        ServerSection `toml:"server"`
 }
 
 type ServerSection struct {
@@ -33,11 +34,12 @@ func Defaults() *Config {
 	home, _ := os.UserHomeDir()
 	data := filepath.Join(home, ".samizdat")
 	return &Config{
-		DataDir:  data,
-		VaultDir: filepath.Join(home, "samizdat"),
-		DBPath:   filepath.Join(data, "app.db"),
-		CacheDir: filepath.Join(data, "cache"),
-		Server:   ServerSection{Port: 8765},
+		DataDir:       data,
+		VaultDir:      filepath.Join(home, "samizdat"),
+		DBPath:        filepath.Join(data, "app.db"),
+		CacheDir:      filepath.Join(data, "cache"),
+		ExtractorsDir: filepath.Join(home, "dev", "sam", "extractors"),
+		Server:        ServerSection{Port: 8765},
 	}
 }
 

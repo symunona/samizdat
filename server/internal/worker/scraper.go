@@ -20,7 +20,8 @@ import (
 )
 
 type scrapePayload struct {
-	URL string `json:"url"`
+	URL    string  `json:"url"`
+	FeedID *string `json:"feed_id,omitempty"`
 }
 
 var utmParams = []string{
@@ -118,6 +119,7 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		Excerpt:      excerpt,
 		HeroImageUrl: heroImageURL,
 		Author:       author,
+		SourceFeedID: p.FeedID,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	})

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     status      TEXT    NOT NULL DEFAULT 'queued',
     attempts    INTEGER NOT NULL DEFAULT 0,
     run_after   TEXT    NOT NULL,
+    last_error  TEXT    NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0,
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS documents (
     excerpt         TEXT NOT NULL DEFAULT '',
     hero_image_url  TEXT NOT NULL DEFAULT '',
     author          TEXT NOT NULL DEFAULT '',
+    source_feed_id  TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     rev             INTEGER NOT NULL DEFAULT 0,
@@ -81,3 +83,43 @@ CREATE TABLE IF NOT EXISTS read_states (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS read_states_device_doc ON read_states(device_id, document_id);
+
+CREATE TABLE IF NOT EXISTS feeds (
+    id              TEXT    PRIMARY KEY,   -- UUID-v5 from url
+    url             TEXT    NOT NULL UNIQUE,
+    kind            TEXT    NOT NULL,      -- rss | html_links | js_script
+    title           TEXT    NOT NULL DEFAULT '',
+    config          TEXT    NOT NULL DEFAULT '{}',
+    last_polled_at  TEXT,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL,
+    rev             INTEGER NOT NULL DEFAULT 0,
+    deleted_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id          TEXT    PRIMARY KEY,
+    feed_id     TEXT    NOT NULL REFERENCES feeds(id),
+    interval_h  INTEGER NOT NULL DEFAULT 24,
+    next_run_at TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0,
+    deleted_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS feed_items (
+    id          TEXT    PRIMARY KEY,  -- UUID-v5 of (feed_id || url)
+    feed_id     TEXT    NOT NULL REFERENCES feeds(id),
+    url         TEXT    NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'pending',  -- pending | scraped | skipped
+    seen_at     TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL,
+    rev         INTEGER NOT NULL DEFAULT 0,
+    deleted_at  TEXT,
+    UNIQUE(feed_id, url)
+);
+CREATE INDEX IF NOT EXISTS feed_items_feed_id ON feed_items(feed_id);
+
+-- NOTE: last_error column is added to existing jobs tables via additive migration in open.go

@@ -24,10 +24,36 @@ type Document struct {
 	Excerpt      string  `json:"excerpt"`
 	HeroImageUrl string  `json:"hero_image_url"`
 	Author       string  `json:"author"`
+	SourceFeedID *string `json:"source_feed_id"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
 	Rev          int64   `json:"rev"`
 	DeletedAt    *string `json:"deleted_at"`
+}
+
+type Feed struct {
+	ID           string  `json:"id"`
+	Url          string  `json:"url"`
+	Kind         string  `json:"kind"`
+	Title        string  `json:"title"`
+	Config       string  `json:"config"`
+	LastPolledAt *string `json:"last_polled_at"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
+	Rev          int64   `json:"rev"`
+	DeletedAt    *string `json:"deleted_at"`
+}
+
+type FeedItem struct {
+	ID        string  `json:"id"`
+	FeedID    string  `json:"feed_id"`
+	Url       string  `json:"url"`
+	Status    string  `json:"status"`
+	SeenAt    string  `json:"seen_at"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+	Rev       int64   `json:"rev"`
+	DeletedAt *string `json:"deleted_at"`
 }
 
 type Job struct {
@@ -37,6 +63,7 @@ type Job struct {
 	Status    string  `json:"status"`
 	Attempts  int64   `json:"attempts"`
 	RunAfter  string  `json:"run_after"`
+	LastError string  `json:"last_error"`
 	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
 	Rev       int64   `json:"rev"`
@@ -77,4 +104,15 @@ type ReadState struct {
 type ServerSetting struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
+}
+
+type Subscription struct {
+	ID        string  `json:"id"`
+	FeedID    string  `json:"feed_id"`
+	IntervalH int64   `json:"interval_h"`
+	NextRunAt string  `json:"next_run_at"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
+	Rev       int64   `json:"rev"`
+	DeletedAt *string `json:"deleted_at"`
 }

@@ -67,8 +67,8 @@ UPDATE jobs SET status = ?, attempts = ?, run_after = ?, updated_at = ? WHERE id
 SELECT * FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1;
 
 -- name: UpsertDocument :one
-INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, source_feed_id, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 ON CONFLICT(canonical_url) DO UPDATE SET
   title          = excluded.title,
   markdown       = excluded.markdown,
@@ -76,6 +76,7 @@ ON CONFLICT(canonical_url) DO UPDATE SET
   excerpt        = excluded.excerpt,
   hero_image_url = excluded.hero_image_url,
   author         = excluded.author,
+  source_feed_id = COALESCE(excluded.source_feed_id, documents.source_feed_id),
   updated_at     = excluded.updated_at,
   rev            = documents.rev + 1
 RETURNING *;
@@ -123,3 +124,88 @@ SELECT * FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1;
 
 -- name: ListMediaAssetsByDocument :many
 SELECT * FROM media_assets WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at;
+
+-- name: UpsertFeed :one
+INSERT INTO feeds (id, url, kind, title, config, last_polled_at, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(url) DO UPDATE SET
+  kind           = excluded.kind,
+  title          = excluded.title,
+  config         = excluded.config,
+  updated_at     = excluded.updated_at,
+  rev            = feeds.rev + 1
+RETURNING *;
+
+-- name: GetFeed :one
+SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: GetFeedByURL :one
+SELECT * FROM feeds WHERE url = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: ListFeeds :many
+SELECT * FROM feeds WHERE deleted_at IS NULL ORDER BY created_at DESC;
+
+-- name: MarkFeedPolled :exec
+UPDATE feeds SET last_polled_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: InsertSubscription :one
+INSERT INTO subscriptions (id, feed_id, interval_h, next_run_at, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: GetSubscription :one
+SELECT * FROM subscriptions WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: ListSubscriptions :many
+SELECT * FROM subscriptions WHERE deleted_at IS NULL ORDER BY created_at DESC;
+
+-- name: ListDueSubscriptions :many
+SELECT * FROM subscriptions WHERE next_run_at <= ? AND deleted_at IS NULL;
+
+-- name: BumpSubscriptionNextRun :exec
+UPDATE subscriptions SET next_run_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: DeleteSubscription :exec
+UPDATE subscriptions SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: UpsertFeedItem :one
+INSERT INTO feed_items (id, feed_id, url, status, seen_at, created_at, updated_at, rev)
+VALUES (?, ?, ?, 'pending', ?, ?, ?, 0)
+ON CONFLICT(feed_id, url) DO UPDATE SET
+  seen_at    = excluded.seen_at,
+  updated_at = excluded.updated_at,
+  rev        = feed_items.rev + 1
+RETURNING *;
+
+-- name: ListFeedItemsByFeed :many
+SELECT * FROM feed_items WHERE feed_id = ? AND deleted_at IS NULL ORDER BY seen_at DESC;
+
+-- name: GetFeedItem :one
+SELECT * FROM feed_items WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: UpdateFeedItemStatus :exec
+UPDATE feed_items SET status = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: ListJobs :many
+SELECT * FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 100;
+
+-- name: ListJobsByStatus :many
+SELECT * FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100;
+
+-- name: ListJobsByKind :many
+SELECT * FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100;
+
+-- name: ListJobsByStatusAndKind :many
+SELECT * FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100;
+
+-- name: GetJob :one
+SELECT * FROM jobs WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: RetryJob :exec
+UPDATE jobs SET status = 'queued', attempts = 0, run_after = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: SoftDeleteJob :exec
+UPDATE jobs SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: MarkJobLastError :exec
+UPDATE jobs SET last_error = ?, updated_at = ? WHERE id = ?;
