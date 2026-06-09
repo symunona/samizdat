@@ -74,4 +74,14 @@ just dev        # run the server in dev
 just app        # run the Expo app
 ```
 
+## Philosophy
+
+There is an inherent conflict of interest between you as the publisher and the for-profit platforms out there.
+
+Capitalism's incentive is that you're locked in their ecosystem.
+
+Make your own feed, that serves you.
+
+---
+
 License: MIT
