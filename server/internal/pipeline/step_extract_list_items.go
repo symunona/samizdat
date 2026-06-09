@@ -227,7 +227,14 @@ func advanceSummarizing(ctx context.Context, q *store.Queries, item *trackedItem
 	}
 
 	pr, err := q.GetPipelineRun(ctx, item.PipelineRunID)
-	if err != nil || pr.Status != "done" {
+	if err != nil {
+		return // run gone, keep waiting
+	}
+	if pr.Status == "failed" {
+		item.Phase = itemPhaseDone // summarizer failed, leave highlight as-is
+		return
+	}
+	if pr.Status != "done" {
 		return // still running
 	}
 

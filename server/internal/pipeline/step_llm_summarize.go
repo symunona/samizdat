@@ -32,7 +32,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 		c.Model = "claude-haiku-4-5-20251001"
 	}
 	if c.Prompt == "" {
-		c.Prompt = "Summarize this article in max 1 paragraph or 5 bullet points, whichever fits the content better."
+		c.Prompt = "Summarize this article. Be brutal. No fluff, no filler. Drop articles, hedges, pleasantries. Max 3-5 bullets or 2 sentences. Each point = 1 fact + why it matters. If nothing matters, say so in one line."
 	}
 
 	// Use step-level provider if specified, otherwise fall back to global client.

@@ -194,4 +194,22 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	}); e != nil {
 		log.Printf("worker: mark failed: %v", e)
 	}
+
+	// When a pipeline step job permanently dies, mark the run failed so pollers don't wait forever.
+	if status == "dead" && job.Kind == "run_pipeline_step" {
+		var p runPipelineStepPayload
+		if e := json.Unmarshal([]byte(job.Payload), &p); e == nil && p.PipelineRunID != "" {
+			if e := w.q.UpdatePipelineRunProgress(ctx, store.UpdatePipelineRunProgressParams{
+				Status:    "failed",
+				StepIndex: 0,
+				State:     "{}",
+				UpdatedAt: now,
+				ID:        p.PipelineRunID,
+			}); e != nil {
+				log.Printf("worker: mark pipeline run %s failed: %v", p.PipelineRunID[:8], e)
+			} else {
+				log.Printf("worker: pipeline run %s marked failed (step job dead)", p.PipelineRunID[:8])
+			}
+		}
+	}
 }
