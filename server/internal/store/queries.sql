@@ -247,8 +247,8 @@ SELECT * FROM tags WHERE name = ? AND deleted_at IS NULL LIMIT 1;
 
 -- name: ListTagsWithCounts :many
 SELECT t.id, t.name, t.color, t.created_at, t.updated_at, t.rev, t.deleted_at,
-       COALESCE(SUM(CASE WHEN dt.deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS doc_count,
-       COALESCE(SUM(CASE WHEN at2.deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS ann_count
+       COALESCE(SUM(CASE WHEN dt.id IS NOT NULL AND dt.deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS doc_count,
+       COALESCE(SUM(CASE WHEN at2.id IS NOT NULL AND at2.deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS ann_count
 FROM tags t
 LEFT JOIN document_tags dt ON dt.tag_id = t.id
 LEFT JOIN annotation_tags at2 ON at2.tag_id = t.id

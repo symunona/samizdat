@@ -115,8 +115,8 @@ just save-debug-session
 ```bash
 # Opens with saved state — app starts already paired/authenticated
 just debug-session
-# or directly:
-agent-browser --state tmp/debug-session/state.json open http://localhost:8765
+# or directly (note: --no-sandbox required on this Linux host):
+AGENT_BROWSER_ARGS="--no-sandbox" agent-browser --state tmp/debug-session/state.json open http://localhost:8765
 ```
 
 ### Rules

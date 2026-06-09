@@ -243,8 +243,10 @@ debug-session:
     mkdir -p "{{justfile_directory()}}/tmp/debug-session"
     STATE="{{justfile_directory()}}/tmp/debug-session/state.json"
     URL="${URL:-http://localhost:8765}"
-    echo "Opening $URL with debug session (state: $STATE)"
+    export AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:---no-sandbox}"
+    agent-browser close --all 2>/dev/null || true
     if [ -f "$STATE" ]; then
+        echo "Restoring session from $STATE"
         agent-browser --state "$STATE" open "$URL"
     else
         echo "No saved state — opening fresh. After pairing, run: just save-debug-session"
