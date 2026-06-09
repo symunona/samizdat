@@ -34,6 +34,21 @@ export async function removeServerUrl(url: string): Promise<void> {
 
 const LAST_URL_KEY = 'samizdat_last_url'
 
+const THEME_KEY = 'samizdat_theme'
+
+export async function saveTheme(theme: 'dark' | 'light'): Promise<void> {
+  await AsyncStorage.setItem(THEME_KEY, theme)
+}
+
+export async function loadTheme(): Promise<'dark' | 'light'> {
+  try {
+    const raw = await AsyncStorage.getItem(THEME_KEY)
+    return raw === 'light' ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
+
 export async function saveLastSuccessfulUrl(url: string): Promise<void> {
   await AsyncStorage.setItem(LAST_URL_KEY, url)
 }

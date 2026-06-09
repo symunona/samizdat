@@ -26,14 +26,41 @@ const dark = {
   },
 } as const
 
+const light = {
+  colors: {
+    background: '#f9f9f6',
+    surface: '#ffffff',
+    border: '#e5e5e0',
+    text: '#1a1a1a',
+    muted: '#6b7280',
+    placeholder: '#9ca3af',
+    accent: '#e8743b',
+    online: '#16a34a',
+    error: '#dc2626',
+  },
+  spacing: {
+    xs: 4,
+    sm: 8,
+    md: 14,
+    lg: 22,
+    xl: 28,
+  },
+  radius: {
+    sm: 6,
+    md: 10,
+    lg: 16,
+  },
+} as const
+
 declare module 'react-native-unistyles' {
   export interface UnistylesThemes {
     dark: typeof dark
+    light: typeof light
   }
 }
 
 StyleSheet.configure({
-  themes: { dark },
+  themes: { dark, light },
   settings: {
     initialTheme: 'dark',
     CSSVars: false, // use direct values in RNW inline styles; CSS vars don't apply to RN inline styles
