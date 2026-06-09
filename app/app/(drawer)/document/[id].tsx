@@ -32,7 +32,6 @@ import {
   fetchPipelines,
   fetchDocumentHighlights,
   fetchDocumentPipelineRuns,
-  deleteHighlight,
   deleteDocumentHighlights,
   runPipelineOnDocument,
 } from '../../../src/api'
@@ -396,6 +395,25 @@ export default function DocumentViewer() {
 
   const progressPct = Math.round(scrollProgress * 100)
 
+  const displayHtml = useMemo(() => {
+    if (!htmlContent) return htmlContent
+    if (highlights.length === 0) return htmlContent
+    const kindColors: Record<string, string> = {
+      summary: theme.colors.accent,
+      link: '#6b8cff',
+      note: '#b8a0ff',
+    }
+    const cards = highlights.map(hl => {
+      const kc = kindColors[hl.kind] ?? '#888'
+      const titleHtml = hl.title
+        ? `<div style="font-size:13px;font-weight:600;color:${theme.colors.text};flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(hl.title)}</div>`
+        : ''
+      return `<div style="background:${theme.colors.surface};border:1px solid ${theme.colors.border};border-radius:10px;padding:14px;margin-bottom:10px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="background:${kc};color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;text-transform:uppercase">${escHtml(hl.kind)}</span>${titleHtml}</div><p style="margin:0;font-size:14px;line-height:1.6;color:${theme.colors.text}">${escHtml(hl.body)}</p></div>`
+    }).join('')
+    const section = `<div style="padding:12px;background:${theme.colors.background}">${cards}</div>`
+    return htmlContent.replace(/<body([^>]*)>/i, `<body$1>${section}`)
+  }, [htmlContent, highlights, theme])
+
   return (
     <SafeAreaView style={s.screen}>
       <Animated.View style={[s.header, { transform: [{ translateY: headerAnim }] }]} onLayout={handleHeaderLayout}>
@@ -424,30 +442,12 @@ export default function DocumentViewer() {
         </View>
       ) : htmlContent ? (
         <View style={s.contentArea}>
-          {highlights.length > 0 && (
-            <ScrollView
-              horizontal
-              style={s.hlStrip}
-              contentContainerStyle={s.hlStripContent}
-              showsHorizontalScrollIndicator={false}
-            >
-              {highlights.map(hl => (
-                <View key={hl.id} style={s.hlCard}>
-                  <View style={s.hlCardKind}>
-                    <Text style={s.hlCardKindText}>{hl.kind}</Text>
-                  </View>
-                  {hl.title ? <Text style={s.hlCardTitle} numberOfLines={1}>{hl.title}</Text> : null}
-                  <Text style={s.hlCardBody} numberOfLines={4}>{hl.body}</Text>
-                </View>
-              ))}
-            </ScrollView>
-          )}
           {Platform.OS === 'web' ? (
             <View style={s.webView}>
               {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
               <iframe
                 ref={iframeRef}
-                srcDoc={htmlContent}
+                srcDoc={displayHtml ?? ''}
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' } as any}
                 onLoad={handleDocumentLoad}
               />
@@ -455,7 +455,7 @@ export default function DocumentViewer() {
           ) : (
             <WebView
               ref={webViewRef}
-              source={{ html: htmlContent, baseUrl: activeUrl ?? '' }}
+              source={{ html: displayHtml ?? '', baseUrl: activeUrl ?? '' }}
               style={s.webView}
               onMessage={handleMessage}
               onLoad={handleDocumentLoad}
@@ -595,6 +595,10 @@ export default function DocumentViewer() {
   )
 }
 
+function escHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
 type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
@@ -617,17 +621,7 @@ function buildStyles(t: Theme) {
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
     retryText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
     contentArea: { flex: 1, marginTop: 56 },
-    hlStrip: { flexShrink: 0, borderBottomWidth: 1, borderBottomColor: t.colors.border, backgroundColor: t.colors.surface },
-    hlStripContent: { padding: t.spacing.sm, gap: t.spacing.sm, flexDirection: 'row' },
-    hlCard: {
-      width: 200, backgroundColor: t.colors.background,
-      borderRadius: t.radius.sm, borderWidth: 1, borderColor: t.colors.border,
-      padding: t.spacing.sm, gap: 4,
-    },
-    hlCardKind: { backgroundColor: '#1e3a5f', borderRadius: 3, paddingHorizontal: 5, paddingVertical: 2, alignSelf: 'flex-start' },
-    hlCardKindText: { color: '#7dd3fc', fontSize: 10, fontWeight: '700' },
-    hlCardTitle: { color: t.colors.text, fontSize: 12, fontWeight: '600', lineHeight: 16 },
-    hlCardBody: { color: t.colors.muted, fontSize: 12, lineHeight: 17 },
+
     webView: { flex: 1, backgroundColor: t.colors.background },
     progressBar: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, overflow: 'hidden' },
     progressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: t.colors.accent, opacity: 0.6 },
@@ -721,13 +715,6 @@ function HighlightsSection({
   const { theme } = useUnistyles()
   const s = useMemo(() => buildHlStyles(theme), [theme])
 
-  const handleDeleteOne = useCallback(async (hlId: string) => {
-    setHlLoading(true)
-    try { await deleteHighlight(serverUrl, token, hlId) } catch { /* */ }
-    reload()
-    setHlLoading(false)
-  }, [serverUrl, token, reload, setHlLoading])
-
   const handleDeleteAll = useCallback(async () => {
     setHlLoading(true)
     try { await deleteDocumentHighlights(serverUrl, token, docId) } catch { /* */ }
@@ -771,21 +758,6 @@ function HighlightsSection({
                 <Text style={s.statusText}>{run.status}</Text>
               </View>
             </View>
-            {runHighlights.map(hl => (
-              <View key={hl.id} style={s.hlItem}>
-                <View style={s.hlKindBadge}>
-                  <Text style={s.hlKindText}>{hl.kind}</Text>
-                </View>
-                <Text style={s.hlBody} numberOfLines={4}>{hl.body}</Text>
-                <Pressable
-                  style={s.hlDeleteBtn}
-                  onPress={() => handleDeleteOne(hl.id)}
-                  disabled={hlLoading}
-                >
-                  <Text style={s.hlDeleteText}>×</Text>
-                </Pressable>
-              </View>
-            ))}
             {runHighlights.length === 0 && run.status !== 'done' && (
               <Text style={s.waiting}>
                 {run.status === 'running' || run.status === 'queued' ? 'Running…' : 'No highlights'}
@@ -846,19 +818,6 @@ function buildHlStyles(t: ReturnType<typeof useUnistyles>['theme']) {
     statusFailed: { backgroundColor: '#7f1d1d' },
     statusRunning: { backgroundColor: '#1e3a5f' },
     statusText: { color: '#fff', fontSize: 10, fontWeight: '600' },
-    hlItem: {
-      flexDirection: 'row', alignItems: 'flex-start', gap: t.spacing.sm,
-      backgroundColor: t.colors.background, borderRadius: 6,
-      padding: t.spacing.sm, marginBottom: t.spacing.sm,
-    },
-    hlKindBadge: {
-      backgroundColor: t.colors.accent, borderRadius: 4,
-      paddingHorizontal: 5, paddingVertical: 2, flexShrink: 0,
-    },
-    hlKindText: { color: '#0b0b0c', fontSize: 10, fontWeight: '700' },
-    hlBody: { flex: 1, color: t.colors.text, fontSize: 12, lineHeight: 17 },
-    hlDeleteBtn: { flexShrink: 0, padding: 2 },
-    hlDeleteText: { color: t.colors.muted, fontSize: 18, lineHeight: 20 },
     waiting: { color: t.colors.muted, fontSize: 12, marginBottom: t.spacing.sm },
     rerunBtn: {
       borderWidth: 1, borderColor: t.colors.accent, borderRadius: 6,
