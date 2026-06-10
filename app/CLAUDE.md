@@ -94,6 +94,18 @@ useEffect(() => {
 
 **Writing connection data** (e.g. after pairing): call `reload()` from `useConnection()` — do not call `saveConnection` and forget. `reload()` re-reads storage and triggers a fresh probe, keeping the provider in sync.
 
+## Re-connecting after session expiry (local testing)
+
+If the browser loses its session (cleared storage, expired token, fresh state):
+
+```bash
+just sam connect
+```
+
+Copy any of the printed links, e.g. `http://localhost:8765/connect?code=ABCD-EFGH`, and open it in the browser. The connect page reads `?code=`, uses the page's own origin as the server URL, and auto-pairs immediately — no manual form filling needed.
+
+The `?c=<base64>` param is for the paste-string / QR-scan flow (mobile, no terminal).
+
 ## Debugging with agent-browser
 
 **Always reuse the persisted debug session** — never start fresh from an unpaired state.
