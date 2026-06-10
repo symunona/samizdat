@@ -11,4 +11,5 @@ var Root = &cobra.Command{
 
 func init() {
 	Root.AddCommand(setupCmd)
+	Root.AddCommand(archiveCmd)
 }
