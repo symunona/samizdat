@@ -67,34 +67,30 @@ func runConnect(_ *cobra.Command, _ []string) error {
 	exp, _ := time.Parse(time.RFC3339, result.ExpiresAt)
 	ttl := time.Until(exp).Round(time.Second)
 
-	// QR payload: JSON so QR scan / connect string can auto-fill code + URLs.
-	qrPayload, _ := json.Marshal(map[string]any{
+	// Pick one address: prefer Tailscale/LAN over localhost.
+	addr := bestAddr(result.ServerURLs)
+
+	// Payload: one address without scheme — keeps base64 short.
+	payload, _ := json.Marshal(map[string]any{
 		"v":    1,
 		"code": result.Code,
-		"urls": result.ServerURLs,
+		"urls": []string{stripScheme(addr)},
 	})
+	connectStr := base64.StdEncoding.EncodeToString(payload)
 
 	fmt.Println()
 	fmt.Println("  Samizdat pairing code")
 	fmt.Println("  ─────────────────────")
 	fmt.Printf("  Code:      %s\n", result.Code)
 	fmt.Printf("  Expires:   in %s\n", ttl)
-	if len(result.ServerURLs) > 0 {
-		fmt.Println("  Click to connect (opens browser, auto-pairs):")
-		for _, u := range result.ServerURLs {
-			// Per-URL payload puts this address first so the app connects to the right endpoint.
-			perURL, _ := json.Marshal(map[string]any{
-				"v":    1,
-				"code": result.Code,
-				"urls": prioritizeURL(u, result.ServerURLs),
-			})
-			fmt.Printf("    %s/connect?c=%s\n", u, base64.StdEncoding.EncodeToString(perURL))
-		}
+	if addr != "" {
+		fullURL := fmt.Sprintf("%s/connect?c=%s", addr, connectStr)
+		fmt.Printf("  Connect:   %s\n", osc8(fullURL, stripScheme(addr)))
 	}
 	fmt.Println()
 
 	// Terminal QR (ASCII art)
-	qrterminal.GenerateWithConfig(string(qrPayload), qrterminal.Config{
+	qrterminal.GenerateWithConfig(string(payload), qrterminal.Config{
 		Level:     qrterminal.L,
 		Writer:    os.Stdout,
 		BlackChar: qrterminal.BLACK,
@@ -102,21 +98,36 @@ func runConnect(_ *cobra.Command, _ []string) error {
 		QuietZone: 1,
 	})
 
-	// Connect string: base64 of the full JSON payload — paste into the app's connect field.
+	// Connect string: paste into app's connect field.
 	fmt.Println()
 	fmt.Println("  Connect string (paste into app):")
-	fmt.Printf("  %s\n", base64.StdEncoding.EncodeToString(qrPayload))
+	fmt.Printf("  %s\n", connectStr)
 	fmt.Println()
 	return nil
 }
 
-// prioritizeURL returns urls with target moved to position 0.
-func prioritizeURL(target string, urls []string) []string {
-	out := []string{target}
+// bestAddr picks the best server address: last non-localhost URL, fallback to first.
+func bestAddr(urls []string) string {
+	var best string
 	for _, u := range urls {
-		if u != target {
-			out = append(out, u)
+		if !strings.HasPrefix(u, "http://localhost") && !strings.HasPrefix(u, "https://localhost") {
+			best = u
 		}
 	}
-	return out
+	if best == "" && len(urls) > 0 {
+		best = urls[0]
+	}
+	return best
+}
+
+// stripScheme removes http:// or https:// prefix.
+func stripScheme(u string) string {
+	u = strings.TrimPrefix(u, "https://")
+	u = strings.TrimPrefix(u, "http://")
+	return u
+}
+
+// osc8 wraps text as an OSC 8 hyperlink so terminals render it clickable without showing the full URL.
+func osc8(href, text string) string {
+	return fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", href, text)
 }

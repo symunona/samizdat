@@ -69,7 +69,8 @@ function parseConnectString(raw: string): ParseResult {
     if (obj.v !== 1 || typeof obj.code !== 'string' || !Array.isArray(obj.urls)) {
       return { ok: false, reason: 'Unrecognised format' }
     }
-    return { ok: true, code: obj.code as string, urls: obj.urls as string[] }
+    const urls = (obj.urls as string[]).map(u => /^https?:\/\//.test(u) ? u : `http://${u}`)
+    return { ok: true, code: obj.code as string, urls }
   } catch {
     return { ok: false, reason: 'Invalid connect string' }
   }
