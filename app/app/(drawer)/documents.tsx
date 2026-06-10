@@ -12,7 +12,7 @@ import {
 } from 'react-native'
 import { Link, useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { fetchDocuments, submitScrapeJob } from '../../src/api'
+import { fetchDocuments, submitScrapeJob, deleteDocument } from '../../src/api'
 import type { Document } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
 
@@ -43,6 +43,62 @@ export default function DocumentsScreen() {
   const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'queued' | 'error'>('idle')
   const [submitError, setSubmitError] = useState<string | null>(null)
   const queuedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // pending delete: id → { doc, countdown }
+  const [pendingDeletes, setPendingDeletes] = useState<Record<string, { doc: Document; countdown: number }>>({})
+  const pendingTimers = useRef<Record<string, ReturnType<typeof setInterval>>>({})
+
+  const startDelete = useCallback(
+    (doc: Document) => {
+      // optimistic remove from list
+      setDocuments((prev) => prev.filter((d) => d.id !== doc.id))
+      setPendingDeletes((prev) => ({ ...prev, [doc.id]: { doc, countdown: 5 } }))
+
+      const tick = setInterval(() => {
+        setPendingDeletes((prev) => {
+          const entry = prev[doc.id]
+          if (!entry || entry.countdown <= 1) return prev
+          return { ...prev, [doc.id]: { ...entry, countdown: entry.countdown - 1 } }
+        })
+      }, 1000)
+
+      pendingTimers.current[doc.id] = tick
+
+      setTimeout(async () => {
+        clearInterval(tick)
+        delete pendingTimers.current[doc.id]
+        setPendingDeletes((prev) => {
+          const next = { ...prev }
+          delete next[doc.id]
+          return next
+        })
+        if (!activeUrl || !token) return
+        try {
+          await deleteDocument(activeUrl, token, doc.id)
+        } catch {
+          // restore on failure
+          setDocuments((prev) => [doc, ...prev])
+        }
+      }, 5000)
+    },
+    [activeUrl, token],
+  )
+
+  const undoDelete = useCallback((id: string) => {
+    const entry = pendingDeletes[id]
+    if (!entry) return
+    clearInterval(pendingTimers.current[id])
+    delete pendingTimers.current[id]
+    setPendingDeletes((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    setDocuments((prev) => {
+      if (prev.find((d) => d.id === id)) return prev
+      return [entry.doc, ...prev]
+    })
+  }, [pendingDeletes])
 
   // Redirect only when no credentials stored
   useEffect(() => {
@@ -102,25 +158,34 @@ export default function DocumentsScreen() {
   function renderItem({ item }: { item: Document }) {
     const displayTitle = item.title?.trim() ? item.title : item.canonical_url
     return (
-      <Link href={`/document/${item.id}?from=/documents`} style={s.item}>
-        <Text style={s.itemTitle} numberOfLines={2}>
-          {displayTitle}
-        </Text>
-        <Text style={s.itemUrl} numberOfLines={1}>
-          {item.canonical_url}
-        </Text>
-        <Text style={s.itemDate}>Fetched {formatDate(item.fetched_at)}</Text>
-        {(item.highlight_count && item.highlight_count > 0) || (item.annotation_count && item.annotation_count > 0) ? (
-          <View style={s.badgeRow}>
-            {item.highlight_count && item.highlight_count > 0 ? (
-              <Text style={s.hlBadge}>◆ {item.highlight_count} highlight{item.highlight_count > 1 ? 's' : ''}</Text>
-            ) : null}
-            {item.annotation_count && item.annotation_count > 0 ? (
-              <Text style={s.annBadge}>● {item.annotation_count} annotation{item.annotation_count > 1 ? 's' : ''}</Text>
-            ) : null}
-          </View>
-        ) : null}
-      </Link>
+      <View style={s.itemRow}>
+        <Link href={`/document/${item.id}?from=/documents`} style={s.item}>
+          <Text style={s.itemTitle} numberOfLines={2}>
+            {displayTitle}
+          </Text>
+          <Text style={s.itemUrl} numberOfLines={1}>
+            {item.canonical_url}
+          </Text>
+          <Text style={s.itemDate}>Fetched {formatDate(item.fetched_at)}</Text>
+          {(item.highlight_count && item.highlight_count > 0) || (item.annotation_count && item.annotation_count > 0) ? (
+            <View style={s.badgeRow}>
+              {item.highlight_count && item.highlight_count > 0 ? (
+                <Text style={s.hlBadge}>◆ {item.highlight_count} highlight{item.highlight_count > 1 ? 's' : ''}</Text>
+              ) : null}
+              {item.annotation_count && item.annotation_count > 0 ? (
+                <Text style={s.annBadge}>● {item.annotation_count} annotation{item.annotation_count > 1 ? 's' : ''}</Text>
+              ) : null}
+            </View>
+          ) : null}
+        </Link>
+        <Pressable
+          style={({ pressed }) => [s.deleteBtn, pressed && s.deleteBtnPressed]}
+          onPress={() => startDelete(item)}
+          hitSlop={8}
+        >
+          <Text style={s.deleteBtnText}>✕</Text>
+        </Pressable>
+      </View>
     )
   }
 
@@ -189,6 +254,24 @@ export default function DocumentsScreen() {
           <Text style={s.feedbackError}>{submitError}</Text>
         </View>
       )}
+
+      {/* Undo delete toasts */}
+      {Object.entries(pendingDeletes).map(([id, { doc, countdown }]) => {
+        const title = doc.title?.trim() ? doc.title : doc.canonical_url
+        return (
+          <View key={id} style={s.undoRow}>
+            <Text style={s.undoText} numberOfLines={1}>
+              Deleted: {title}
+            </Text>
+            <Pressable
+              style={({ pressed }) => [s.undoBtn, pressed && s.undoBtnPressed]}
+              onPress={() => undoDelete(id)}
+            >
+              <Text style={s.undoBtnText}>Undo ({countdown}s)</Text>
+            </Pressable>
+          </View>
+        )
+      })}
 
       {/* Document list */}
       {fetchLoading && !refreshing ? (
@@ -281,6 +364,9 @@ function buildStyles(t: Theme) {
     emptyText: { color: t.colors.muted, fontSize: 15, textAlign: 'center' },
     separator: { height: 1, backgroundColor: t.colors.border, marginLeft: t.spacing.md },
     item: {
+      flex: 1,
+      flexShrink: 1,
+      minWidth: 0,
       paddingHorizontal: t.spacing.md,
       paddingVertical: t.spacing.md,
       backgroundColor: t.colors.background,
@@ -295,5 +381,39 @@ function buildStyles(t: Theme) {
     badgeRow: { flexDirection: 'row', gap: 8, marginTop: 2 },
     annBadge: { color: '#e8743b', fontSize: 11, fontWeight: '600' },
     hlBadge: { color: '#7dd3fc', fontSize: 11, fontWeight: '600' },
+    itemRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: t.colors.background,
+      overflow: 'hidden',
+    },
+    deleteBtn: {
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.md,
+      justifyContent: 'center',
+      alignItems: 'center',
+      flexShrink: 0,
+    },
+    deleteBtnPressed: { opacity: 0.5 },
+    deleteBtnText: { color: t.colors.muted, fontSize: 16, fontWeight: '400' },
+    undoRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.sm,
+      backgroundColor: '#2a1a0e',
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.border,
+    },
+    undoText: { color: '#f5c28a', fontSize: 13, flex: 1, marginRight: t.spacing.sm },
+    undoBtn: {
+      backgroundColor: '#e8743b',
+      borderRadius: t.radius.sm,
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: 4,
+    },
+    undoBtnPressed: { opacity: 0.75 },
+    undoBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   })
 }
