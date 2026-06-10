@@ -58,9 +58,11 @@ export default function HighlightCard({
       </View>
 
       <View style={s.bodyClipMax}>
-        <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={onDocumentPress}>
-          {item.body}
-        </MarkdownBody>
+        <View>
+          <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={onDocumentPress}>
+            {item.body}
+          </MarkdownBody>
+        </View>
         {isClipped && (
           <Pressable style={s.expandOverlay} onPress={() => setModalOpen(true)}>
             <Text style={s.expandText}>Tap to expand</Text>

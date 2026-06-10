@@ -14,7 +14,7 @@ export default function ImageViewer({ src, alt }: Props) {
 
   return (
     <>
-      <Pressable onPress={() => setOpen(true)}>
+      <Pressable onPress={() => setOpen(true)} style={s.thumbWrap}>
         <Image
           source={{ uri: src }}
           style={s.thumb}
@@ -66,6 +66,10 @@ export default function ImageViewer({ src, alt }: Props) {
 }
 
 const s = StyleSheet.create({
+  thumbWrap: {
+    width: '100%',
+    alignSelf: 'stretch',
+  },
   thumb: {
     width: '100%',
     height: 220,
