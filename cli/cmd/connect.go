@@ -83,9 +83,17 @@ func runConnect(_ *cobra.Command, _ []string) error {
 	fmt.Println("  ─────────────────────")
 	fmt.Printf("  Code:      %s\n", result.Code)
 	fmt.Printf("  Expires:   in %s\n", ttl)
-	if addr != "" {
-		fullURL := fmt.Sprintf("%s/connect?c=%s", addr, connectStr)
-		fmt.Printf("  Connect:   %s\n", osc8(fullURL, stripScheme(addr)))
+	if len(result.ServerURLs) > 0 {
+		fmt.Println("  Click to connect:")
+		for _, u := range result.ServerURLs {
+			perURL, _ := json.Marshal(map[string]any{
+				"v":    1,
+				"code": result.Code,
+				"urls": []string{stripScheme(u)},
+			})
+			fullLink := fmt.Sprintf("%s/connect?c=%s", u, base64.StdEncoding.EncodeToString(perURL))
+			fmt.Printf("    %s\n", osc8(fullLink, stripScheme(u)))
+		}
 	}
 	fmt.Println()
 
