@@ -47,6 +47,7 @@ import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
 import TagSelectorModal from '../../../src/TagSelectorModal'
 import HighlightCard from '../../../src/HighlightCard'
+import { mdToHtml } from '../../../src/markdownToHtml'
 
 const DEBOUNCE_MS = 1000
 const POLL_INTERVAL_MS = 2000
@@ -468,7 +469,7 @@ export default function DocumentViewer() {
       const titleHtml = hl.title
         ? `<div style="font-size:13px;font-weight:600;color:${theme.colors.text};flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(hl.title)}</div>`
         : ''
-      return `<div style="background:${theme.colors.surface};border:1px solid ${theme.colors.border};border-radius:10px;padding:14px;margin-bottom:10px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="background:${kc};color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;text-transform:uppercase">${escHtml(hl.kind)}</span>${titleHtml}</div><p style="margin:0;font-size:14px;line-height:1.6;color:${theme.colors.text}">${escHtml(hl.body)}</p></div>`
+      return `<div style="background:${theme.colors.surface};border:1px solid ${theme.colors.border};border-radius:10px;padding:14px;margin-bottom:10px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="background:${kc};color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;text-transform:uppercase">${escHtml(hl.kind)}</span>${titleHtml}</div><p style="margin:0;font-size:14px;line-height:1.6;color:${theme.colors.text}">${mdToHtml(hl.body)}</p></div>`
     }).join('')
     const section = `<div style="padding:12px;background:${theme.colors.background}">${cards}</div>`
     return htmlContent.replace(/<body([^>]*)>/i, `<body$1>${section}`)
