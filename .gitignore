@@ -45,7 +45,7 @@ web-build/
 /clipper/*.zip
 
 # --- App web build output ---
-/app/public/
+/app/dist/
 
 # --- Claude Code internal state ---
 .claude/
