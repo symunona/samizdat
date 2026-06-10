@@ -70,9 +70,16 @@ func runArchiveCurrent(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("create archives dir: %w", err)
 	}
 
+	// Checkpoint WAL into main file so the copy is complete.
+	fmt.Println("Checkpointing WAL...")
+	if err := checkpointDB(cfg.DBPath); err != nil {
+		return fmt.Errorf("checkpoint: %w", err)
+	}
+
 	ts := time.Now().Format("2006-01-02T15-04-05")
 	dst := filepath.Join(archDir, fmt.Sprintf("app-%s.db", ts))
 
+	fmt.Printf("Archives dir: %s\n", archDir)
 	if err := copyFile(cfg.DBPath, dst); err != nil {
 		return fmt.Errorf("copy DB: %w", err)
 	}
@@ -115,6 +122,16 @@ func resetDB(dbPath string) error {
 	defer func() { _ = tx.Rollback() }()
 
 	for _, t := range tables {
+		var exists int
+		if err := tx.QueryRow(
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", t,
+		).Scan(&exists); err != nil {
+			return fmt.Errorf("check table %s: %w", t, err)
+		}
+		if exists == 0 {
+			fmt.Printf("  skipped %s (not in schema)\n", t)
+			continue
+		}
 		if _, err := tx.Exec("DELETE FROM " + t); err != nil { //nolint:gosec
 			return fmt.Errorf("clear %s: %w", t, err)
 		}
@@ -129,6 +146,18 @@ func resetDB(dbPath string) error {
 		return fmt.Errorf("vacuum: %w", err)
 	}
 
+	return nil
+}
+
+func checkpointDB(dbPath string) error {
+	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
+	if err != nil {
+		return fmt.Errorf("open DB: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return fmt.Errorf("wal_checkpoint: %w", err)
+	}
 	return nil
 }
 
@@ -203,6 +232,15 @@ func runArchiveRestore(_ *cobra.Command, args []string) error {
 	if err := copyFile(src, cfg.DBPath); err != nil {
 		return fmt.Errorf("restore: %w", err)
 	}
+
+	// Remove stale WAL/SHM so they don't corrupt the restored state.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		p := cfg.DBPath + suffix
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			fmt.Printf("Warning: could not remove %s: %v\n", p, err)
+		}
+	}
+
 	fmt.Printf("Restored %s → %s\n", src, cfg.DBPath)
 	return nil
 }
