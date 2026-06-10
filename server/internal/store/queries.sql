@@ -193,9 +193,9 @@ SELECT * FROM feed_items WHERE id = ? AND deleted_at IS NULL LIMIT 1;
 -- name: UpdateFeedItemStatus :exec
 UPDATE feed_items SET status = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
--- name: ClearCompletedJobs :exec
+-- name: ClearCompletedJobs :execresult
 UPDATE jobs SET deleted_at = ?, updated_at = ?
-WHERE status IN ('done', 'dead') AND deleted_at IS NULL;
+WHERE status IN ('done', 'dead', 'queued') AND deleted_at IS NULL;
 
 -- name: ListJobs :many
 SELECT * FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100;

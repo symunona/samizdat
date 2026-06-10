@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 )
 
 const bumpSubscriptionNextRun = `-- name: BumpSubscriptionNextRun :exec
@@ -61,9 +62,9 @@ func (q *Queries) ClaimNextJob(ctx context.Context, arg ClaimNextJobParams) (Job
 	return i, err
 }
 
-const clearCompletedJobs = `-- name: ClearCompletedJobs :exec
+const clearCompletedJobs = `-- name: ClearCompletedJobs :execresult
 UPDATE jobs SET deleted_at = ?, updated_at = ?
-WHERE status IN ('done', 'dead') AND deleted_at IS NULL
+WHERE status IN ('done', 'dead', 'queued') AND deleted_at IS NULL
 `
 
 type ClearCompletedJobsParams struct {
@@ -71,9 +72,8 @@ type ClearCompletedJobsParams struct {
 	UpdatedAt string  `json:"updated_at"`
 }
 
-func (q *Queries) ClearCompletedJobs(ctx context.Context, arg ClearCompletedJobsParams) error {
-	_, err := q.db.ExecContext(ctx, clearCompletedJobs, arg.DeletedAt, arg.UpdatedAt)
-	return err
+func (q *Queries) ClearCompletedJobs(ctx context.Context, arg ClearCompletedJobsParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, clearCompletedJobs, arg.DeletedAt, arg.UpdatedAt)
 }
 
 const deleteAnnotationTag = `-- name: DeleteAnnotationTag :exec

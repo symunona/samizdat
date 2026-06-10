@@ -102,7 +102,8 @@ export default function JobsScreen() {
     if (!activeUrl || !token || clearing) return
     setClearing(true)
     try {
-      await clearCompletedJobs(activeUrl, token)
+      const n = await clearCompletedJobs(activeUrl, token)
+      toast(n > 0 ? `Cleared ${n} job${n === 1 ? '' : 's'}` : 'No jobs to clear', 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Failed to clear jobs', 'error')
     } finally {

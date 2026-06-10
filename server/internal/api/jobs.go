@@ -116,17 +116,19 @@ func (h *jobsHandler) retry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
 }
 
-// DELETE /api/v1/jobs — soft-delete all done/dead jobs.
+// DELETE /api/v1/jobs — soft-delete all done/dead/queued jobs.
 func (h *jobsHandler) clearCompleted(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	if err := h.q.ClearCompletedJobs(r.Context(), store.ClearCompletedJobsParams{
+	res, err := h.q.ClearCompletedJobs(r.Context(), store.ClearCompletedJobsParams{
 		DeletedAt: &now,
 		UpdatedAt: now,
-	}); err != nil {
+	})
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	n, _ := res.RowsAffected()
+	writeJSON(w, http.StatusOK, map[string]int64{"cleared": n})
 }
 
 // DELETE /api/v1/jobs/{id} — soft delete.
