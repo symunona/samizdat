@@ -2,6 +2,8 @@
 
 Self-hostable read → curate → cite → publish pipeline. Single-user, server-is-hub, offline-first. See `README.md` for the pitch, `ARCHITECTURE.md` for the design.
 
+Always get the last 5 git commits to gain context!
+
 ## Monorepo layout
 - `server/` — Go. REST API + cron worker + engine (scrape, dedup, pipeline, store, sync, TLS). Single static binary.
 - `cli/` — Go. The `sam` binary; every command headless. Shares the engine with `server/`.
