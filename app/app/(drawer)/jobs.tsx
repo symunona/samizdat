@@ -135,6 +135,10 @@ export default function JobsScreen() {
 
     const payloadUrl = p.url ?? ''
     const feedId = p.feed_id ?? ''
+    const feedUrl = p.feed_url ?? ''
+    const pipelineName = p.pipeline_name ?? ''
+    const documentTitle = p.document_title ?? ''
+    const stepIndex = typeof p.step_index === 'number' ? p.step_index : (p.step_index != null ? parseInt(p.step_index as string, 10) : -1)
 
     // Derive document ID: prefer result (new jobs), fall back to uuid-v5 from URL (legacy)
     const docId: string = (typeof r.document_id === 'string' && r.document_id)
@@ -168,6 +172,11 @@ export default function JobsScreen() {
           </Pressable>
         )}
 
+        {/* scrape_url triggered by a feed: show feed source */}
+        {item.kind === 'scrape_url' && !!feedUrl && (
+          <Text style={s.sourceText} numberOfLines={1}>from feed: {feedUrl}</Text>
+        )}
+
         {/* other job kinds: just show the URL externally */}
         {item.kind !== 'scrape_url' && !!payloadUrl && (
           <Pressable onPress={() => Linking.openURL(payloadUrl)}>
@@ -175,9 +184,11 @@ export default function JobsScreen() {
           </Pressable>
         )}
 
-        {/* Feed ID label (poll_feed jobs) */}
-        {!payloadUrl && !!feedId && (
-          <Text style={s.mutedText} numberOfLines={1}>feed: {feedId.slice(0, 8)}</Text>
+        {/* poll_feed: show feed URL (enriched) or fall back to truncated ID */}
+        {item.kind === 'poll_feed' && (
+          <Text style={s.mutedText} numberOfLines={1}>
+            {feedUrl || (feedId ? `feed: ${feedId.slice(0, 8)}` : '')}
+          </Text>
         )}
 
         {/* poll_feed result summary */}
@@ -189,6 +200,25 @@ export default function JobsScreen() {
               : <Text style={[s.resultText, { color: '#4ade80' }]}>{newItems} new</Text>
             }
           </View>
+        )}
+
+        {/* run_pipeline: show pipeline name → document title */}
+        {item.kind === 'run_pipeline' && (
+          <Text style={s.pipelineText} numberOfLines={2}>
+            {pipelineName || 'pipeline'}{documentTitle ? ` → ${documentTitle}` : ''}
+          </Text>
+        )}
+
+        {/* run_pipeline_step: show pipeline name, step index, document title */}
+        {item.kind === 'run_pipeline_step' && (
+          <Text style={s.pipelineText} numberOfLines={2}>
+            {pipelineName || 'pipeline'}{stepIndex >= 0 ? ` step ${stepIndex + 1}` : ''}{documentTitle ? ` → ${documentTitle}` : ''}
+          </Text>
+        )}
+
+        {/* fetch_assets: show document title */}
+        {item.kind === 'fetch_assets' && !!documentTitle && (
+          <Text style={s.mutedText} numberOfLines={1}>{documentTitle}</Text>
         )}
 
         {!!item.last_error && (
@@ -291,6 +321,8 @@ function buildStyles(t: Theme) {
     urlText: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace', marginBottom: 4, textDecorationLine: 'underline' },
     docLinkText: { color: t.colors.accent, fontSize: 13, fontFamily: 'monospace', fontWeight: '600', textDecorationLine: 'none' },
     mutedText: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace', marginBottom: 4 },
+    sourceText: { color: t.colors.placeholder, fontSize: 10, fontFamily: 'monospace', marginBottom: 4 },
+    pipelineText: { color: t.colors.text, fontSize: 12, fontFamily: 'monospace', marginBottom: 4 },
     resultRow: { flexDirection: 'row', gap: t.spacing.sm, marginBottom: 4, alignItems: 'center' },
     resultText: { color: t.colors.muted, fontSize: 12 },
     nothingNew: { color: t.colors.placeholder, fontSize: 11, fontStyle: 'italic' },

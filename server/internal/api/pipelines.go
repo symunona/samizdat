@@ -162,7 +162,8 @@ type runPipelineRequest struct {
 
 func (h *pipelinesHandler) run(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := h.q.GetPipeline(r.Context(), id); err != nil {
+	pl, err := h.q.GetPipeline(r.Context(), id)
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "pipeline not found")
 		return
 	}
@@ -172,10 +173,17 @@ func (h *pipelinesHandler) run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	docTitle := ""
+	if doc, err := h.q.GetDocumentByID(r.Context(), req.DocumentID); err == nil {
+		docTitle = doc.Title
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	payload, _ := json.Marshal(map[string]string{
-		"pipeline_id": id,
-		"document_id": req.DocumentID,
+		"pipeline_id":    id,
+		"document_id":    req.DocumentID,
+		"pipeline_name":  pl.Name,
+		"document_title": docTitle,
 	})
 	job, err := h.q.InsertJob(r.Context(), store.InsertJobParams{
 		ID:        uuid.NewString(),

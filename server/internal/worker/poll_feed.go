@@ -12,7 +12,8 @@ import (
 )
 
 type pollFeedPayload struct {
-	FeedID string `json:"feed_id"`
+	FeedID  string `json:"feed_id"`
+	FeedURL string `json:"feed_url,omitempty"`
 }
 
 func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, reg extractor.Registry) (string, error) {
@@ -78,7 +79,11 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 		// status == "pending" means not yet scraped).
 		if item.Status == "pending" && item.Rev == 0 {
 			feedID := feed.ID
-			itemPayload, _ := json.Marshal(scrapePayload{URL: u, FeedID: &feedID})
+			itemPayload, _ := json.Marshal(struct {
+				URL     string  `json:"url"`
+				FeedID  *string `json:"feed_id,omitempty"`
+				FeedURL string  `json:"feed_url,omitempty"`
+			}{URL: u, FeedID: &feedID, FeedURL: feed.Url})
 			_, err = q.InsertJob(ctx, store.InsertJobParams{
 				ID:        uuid.NewString(),
 				Kind:      "scrape_url",

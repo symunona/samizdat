@@ -32,7 +32,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 		c.Model = "claude-haiku-4-5-20251001"
 	}
 	if c.Prompt == "" {
-		c.Prompt = "Summarize this article. Be brutal. No fluff, no filler. Drop articles, hedges, pleasantries. Max 3-5 bullets or 2 sentences. Each point = 1 fact + why it matters. If nothing matters, say so in one line."
+		c.Prompt = "Summarize as caveman. Rules: drop all articles (a/an/the), drop filler words (just/really/basically/actually/simply/notably), drop hedges (seems/appears/might), no pleasantries, no intro, no outro. Fragments OK. Short synonyms (big not extensive, fix not implement a solution). Max 3 bullets. Pattern: [thing] [action] [why it matters]. Boring or thin = one line. Never start with 'This article'."
 	}
 
 	// Use step-level provider if specified, otherwise fall back to global client.

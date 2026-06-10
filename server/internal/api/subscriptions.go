@@ -89,7 +89,7 @@ func (h *subscriptionsHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enqueue an immediate poll_feed job.
-	payload, _ := json.Marshal(map[string]string{"feed_id": feed.ID})
+	payload, _ := json.Marshal(map[string]string{"feed_id": feed.ID, "feed_url": feed.Url})
 	_, err = h.q.InsertJob(r.Context(), store.InsertJobParams{
 		ID:        uuid.NewString(),
 		Kind:      "poll_feed",
@@ -157,7 +157,11 @@ func (h *subscriptionsHandler) poll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	payload, _ := json.Marshal(map[string]string{"feed_id": sub.FeedID})
+	feedURL := ""
+	if feed, err := h.q.GetFeed(r.Context(), sub.FeedID); err == nil {
+		feedURL = feed.Url
+	}
+	payload, _ := json.Marshal(map[string]string{"feed_id": sub.FeedID, "feed_url": feedURL})
 	job, err := h.q.InsertJob(r.Context(), store.InsertJobParams{
 		ID:        uuid.NewString(),
 		Kind:      "poll_feed",

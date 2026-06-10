@@ -137,7 +137,7 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	logScraper.Printf("upserted document %s for %s", doc.ID[:8], canonical)
 
 	// Enqueue asset fetching job.
-	assetPayload, _ := json.Marshal(map[string]string{"document_id": doc.ID})
+	assetPayload, _ := json.Marshal(map[string]string{"document_id": doc.ID, "document_title": title})
 	_, err = q.InsertJob(ctx, store.InsertJobParams{
 		ID:        uuid.NewString(),
 		Kind:      "fetch_assets",
@@ -185,8 +185,10 @@ func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document,
 			continue
 		}
 		payload, _ := json.Marshal(map[string]string{
-			"pipeline_id": pl.ID,
-			"document_id": doc.ID,
+			"pipeline_id":    pl.ID,
+			"document_id":    doc.ID,
+			"pipeline_name":  pl.Name,
+			"document_title": doc.Title,
 		})
 		_, err := q.InsertJob(ctx, store.InsertJobParams{
 			ID:        uuid.NewString(),

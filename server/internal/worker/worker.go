@@ -103,7 +103,11 @@ func (w *Worker) schedulePollFeeds(ctx context.Context) {
 	}
 	logScheduler.Printf("%d due subscriptions", len(subs))
 	for _, sub := range subs {
-		payload, _ := json.Marshal(map[string]string{"feed_id": sub.FeedID})
+		feedURL := ""
+		if feed, err := w.q.GetFeed(ctx, sub.FeedID); err == nil {
+			feedURL = feed.Url
+		}
+		payload, _ := json.Marshal(pollFeedPayload{FeedID: sub.FeedID, FeedURL: feedURL})
 		_, err := w.q.InsertJob(ctx, store.InsertJobParams{
 			ID:        uuid.NewString(),
 			Kind:      "poll_feed",

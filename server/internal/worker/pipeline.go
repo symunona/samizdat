@@ -16,12 +16,18 @@ import (
 const stepRetryDelay = 10 * time.Second
 
 type runPipelinePayload struct {
-	PipelineID string `json:"pipeline_id"`
-	DocumentID string `json:"document_id"`
+	PipelineID    string `json:"pipeline_id"`
+	DocumentID    string `json:"document_id"`
+	PipelineName  string `json:"pipeline_name,omitempty"`
+	DocumentTitle string `json:"document_title,omitempty"`
 }
 
 type runPipelineStepPayload struct {
 	PipelineRunID string `json:"pipeline_run_id"`
+	PipelineName  string `json:"pipeline_name,omitempty"`
+	DocumentID    string `json:"document_id,omitempty"`
+	DocumentTitle string `json:"document_title,omitempty"`
+	StepIndex     int    `json:"step_index,omitempty"`
 }
 
 func handleRunPipeline(ctx context.Context, q *store.Queries, job store.Job, llmClient llm.Client) (string, error) {
@@ -57,7 +63,13 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, job store.Job, llm
 		return "", fmt.Errorf("update run status: %w", err)
 	}
 
-	stepPayload, _ := json.Marshal(runPipelineStepPayload{PipelineRunID: run.ID})
+	stepPayload, _ := json.Marshal(runPipelineStepPayload{
+		PipelineRunID: run.ID,
+		PipelineName:  p.PipelineName,
+		DocumentID:    p.DocumentID,
+		DocumentTitle: p.DocumentTitle,
+		StepIndex:     0,
+	})
 	_, err = q.InsertJob(ctx, store.InsertJobParams{
 		ID:        uuid.NewString(),
 		Kind:      "run_pipeline_step",
@@ -139,7 +151,13 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 
 		logPipeline.Printf("run %s advancing to step %d/%d", run.ID[:8], nextIdx, stepCount)
 
-		stepPayload, _ := json.Marshal(runPipelineStepPayload{PipelineRunID: run.ID})
+		stepPayload, _ := json.Marshal(runPipelineStepPayload{
+			PipelineRunID: run.ID,
+			PipelineName:  p.PipelineName,
+			DocumentID:    p.DocumentID,
+			DocumentTitle: p.DocumentTitle,
+			StepIndex:     int(nextIdx),
+		})
 		_, err = q.InsertJob(ctx, store.InsertJobParams{
 			ID:        uuid.NewString(),
 			Kind:      "run_pipeline_step",
@@ -169,7 +187,13 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 	logPipeline.Printf("run %s step %d waiting (retry in %s)", run.ID[:8], run.StepIndex, stepRetryDelay)
 
 	runAfter := time.Now().UTC().Add(stepRetryDelay).Format(time.RFC3339)
-	stepPayload, _ := json.Marshal(runPipelineStepPayload{PipelineRunID: run.ID})
+	stepPayload, _ := json.Marshal(runPipelineStepPayload{
+		PipelineRunID: run.ID,
+		PipelineName:  p.PipelineName,
+		DocumentID:    p.DocumentID,
+		DocumentTitle: p.DocumentTitle,
+		StepIndex:     int(run.StepIndex),
+	})
 	_, err = q.InsertJob(ctx, store.InsertJobParams{
 		ID:        uuid.NewString(),
 		Kind:      "run_pipeline_step",
