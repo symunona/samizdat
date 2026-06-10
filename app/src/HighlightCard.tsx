@@ -1,8 +1,10 @@
-import { useMemo } from 'react'
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
+import { useMemo, useState } from 'react'
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import type { Highlight } from './api'
 import MarkdownBody from './MarkdownBody'
+
+const MAX_BODY_HEIGHT = 400
 
 type Props = {
   item: Highlight
@@ -28,6 +30,10 @@ export default function HighlightCard({
     note: '#b8a0ff',
   } as Record<string, string>), [theme])
 
+  const [contentHeight, setContentHeight] = useState(0)
+  const [modalOpen, setModalOpen] = useState(false)
+  const isClipped = contentHeight > MAX_BODY_HEIGHT
+
   return (
     <Pressable style={[s.card, pinned && s.cardPinned]} onPress={onPress}>
       <View style={s.cardHeader}>
@@ -46,9 +52,38 @@ export default function HighlightCard({
             : null}
       </View>
 
-      <MarkdownBody linkedDocuments={linkedDocuments} onDocumentPress={onDocumentPress}>
-        {item.body}
-      </MarkdownBody>
+      <View style={[s.bodyClip, isClipped && s.bodyClipMax]}>
+        <View onLayout={e => setContentHeight(e.nativeEvent.layout.height)}>
+          <MarkdownBody linkedDocuments={linkedDocuments} onDocumentPress={onDocumentPress}>
+            {item.body}
+          </MarkdownBody>
+        </View>
+        {isClipped && (
+          <Pressable style={s.expandOverlay} onPress={() => setModalOpen(true)}>
+            <Text style={s.expandText}>Tap to expand</Text>
+          </Pressable>
+        )}
+      </View>
+
+      {modalOpen && (
+        <Modal transparent animationType="fade" onRequestClose={() => setModalOpen(false)}>
+          <Pressable style={s.modalBackdrop} onPress={() => setModalOpen(false)}>
+            <Pressable style={s.modalSheet} onPress={() => {}}>
+              <View style={s.modalHeader}>
+                <Text style={s.modalTitle} numberOfLines={2}>{item.title}</Text>
+                <Pressable style={s.modalCloseBtn} onPress={() => setModalOpen(false)} hitSlop={10}>
+                  <Text style={s.modalCloseText}>✕</Text>
+                </Pressable>
+              </View>
+              <ScrollView style={s.modalScroll} contentContainerStyle={s.modalScrollContent}>
+                <MarkdownBody linkedDocuments={linkedDocuments} onDocumentPress={(id) => { setModalOpen(false); onDocumentPress?.(id) }}>
+                  {item.body}
+                </MarkdownBody>
+              </ScrollView>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      )}
 
       <View style={s.cardFooter}>
         <Pressable style={s.deleteBtn} onPress={onDelete} hitSlop={6}>
@@ -119,5 +154,61 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.border,
     },
     footerBtnText: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
+    bodyClip: { overflow: 'hidden' },
+    bodyClipMax: { maxHeight: MAX_BODY_HEIGHT },
+    expandOverlay: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      height: 60,
+      backgroundColor: 'transparent',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      paddingBottom: 4,
+    },
+    expandText: {
+      color: t.colors.accent,
+      fontSize: 12,
+      fontWeight: '700',
+      backgroundColor: t.colors.surface,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: t.colors.accent,
+      overflow: 'hidden',
+    },
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.6)',
+      justifyContent: 'flex-end',
+    },
+    modalSheet: {
+      backgroundColor: t.colors.surface,
+      borderTopLeftRadius: 16,
+      borderTopRightRadius: 16,
+      maxHeight: '85%',
+      paddingTop: 16,
+    },
+    modalHeader: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.border,
+      gap: 8,
+    },
+    modalTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '700' },
+    modalCloseBtn: {
+      width: 28,
+      height: 28,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    modalCloseText: { color: t.colors.muted, fontSize: 18 },
+    modalScroll: { flexShrink: 1 },
+    modalScrollContent: { padding: 16 },
   })
 }
