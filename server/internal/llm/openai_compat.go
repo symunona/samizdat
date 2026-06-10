@@ -8,7 +8,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
+
+const llmRequestTimeout = 90 * time.Second
+
+var llmHTTPClient = &http.Client{Timeout: llmRequestTimeout}
 
 type openAICompatClient struct {
 	baseURL string
@@ -41,7 +46,7 @@ func (c *openAICompatClient) Complete(ctx context.Context, model string, message
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := llmHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("openai_compat request: %w", err)
 	}

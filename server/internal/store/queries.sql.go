@@ -1628,7 +1628,7 @@ func (q *Queries) ListHighlightsByTag(ctx context.Context, tagID string) ([]High
 }
 
 const listJobs = `-- name: ListJobs :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
 `
 
 func (q *Queries) ListJobs(ctx context.Context) ([]Job, error) {
@@ -1668,7 +1668,7 @@ func (q *Queries) ListJobs(ctx context.Context) ([]Job, error) {
 }
 
 const listJobsByKind = `-- name: ListJobsByKind :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
 `
 
 func (q *Queries) ListJobsByKind(ctx context.Context, kind string) ([]Job, error) {
@@ -1708,7 +1708,7 @@ func (q *Queries) ListJobsByKind(ctx context.Context, kind string) ([]Job, error
 }
 
 const listJobsByStatus = `-- name: ListJobsByStatus :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
 `
 
 func (q *Queries) ListJobsByStatus(ctx context.Context, status string) ([]Job, error) {
@@ -1748,7 +1748,7 @@ func (q *Queries) ListJobsByStatus(ctx context.Context, status string) ([]Job, e
 }
 
 const listJobsByStatusAndKind = `-- name: ListJobsByStatusAndKind :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
 `
 
 type ListJobsByStatusAndKindParams struct {
@@ -2205,6 +2205,25 @@ func (q *Queries) MaxDeviceRev(ctx context.Context) (interface{}, error) {
 	var rev interface{}
 	err := row.Scan(&rev)
 	return rev, err
+}
+
+const resetStuckJobs = `-- name: ResetStuckJobs :exec
+UPDATE jobs SET status = 'queued', run_after = ?, updated_at = ?
+WHERE status = 'running' AND updated_at < ? AND deleted_at IS NULL
+`
+
+type ResetStuckJobsParams struct {
+	RunAfter    string `json:"run_after"`
+	UpdatedAt   string `json:"updated_at"`
+	UpdatedAt_2 string `json:"updated_at_2"`
+}
+
+// Reset jobs stuck in 'running' for longer than the given cutoff time back to 'queued'
+// so the worker can retry them. Cutoff is an ISO8601 timestamp; jobs with updated_at
+// older than that are considered stuck (crashed worker, lost context, hung HTTP call).
+func (q *Queries) ResetStuckJobs(ctx context.Context, arg ResetStuckJobsParams) error {
+	_, err := q.db.ExecContext(ctx, resetStuckJobs, arg.RunAfter, arg.UpdatedAt, arg.UpdatedAt_2)
+	return err
 }
 
 const retryJob = `-- name: RetryJob :exec

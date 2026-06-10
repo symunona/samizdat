@@ -102,6 +102,10 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("GET /api/v1/documents/{id}/progress", bearerAuth(q, rsH.get))
 	mux.HandleFunc("PUT /api/v1/documents/{id}/progress", bearerAuth(q, rsH.put))
 
+	settingsH := &settingsHandler{q: q}
+	mux.HandleFunc("GET /api/v1/settings", bearerAuth(q, settingsH.get))
+	mux.HandleFunc("PUT /api/v1/settings", bearerAuth(q, settingsH.put))
+
 	plH := &pipelinesHandler{q: q}
 	mux.HandleFunc("GET /api/v1/pipelines", bearerAuth(q, plH.list))
 	mux.HandleFunc("POST /api/v1/pipelines", bearerAuth(q, plH.create))

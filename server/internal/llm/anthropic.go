@@ -43,7 +43,7 @@ func (c *anthropicClient) Complete(ctx context.Context, model string, messages [
 	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := llmHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("anthropic request: %w", err)
 	}

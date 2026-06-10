@@ -63,6 +63,13 @@ UPDATE jobs SET status = 'done', result = ?, updated_at = ? WHERE id = ?;
 -- name: MarkJobFailed :exec
 UPDATE jobs SET status = ?, attempts = ?, run_after = ?, updated_at = ? WHERE id = ?;
 
+-- name: ResetStuckJobs :exec
+-- Reset jobs stuck in 'running' for longer than the given cutoff time back to 'queued'
+-- so the worker can retry them. Cutoff is an ISO8601 timestamp; jobs with updated_at
+-- older than that are considered stuck (crashed worker, lost context, hung HTTP call).
+UPDATE jobs SET status = 'queued', run_after = ?, updated_at = ?
+WHERE status = 'running' AND updated_at < ? AND deleted_at IS NULL;
+
 -- name: GetDocumentByCanonicalURL :one
 SELECT * FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1;
 
@@ -191,16 +198,16 @@ UPDATE jobs SET deleted_at = ?, updated_at = ?
 WHERE status IN ('done', 'dead') AND deleted_at IS NULL;
 
 -- name: ListJobs :many
-SELECT * FROM jobs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 100;
+SELECT * FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100;
 
 -- name: ListJobsByStatus :many
-SELECT * FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100;
+SELECT * FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100;
 
 -- name: ListJobsByKind :many
-SELECT * FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100;
+SELECT * FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100;
 
 -- name: ListJobsByStatusAndKind :many
-SELECT * FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100;
+SELECT * FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100;
 
 -- name: GetJob :one
 SELECT * FROM jobs WHERE id = ? AND deleted_at IS NULL LIMIT 1;

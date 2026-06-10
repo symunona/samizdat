@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { fetchDevices, revokeDevice, ApiError } from '../../src/api'
-import type { DeviceInfo } from '../../src/api'
+import { fetchDevices, revokeDevice, fetchSettings, updateSettings, ApiError } from '../../src/api'
+import type { DeviceInfo, AppSettings } from '../../src/api'
 import { clearConnection, removeServerUrl } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
 import { useConfirm } from '../../src/ConfirmContext'
@@ -55,6 +55,8 @@ export default function SettingsScreen() {
   const [devicesRefreshing, setDevicesRefreshing] = useState(false)
   const [devicesError, setDevicesError] = useState<string | null>(null)
   const [revoking, setRevoking] = useState<Set<string>>(new Set())
+  const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [settingsLoading, setSettingsLoading] = useState(false)
 
   const handleUnauthorized = useCallback(async () => {
     await logout()
@@ -86,9 +88,33 @@ export default function SettingsScreen() {
     }
   }, [activeUrl, token, handleUnauthorized])
 
+  const loadSettings = useCallback(async () => {
+    if (!activeUrl || !token) return
+    try {
+      const s = await fetchSettings(activeUrl, token)
+      setSettings(s)
+    } catch { /* best-effort */ }
+  }, [activeUrl, token])
+
   useEffect(() => {
-    if (status === 'connected') loadDevices()
-  }, [status, loadDevices])
+    if (status === 'connected') {
+      loadDevices()
+      loadSettings()
+    }
+  }, [status, loadDevices, loadSettings])
+
+  async function handleTogglePolling(enabled: boolean) {
+    if (!activeUrl || !token) return
+    setSettingsLoading(true)
+    try {
+      const s = await updateSettings(activeUrl, token, { polling_enabled: enabled })
+      setSettings(s)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to update setting', 'error')
+    } finally {
+      setSettingsLoading(false)
+    }
+  }
 
   function handleProbe() {
     setProbing(true)
@@ -221,6 +247,30 @@ export default function SettingsScreen() {
           </View>
         </View>
       )}
+
+      {/* Polling */}
+      <View style={s.card}>
+        <View style={s.cardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.cardTitle}>Background Polling</Text>
+            <Text style={s.cardSubtitle}>
+              {settings?.polling_enabled === false
+                ? 'Off — only manual job adding active'
+                : 'On — feeds poll automatically on schedule'}
+            </Text>
+          </View>
+          {settings === null
+            ? <ActivityIndicator size="small" color={theme.colors.accent} />
+            : <Switch
+                value={settings.polling_enabled}
+                onValueChange={handleTogglePolling}
+                disabled={settingsLoading}
+                trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+                thumbColor={theme.colors.background}
+              />
+          }
+        </View>
+      </View>
 
       {/* Devices */}
       <View style={s.card}>

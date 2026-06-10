@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	pollInterval     = 5 * time.Second
+	pollInterval      = 5 * time.Second
 	schedulerInterval = 60 * time.Second
-	maxAttempts      = 3
+	maxAttempts       = 3
+	stuckJobAge       = 10 * time.Minute
 )
 
 type Worker struct {
@@ -45,6 +46,7 @@ func New(q *store.Queries, cacheDir string, extractorDir string, llmClient llm.C
 }
 
 func (w *Worker) Start(ctx context.Context) {
+	w.resetStuckJobs(ctx)
 	go func() {
 		w.loop(ctx)
 		w.browser.Close()
@@ -58,9 +60,25 @@ func (w *Worker) Start(ctx context.Context) {
 				return
 			case <-t.C:
 				w.schedulePollFeeds(ctx)
+				w.resetStuckJobs(ctx)
 			}
 		}
 	}()
+}
+
+func (w *Worker) resetStuckJobs(ctx context.Context) {
+	now := time.Now().UTC()
+	cutoff := now.Add(-stuckJobAge).Format(time.RFC3339)
+	nowStr := now.Format(time.RFC3339)
+	if err := w.q.ResetStuckJobs(ctx, store.ResetStuckJobsParams{
+		RunAfter:    nowStr,
+		UpdatedAt:   nowStr,
+		UpdatedAt_2: cutoff,
+	}); err != nil {
+		log.Printf("worker: reset stuck jobs: %v", err)
+	} else {
+		log.Printf("worker: reset stuck jobs older than %s", cutoff)
+	}
 }
 
 // ExtractorRegistry returns the loaded extractor registry.
@@ -74,6 +92,10 @@ func (w *Worker) FetchHTML(url string) (string, error) {
 }
 
 func (w *Worker) schedulePollFeeds(ctx context.Context) {
+	if val, err := w.q.GetSetting(ctx, "polling_enabled"); err == nil && val == "false" {
+		log.Printf("scheduler: polling disabled, skipping")
+		return
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	subs, err := w.q.ListDueSubscriptions(ctx, now)
 	if err != nil {

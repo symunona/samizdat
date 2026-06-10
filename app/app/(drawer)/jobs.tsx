@@ -16,6 +16,7 @@ import { v5 as uuidv5 } from 'uuid'
 import { fetchJobs, fetchDocuments, retryJob, clearCompletedJobs } from '../../src/api'
 import type { Job, Document } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
+import { useToast } from '../../src/ToastContext'
 
 const STATUS_FILTERS = ['all', 'queued', 'running', 'dead', 'done'] as const
 type Filter = (typeof STATUS_FILTERS)[number]
@@ -60,6 +61,7 @@ export default function JobsScreen() {
   const s = useMemo(() => buildStyles(theme), [theme])
   const { status, activeUrl, token } = useConnection()
   const router = useRouter()
+  const { toast } = useToast()
 
   const [jobs, setJobs] = useState<Job[]>([])
   const [docMap, setDocMap] = useState<Map<string, Document>>(new Map())
@@ -80,9 +82,9 @@ export default function JobsScreen() {
         fetchJobs(activeUrl, token, opts),
         fetchDocuments(activeUrl, token),
       ])
-      setJobs(jobsData)
+      setJobs(jobsData ?? [])
       const m = new Map<string, Document>()
-      for (const d of docsData) m.set(d.id, d)
+      for (const d of (docsData ?? [])) m.set(d.id, d)
       setDocMap(m)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
@@ -101,9 +103,12 @@ export default function JobsScreen() {
     setClearing(true)
     try {
       await clearCompletedJobs(activeUrl, token)
-      await load()
-    } catch { /* ignore */ }
-    finally { setClearing(false) }
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to clear jobs', 'error')
+    } finally {
+      setClearing(false)
+    }
+    await load()
   }
 
   async function handleRetry(job: Job) {
@@ -185,9 +190,9 @@ export default function JobsScreen() {
           </View>
         )}
 
-        {item.status === 'dead' && item.last_error ? (
+        {!!item.last_error && (
           <Text style={s.errorText} numberOfLines={3}>{item.last_error}</Text>
-        ) : null}
+        )}
 
         {item.attempts > 0 && item.status !== 'done' && (
           <Text style={s.attemptsText}>Attempts: {item.attempts}</Text>

@@ -91,6 +91,9 @@ func (h *jobsHandler) list(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
+	if jobs == nil {
+		jobs = []store.Job{}
+	}
 	writeJSON(w, http.StatusOK, jobs)
 }
 

@@ -652,3 +652,25 @@ export async function removeHighlightTag(serverUrl: string, token: string, hlId:
   )
   if (!res.ok) throw new ApiError(res.status, `removeHighlightTag failed: HTTP ${res.status}`)
 }
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+export type AppSettings = {
+  polling_enabled: boolean
+}
+
+export async function fetchSettings(serverUrl: string, token: string): Promise<AppSettings> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/settings`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<AppSettings>(res, '/api/v1/settings')
+}
+
+export async function updateSettings(serverUrl: string, token: string, patch: Partial<AppSettings>): Promise<AppSettings> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/settings`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  return json<AppSettings>(res, '/api/v1/settings')
+}
