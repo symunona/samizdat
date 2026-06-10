@@ -40,6 +40,7 @@ export async function pair(url: string, code: string, name?: string): Promise<Pa
 export async function me(url: string, token: string): Promise<Me> {
   const res = await fetch(`${base(url)}/api/v1/me`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(5000),
   })
   return json<Me>(res, '/api/v1/me')
 }

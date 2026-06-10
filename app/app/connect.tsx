@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   ActivityIndicator,
+  Image,
   Platform,
   Pressable,
   SafeAreaView,
@@ -12,8 +13,8 @@ import {
 import { StatusBar } from 'expo-status-bar'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { findReachable, health, pair } from '../src/api'
-import { clearConnection, loadConnection, saveConnection } from '../src/storage'
+import { health, pair } from '../src/api'
+import { clearConnection, saveConnection } from '../src/storage'
 import { useConnection } from '../src/ConnectionContext'
 
 function defaultServerUrl(): string {
@@ -64,21 +65,10 @@ export default function ConnectScreen() {
   async function connect() {
     setStatus({ kind: 'connecting' })
     try {
-      const saved = await loadConnection()
-      let t = saved?.token ?? null
-      let urls = saved && saved.serverUrls.length > 0 ? saved.serverUrls : [url]
-
-      if (!t) {
-        if (!code.trim()) throw new Error('Enter the pairing code from `sam connect`.')
-        const result = await pair(url, code.trim(), deviceName())
-        t = result.device_token
-        urls = result.server_urls && result.server_urls.length > 0 ? result.server_urls : [url]
-        await saveConnection({ token: t, deviceId: result.device_id, serverUrls: urls })
-      }
-
-      const found = await findReachable(urls, t)
-      if (!found) throw new Error('No server reachable on any known address.')
-
+      if (!code.trim()) throw new Error('Enter the pairing code from `sam connect`.')
+      const result = await pair(url, code.trim(), deviceName())
+      const urls = result.server_urls && result.server_urls.length > 0 ? result.server_urls : [url]
+      await saveConnection({ token: result.device_token, deviceId: result.device_id, serverUrls: urls })
       await reload()
       router.replace('/')
     } catch (e: unknown) {
@@ -101,6 +91,13 @@ export default function ConnectScreen() {
     <SafeAreaView style={s.screen}>
       <StatusBar style="light" />
       <View style={s.card}>
+        <Image
+          source={Platform.OS === 'web'
+            ? { uri: '/favicon.svg' }
+            : require('../assets/favicon.png')}
+          style={s.logo}
+          resizeMode="contain"
+        />
         <Text style={s.brand}>samizdat</Text>
         <Text style={s.sub}>Connect to your server</Text>
 
@@ -163,7 +160,8 @@ function buildStyles(t: Theme) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: t.colors.background, justifyContent: 'center' },
     card: { paddingHorizontal: t.spacing.xl, gap: t.spacing.sm },
-    brand: { color: t.colors.text, fontSize: 34, fontWeight: '800', letterSpacing: -1, marginBottom: 4 },
+    logo: { width: 80, height: 80, marginBottom: 8, alignSelf: 'center' },
+    brand: { color: t.colors.text, fontSize: 34, fontWeight: '800', letterSpacing: -1, marginBottom: 4, textAlign: 'center' },
     sub: { color: t.colors.muted, fontSize: 15, marginBottom: 20 },
     label: { color: t.colors.muted, fontSize: 13, marginTop: 12, marginBottom: 6 },
     input: {
