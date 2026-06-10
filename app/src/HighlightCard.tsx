@@ -52,7 +52,7 @@ export default function HighlightCard({
             : null}
       </View>
 
-      <View style={[s.bodyClip, isClipped && s.bodyClipMax]}>
+      <View style={s.bodyClipMax}>
         <View onLayout={e => setContentHeight(e.nativeEvent.layout.height)}>
           <MarkdownBody linkedDocuments={linkedDocuments} onDocumentPress={onDocumentPress}>
             {item.body}
@@ -154,8 +154,7 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.border,
     },
     footerBtnText: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
-    bodyClip: { overflow: 'hidden' },
-    bodyClipMax: { maxHeight: MAX_BODY_HEIGHT },
+    bodyClipMax: { maxHeight: MAX_BODY_HEIGHT, overflow: 'hidden' },
     expandOverlay: {
       position: 'absolute',
       bottom: 0,

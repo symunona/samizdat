@@ -85,5 +85,12 @@ function buildMdStyles(t: Theme): StyleSheet.NamedStyles<Record<string, unknown>
     bullet_list_icon: { color: t.colors.accent, marginRight: 8, marginTop: 3 },
     ordered_list_icon: { color: t.colors.muted, marginRight: 8, marginTop: 3 },
     hr: { backgroundColor: t.colors.border, height: 1, marginVertical: 8 },
+    image: {
+      width: '100%',
+      height: 220,
+      resizeMode: 'cover',
+      borderRadius: 6,
+      marginBottom: 8,
+    },
   }
 }
