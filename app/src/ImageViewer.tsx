@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet } from 'react-native'
+import { useCallback, useState } from 'react'
+import { Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import type { GestureResponderEvent } from 'react-native'
 
 type Props = {
   src: string
@@ -10,11 +11,17 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window')
 
 export default function ImageViewer({ src, alt }: Props) {
   const [open, setOpen] = useState(false)
+
+  const handleThumbPress = useCallback((e: GestureResponderEvent) => {
+    e.stopPropagation()
+    setOpen(true)
+  }, [])
+
   if (!src) return null
 
   return (
     <>
-      <Pressable onPress={() => setOpen(true)} style={s.thumbWrap}>
+      <Pressable onPress={handleThumbPress} style={s.thumbWrap}>
         <Image
           source={{ uri: src }}
           style={s.thumb}
@@ -30,16 +37,14 @@ export default function ImageViewer({ src, alt }: Props) {
           onRequestClose={() => setOpen(false)}
           statusBarTranslucent
         >
-          <Pressable style={s.backdrop} onPress={() => setOpen(false)}>
+          <View style={s.backdrop}>
             {Platform.OS === 'web' ? (
-              <Pressable style={s.fullContainer} onPress={() => {}}>
-                <Image
-                  source={{ uri: src }}
-                  style={s.fullImage}
-                  resizeMode="contain"
-                  accessibilityLabel={alt}
-                />
-              </Pressable>
+              <Image
+                source={{ uri: src }}
+                style={s.fullImage}
+                resizeMode="contain"
+                accessibilityLabel={alt}
+              />
             ) : (
               <ScrollView
                 style={s.nativeScroll}
@@ -58,7 +63,10 @@ export default function ImageViewer({ src, alt }: Props) {
                 />
               </ScrollView>
             )}
-          </Pressable>
+            <Pressable style={s.closeBtn} onPress={() => setOpen(false)} hitSlop={12}>
+              <Text style={s.closeBtnText}>✕</Text>
+            </Pressable>
+          </View>
         </Modal>
       )}
     </>
@@ -83,12 +91,6 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  fullContainer: {
-    width: SCREEN_W,
-    height: SCREEN_H,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   nativeScroll: {
     width: SCREEN_W,
     height: SCREEN_H,
@@ -101,5 +103,21 @@ const s = StyleSheet.create({
   fullImage: {
     width: SCREEN_W,
     height: SCREEN_H,
+  },
+  closeBtn: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  closeBtnText: {
+    color: '#fff',
+    fontSize: 18,
+    lineHeight: 20,
   },
 })

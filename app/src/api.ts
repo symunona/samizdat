@@ -614,11 +614,11 @@ export async function fetchHighlights(serverUrl: string, token: string, limit = 
   return json<HighlightWithDoc[]>(res, '/api/v1/highlights')
 }
 
-export async function fetchDocumentHighlights(serverUrl: string, token: string, docId: string): Promise<Highlight[]> {
+export async function fetchDocumentHighlights(serverUrl: string, token: string, docId: string): Promise<HighlightWithDoc[]> {
   const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/highlights`, {
     headers: { Authorization: `Bearer ${token}` },
   })
-  return json<Highlight[]>(res, '/api/v1/documents/:id/highlights')
+  return json<HighlightWithDoc[]>(res, '/api/v1/documents/:id/highlights')
 }
 
 export async function fetchDocumentPipelineRuns(serverUrl: string, token: string, docId: string): Promise<PipelineRun[]> {

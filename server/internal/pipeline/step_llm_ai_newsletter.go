@@ -25,9 +25,24 @@ type aiNewsletterConfig struct {
 }
 
 type aiNewsletterHighlight struct {
-	Kind  string `json:"kind"`
-	Title string `json:"title"`
-	Body  string `json:"body"`
+	Kind  string          `json:"kind"`
+	Title string          `json:"title"`
+	Body  json.RawMessage `json:"body"`
+}
+
+// bodyString coerces body from either a JSON string or JSON array of strings into markdown.
+func (h aiNewsletterHighlight) bodyString() string {
+	if len(h.Body) == 0 {
+		return ""
+	}
+	if h.Body[0] == '"' {
+		var s string
+		_ = json.Unmarshal(h.Body, &s)
+		return s
+	}
+	var items []string
+	_ = json.Unmarshal(h.Body, &items)
+	return buildBullets(items)
 }
 
 type aiNewsletterResponse struct {
@@ -48,12 +63,15 @@ SUMMARY RULES — ultra caveman:
 - Drop: articles (a/an/the), filler words (just/really/basically/actually/simply/notably), hedges (seems/appears/might), pleasantries, intros, outros.
 - Fragments OK. Short synonyms (big not extensive, fix not implement solution).
 - Only most relevant AI/ML topics. Boring/thin newsletter = fewer bullets.
+- Bold the key topic/name of each bullet: **keyword** at start or where it naturally lands. One bold per bullet.
 
 CONDITIONAL HIGHLIGHTS — include only if genuinely present in document:
-1. kind="frontier_model" — new frontier/SOTA proprietary model announced (GPT-X, Claude X, Gemini X, Grok X, etc). Title: model name. Body: what changed, benchmark delta, caveman style. Skip if just mentioned in passing.
-2. kind="tool" — new tool/product/library/service worth knowing. Title: tool name. Body: what it does, why useful, caveman. One highlight per distinct tool.
-3. kind="local_model" — new locally-hostable open-weight model worth trying (weights downloadable, runs on consumer GPU). Title: model name. Body: param size, capability, how to get/run, caveman.
-4. kind="opus_equivalent" — open-weight model that approximates Claude Opus 4.5 capability (top-tier reasoning, code, long context). Title: "⭐ [model name] ~ Opus 4.5". Body: benchmarks vs frontier, why comparable, where to get, caveman. High bar — only include if genuinely competitive.
+Body of each highlight: bullet list, one bullet per WWWWH element where it makes sense (**Who** made it · **What** it is/does · **When/Where** available · **Why** it matters · **How** to use/get it). Caveman style. Bold key name/term in each bullet. No prose paragraphs — bullets only.
+
+1. kind="frontier_model" — new frontier/SOTA proprietary model announced (GPT-X, Claude X, Gemini X, Grok X, etc). Title: model name. Body: WWWWH + benchmark delta. Skip if just mentioned in passing.
+2. kind="tool" — new tool/product/library/service worth knowing. Title: tool name. Body: WWWWH. One highlight per distinct tool.
+3. kind="local_model" — new locally-hostable open-weight model worth trying (weights downloadable, runs on consumer GPU). Title: model name. Body: WWWWH + param size + how to run.
+4. kind="opus_equivalent" — open-weight model that approximates Claude Opus 4.5 capability (top-tier reasoning, code, long context). Title: "⭐ [model name] ~ Opus 4.5". Body: WWWWH + benchmarks vs frontier. High bar — only include if genuinely competitive.
 
 Return [] for highlights if none qualify. Never invent highlights not in document.
 
@@ -158,7 +176,7 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 			PipelineRunID: run.ID,
 			Kind:          h.Kind,
 			Title:         h.Title,
-			Body:          h.Body,
+			Body:          h.bodyString(),
 			Metadata:      string(meta),
 			CreatedAt:     now,
 			UpdatedAt:     now,

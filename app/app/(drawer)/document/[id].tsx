@@ -36,10 +36,11 @@ import {
   fetchDocumentHighlights,
   fetchDocumentPipelineRuns,
   deleteDocumentHighlights,
+  deleteHighlight,
   runPipelineOnDocument,
   fetchFeed,
 } from '../../../src/api'
-import type { Document, Annotation, Pipeline, Highlight, PipelineRun, Feed } from '../../../src/api'
+import type { Document, Annotation, Pipeline, HighlightWithDoc, PipelineRun, Feed } from '../../../src/api'
 import { useConnection } from '../../../src/ConnectionContext'
 import { saveTheme } from '../../../src/storage'
 import AnnotationPanel from '../../../src/AnnotationPanel'
@@ -82,7 +83,7 @@ export default function DocumentViewer() {
 
   // Pipeline / Highlights state
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
-  const [highlights, setHighlights] = useState<Highlight[]>([])
+  const [highlights, setHighlights] = useState<HighlightWithDoc[]>([])
   const [pipelineRuns, setPipelineRuns] = useState<PipelineRun[]>([])
   const [hlLoading, setHlLoading] = useState(false)
   const hlPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -642,6 +643,7 @@ export default function DocumentViewer() {
               hlLoading={hlLoading}
               setHlLoading={setHlLoading}
               reload={loadHighlights}
+              onDocumentPress={(docId) => { closeMetaPanel(); router.push(`/document/${encodeURIComponent(docId)}?from=/${id}`) }}
             />
             <View style={s.metaDivider} />
             {!deleteConfirm ? (
@@ -778,16 +780,17 @@ type HighlightsSectionProps = {
   docId: string
   serverUrl: string
   token: string
-  highlights: Highlight[]
+  highlights: HighlightWithDoc[]
   pipelineRuns: PipelineRun[]
   pipelines: Pipeline[]
   hlLoading: boolean
   setHlLoading: (v: boolean) => void
   reload: () => void
+  onDocumentPress: (docId: string) => void
 }
 
 function HighlightsSection({
-  docId, serverUrl, token, highlights, pipelineRuns, pipelines, hlLoading, setHlLoading, reload,
+  docId, serverUrl, token, highlights, pipelineRuns, pipelines, hlLoading, setHlLoading, reload, onDocumentPress,
 }: HighlightsSectionProps) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildHlStyles(theme), [theme])
@@ -841,7 +844,15 @@ function HighlightsSection({
               </Text>
             )}
             {runHighlights.map(hl => (
-              <HighlightCard key={hl.id} item={hl} />
+              <HighlightCard
+                key={hl.id}
+                item={hl}
+                linkedDocuments={hl.linked_documents}
+                onDocumentPress={onDocumentPress}
+                onDelete={() => {
+                  deleteHighlight(serverUrl, token, hl.id).then(reload).catch(() => {})
+                }}
+              />
             ))}
             {pl && (
               <Pressable
