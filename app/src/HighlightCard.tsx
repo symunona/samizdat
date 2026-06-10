@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+
+const CLIP_CHAR_THRESHOLD = 800
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import type { Highlight } from './api'
@@ -30,9 +32,12 @@ export default function HighlightCard({
     note: '#b8a0ff',
   } as Record<string, string>), [theme])
 
-  const [contentHeight, setContentHeight] = useState(0)
   const [modalOpen, setModalOpen] = useState(false)
-  const isClipped = contentHeight > MAX_BODY_HEIGHT
+  const isClipped = item.body.length > CLIP_CHAR_THRESHOLD || item.body.includes('![')
+  // Stabilize by item.id: linked_documents are computed once per highlight and don't change.
+  // Prevents new object refs from React Query refetches bypassing MarkdownBody memo.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stableLinkedDocs = useMemo(() => linkedDocuments, [item.id])
 
   return (
     <Pressable style={[s.card, pinned && s.cardPinned]} onPress={onPress}>
@@ -53,11 +58,9 @@ export default function HighlightCard({
       </View>
 
       <View style={s.bodyClipMax}>
-        <View onLayout={e => setContentHeight(e.nativeEvent.layout.height)}>
-          <MarkdownBody linkedDocuments={linkedDocuments} onDocumentPress={onDocumentPress}>
-            {item.body}
-          </MarkdownBody>
-        </View>
+        <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={onDocumentPress}>
+          {item.body}
+        </MarkdownBody>
         {isClipped && (
           <Pressable style={s.expandOverlay} onPress={() => setModalOpen(true)}>
             <Text style={s.expandText}>Tap to expand</Text>
@@ -76,7 +79,7 @@ export default function HighlightCard({
                 </Pressable>
               </View>
               <ScrollView style={s.modalScroll} contentContainerStyle={s.modalScrollContent}>
-                <MarkdownBody linkedDocuments={linkedDocuments} onDocumentPress={(id) => { setModalOpen(false); onDocumentPress?.(id) }}>
+                <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={(id) => { setModalOpen(false); onDocumentPress?.(id) }}>
                   {item.body}
                 </MarkdownBody>
               </ScrollView>

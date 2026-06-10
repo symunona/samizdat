@@ -1,7 +1,15 @@
-import { useCallback, useMemo } from 'react'
+import { memo, useCallback, useMemo } from 'react'
 import { StyleSheet } from 'react-native'
 import Markdown from 'react-native-markdown-display'
 import { useUnistyles } from 'react-native-unistyles'
+import ImageViewer from './ImageViewer'
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mdRules: Record<string, any> = {
+  image: (node: { key: string; attributes: { src?: string; alt?: string } }) => (
+    <ImageViewer key={node.key} src={node.attributes.src ?? ''} alt={node.attributes.alt} />
+  ),
+}
 
 type Props = {
   children: string
@@ -9,7 +17,7 @@ type Props = {
   onDocumentPress?: (docId: string) => void
 }
 
-export default function MarkdownBody({ children, linkedDocuments, onDocumentPress }: Props) {
+function MarkdownBody({ children, linkedDocuments, onDocumentPress }: Props) {
   const { theme } = useUnistyles()
   const mdStyles = useMemo(() => buildMdStyles(theme), [theme])
 
@@ -25,11 +33,13 @@ export default function MarkdownBody({ children, linkedDocuments, onDocumentPres
   }, [linkedDocuments, onDocumentPress])
 
   return (
-    <Markdown style={mdStyles} mergeStyle onLinkPress={handleLinkPress}>
+    <Markdown style={mdStyles} mergeStyle onLinkPress={handleLinkPress} rules={mdRules}>
       {children}
     </Markdown>
   )
 }
+
+export default memo(MarkdownBody)
 
 type Theme = ReturnType<typeof useUnistyles>['theme']
 
@@ -85,12 +95,5 @@ function buildMdStyles(t: Theme): StyleSheet.NamedStyles<Record<string, unknown>
     bullet_list_icon: { color: t.colors.accent, marginRight: 8, marginTop: 3 },
     ordered_list_icon: { color: t.colors.muted, marginRight: 8, marginTop: 3 },
     hr: { backgroundColor: t.colors.border, height: 1, marginVertical: 8 },
-    image: {
-      width: '100%',
-      height: 220,
-      resizeMode: 'cover',
-      borderRadius: 6,
-      marginBottom: 8,
-    },
   }
 }
