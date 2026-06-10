@@ -33,6 +33,25 @@ export async function removeServerUrl(url: string): Promise<void> {
 }
 
 const LAST_URL_KEY = 'samizdat_last_url'
+const URL_LAST_USED_KEY = 'samizdat_url_last_used'
+
+export async function saveUrlLastUsed(url: string): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(URL_LAST_USED_KEY)
+    const map: Record<string, string> = raw ? JSON.parse(raw) : {}
+    map[url] = new Date().toISOString()
+    await AsyncStorage.setItem(URL_LAST_USED_KEY, JSON.stringify(map))
+  } catch { /* best-effort */ }
+}
+
+export async function loadUrlLastUsedMap(): Promise<Record<string, string>> {
+  try {
+    const raw = await AsyncStorage.getItem(URL_LAST_USED_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
 
 const THEME_KEY = 'samizdat_theme'
 

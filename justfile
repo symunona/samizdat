@@ -88,6 +88,7 @@ _check-no-dev:
 [group('dev')]
 [doc('Build app + server, restart background server (dev mode, HTTP)')]
 dev: _check-no-service build-server build-app-web
+    @rm -rf /tmp/playwright_chromiumdev_profile-* /tmp/playwright-artifacts-* 2>/dev/null || true
     cd server && nohup ./bin/samizdat serve --webdir ../app/dist > /tmp/samizdat.log 2>&1 &
     @sleep 1 && echo "server started, log: /tmp/samizdat.log"
 

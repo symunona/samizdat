@@ -2,19 +2,47 @@ package worker
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 
 	"github.com/playwright-community/playwright-go"
 )
 
 // BrowserPool holds a single long-lived Chromium instance.
 // Each scrape gets its own BrowserContext + Page (isolated cookies/storage).
+// mu ensures at most one FetchHTML runs at a time.
 type BrowserPool struct {
 	pw      *playwright.Playwright
 	browser playwright.Browser
+	mu      sync.Mutex
+}
+
+// cleanPlaywrightTmp removes orphaned playwright temp dirs left by previous
+// unclean shutdowns. Safe to call before launching a new browser instance.
+func cleanPlaywrightTmp() {
+	patterns := []string{
+		"/tmp/playwright_chromiumdev_profile-*",
+		"/tmp/playwright-artifacts-*",
+	}
+	for _, pat := range patterns {
+		matches, err := filepath.Glob(pat)
+		if err != nil || len(matches) == 0 {
+			continue
+		}
+		for _, dir := range matches {
+			if err := os.RemoveAll(dir); err != nil {
+				logBrowser.Warnf("cleanup %s: %v", dir, err)
+			} else {
+				logBrowser.Printf("cleaned orphaned playwright dir: %s", dir)
+			}
+		}
+	}
 }
 
 // NewBrowserPool installs Chromium if needed, then launches it headless.
 func NewBrowserPool() (*BrowserPool, error) {
+	cleanPlaywrightTmp()
 	logBrowser.Println("installing playwright browsers (no-op if already present)...")
 	if err := playwright.Install(&playwright.RunOptions{
 		Browsers: []string{"chromium"},
@@ -46,8 +74,10 @@ func NewBrowserPool() (*BrowserPool, error) {
 }
 
 // FetchHTML navigates to url in a fresh isolated context, waits for the page
-// to load, and returns the fully-rendered HTML.
+// to load, and returns the fully-rendered HTML. Only one fetch runs at a time.
 func (b *BrowserPool) FetchHTML(url string) (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	logBrowser.Printf("fetch %s", url)
 	ctx, err := b.browser.NewContext(playwright.BrowserNewContextOptions{
 		UserAgent: playwright.String(

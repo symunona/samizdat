@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { findReachable, ApiError } from './api'
 import type { Me } from './api'
-import { loadConnection, clearConnection, loadLastSuccessfulUrl, saveLastSuccessfulUrl } from './storage'
+import { loadConnection, clearConnection, loadLastSuccessfulUrl, saveLastSuccessfulUrl, saveUrlLastUsed } from './storage'
 import type { StoredConnection } from './storage'
 
 type ConnectionStatus = 'loading' | 'connected' | 'disconnected'
@@ -79,6 +79,7 @@ export function ConnectionProvider({ children }: { children: React.ReactNode }) 
         setServerInfo(found.info)
         setError(null)
         setStatus('connected')
+        saveUrlLastUsed(found.url)
         if (found.url !== lastSuccessfulUrlRef.current) {
           lastSuccessfulUrlRef.current = found.url
           saveLastSuccessfulUrl(found.url)

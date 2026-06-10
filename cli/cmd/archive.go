@@ -85,7 +85,7 @@ func runArchiveCurrent(_ *cobra.Command, _ []string) error {
 	}
 	fmt.Printf("Archived → %s\n", dst)
 
-	fmt.Println("Resetting live DB (keeping feeds, subscriptions, devices, settings, pipelines)...")
+	fmt.Println("Resetting live DB (keeping feeds, subscriptions, feed_items, devices, settings, pipelines)...")
 	if err := resetDB(cfg.DBPath); err != nil {
 		return fmt.Errorf("reset DB: %w", err)
 	}
@@ -93,7 +93,7 @@ func runArchiveCurrent(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-// resetDB clears content tables in FK-safe order, keeps subscriptions/feeds/devices/settings/pipelines.
+// resetDB clears content tables in FK-safe order, keeps feeds/subscriptions/feed_items/devices/settings/pipelines.
 func resetDB(dbPath string) error {
 	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
 	if err != nil {
@@ -110,7 +110,6 @@ func resetDB(dbPath string) error {
 		"pipeline_runs",
 		"jobs",
 		"read_states",
-		"feed_items",
 		"media_assets",
 		"documents",
 	}

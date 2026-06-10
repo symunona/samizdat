@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDevices, revokeDevice, fetchSettings, updateSettings, ApiError } from '../../src/api'
 import type { DeviceInfo, AppSettings } from '../../src/api'
-import { clearConnection, removeServerUrl } from '../../src/storage'
+import { clearConnection, removeServerUrl, loadUrlLastUsedMap } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
 import { useConfirm } from '../../src/ConfirmContext'
 import { useToast } from '../../src/ToastContext'
@@ -57,6 +57,7 @@ export default function SettingsScreen() {
   const [revoking, setRevoking] = useState<Set<string>>(new Set())
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [settingsLoading, setSettingsLoading] = useState(false)
+  const [urlLastUsed, setUrlLastUsed] = useState<Record<string, string>>({})
 
   const handleUnauthorized = useCallback(async () => {
     await logout()
@@ -97,9 +98,14 @@ export default function SettingsScreen() {
   }, [activeUrl, token])
 
   useEffect(() => {
+    loadUrlLastUsedMap().then(setUrlLastUsed)
+  }, [])
+
+  useEffect(() => {
     if (status === 'connected') {
       loadDevices()
       loadSettings()
+      loadUrlLastUsedMap().then(setUrlLastUsed)
     }
   }, [status, loadDevices, loadSettings])
 
@@ -219,6 +225,9 @@ export default function SettingsScreen() {
                 <View style={s.urlTextGroup}>
                   <Text style={[s.urlHost, isActive && s.urlHostActive]}>{hostname(url)}</Text>
                   <Text style={s.urlFull} numberOfLines={1}>{url}</Text>
+                  {urlLastUsed[url] && (
+                    <Text style={s.urlLastUsed}>Last used {formatRelative(urlLastUsed[url])}</Text>
+                  )}
                 </View>
                 {isActive
                   ? <Text style={s.activeBadge}>active</Text>
@@ -379,6 +388,7 @@ function buildStyles(t: Theme) {
     urlHost: { color: t.colors.muted, fontSize: 13, fontWeight: '500' },
     urlHostActive: { color: t.colors.text, fontWeight: '700' },
     urlFull: { color: t.colors.placeholder, fontSize: 11, fontFamily: 'monospace' },
+    urlLastUsed: { color: t.colors.muted, fontSize: 11, marginTop: 1 },
     activeBadge: { color: t.colors.online, fontSize: 11, fontWeight: '700', flexShrink: 0 },
     connectionDetail: { color: t.colors.muted, fontSize: 12, lineHeight: 16 },
     connectionUrl: { color: t.colors.text, fontWeight: '600' },
