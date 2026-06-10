@@ -40,9 +40,7 @@ Rows carry `rev` (server monotonic seq) + `updated_at` + tombstone. Phone pulls 
 - Tests/lint live behind `just` recipes; run them before claiming done.
 
 ## Commit Rules
-Do not commit every little thing.
-Wait for features to be ready.
-If worktree is dirty, let the user know!
+Do commit at the end of every delivery!
 
 ## Prefer subagents for dev tasks
 Always make a plan first in the plan/[yyyy-mm-dd]-plan-name.md
@@ -51,11 +49,14 @@ When done, move to plans/archive folder.
 When feature is larger commit plan to main, then branch off, do smaller commits, at the end, ask the user to check. When done, squash merge back to main.
 
 ## Testing
-Craft self-tests before starting based on the plan.
+Craft one time E2E self-tests before starting - how you will make sure the feature works when the work is done!
+ALWAYS TEST YOURSELF VIA agent-browser!
 If there are inconsistencies in the specs, raise it to the user, before starting to implement.
-Always run linter before squash merging to main, fix errors, run lint jobs.
+Always run linter before you finish a job and fix anything that comes up..
 Maintain the global linter.
-Always run a 1 time e2e test with agent-browser to check if what you implemented actually worked!
+
+## Data destruction
+If you're doing BULK deletes or updates that are non-recoverable, always ask for confirmation.
 
 ## Subsidiarity
 Keep sub-project specifix notes in the CLAUDE.mds. Before each merge, run the `diff_review` tool to see if we need to append the respective CLAUDE.md with new info.
