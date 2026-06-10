@@ -52,6 +52,25 @@ type Status =
   | { kind: 'connecting' }
   | { kind: 'error'; message: string }
 
+type ParseResult =
+  | { ok: true; code: string; urls: string[] }
+  | { ok: false; reason: string }
+
+function parseConnectString(raw: string): ParseResult {
+  const trimmed = raw.trim()
+  if (!trimmed) return { ok: false, reason: '' }
+  try {
+    const json = atob(trimmed)
+    const obj = JSON.parse(json)
+    if (obj.v !== 1 || typeof obj.code !== 'string' || !Array.isArray(obj.urls)) {
+      return { ok: false, reason: 'Unrecognised format' }
+    }
+    return { ok: true, code: obj.code as string, urls: obj.urls as string[] }
+  } catch {
+    return { ok: false, reason: 'Invalid connect string' }
+  }
+}
+
 export default function ConnectScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
@@ -61,6 +80,34 @@ export default function ConnectScreen() {
   const [url, setUrl] = useState(defaultServerUrl)
   const [code, setCode] = useState('')
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
+  const [connectString, setConnectString] = useState('')
+  const [connectStringHint, setConnectStringHint] = useState<string | null>(null)
+
+  async function handleConnectString(val: string) {
+    setConnectString(val)
+    if (!val.trim()) { setConnectStringHint(null); return }
+    const result = parseConnectString(val)
+    if (result.ok) {
+      const resolvedUrl = result.urls[0] ?? url
+      setCode(result.code)
+      setUrl(resolvedUrl)
+      setConnectStringHint('Connecting…')
+      setStatus({ kind: 'connecting' })
+      try {
+        const paired = await pair(resolvedUrl, result.code, deviceName())
+        const serverUrls = paired.server_urls && paired.server_urls.length > 0 ? paired.server_urls : [resolvedUrl]
+        await saveConnection({ token: paired.device_token, deviceId: paired.device_id, serverUrls })
+        await reload()
+        router.replace('/')
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : 'Connection failed'
+        setConnectStringHint(msg)
+        setStatus({ kind: 'error', message: msg })
+      }
+    } else {
+      setConnectStringHint(result.reason || null)
+    }
+  }
 
   async function connect() {
     setStatus({ kind: 'connecting' })
@@ -100,6 +147,25 @@ export default function ConnectScreen() {
         />
         <Text style={s.brand}>samizdat</Text>
         <Text style={s.sub}>Connect to your server</Text>
+
+        <Text style={s.label}>Connect string</Text>
+        <TextInput
+          style={s.input}
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="off"
+          placeholder="Paste base64 string from `just sam connect`"
+          placeholderTextColor={theme.colors.placeholder}
+          value={connectString}
+          onChangeText={handleConnectString}
+        />
+        {connectStringHint !== null && (
+          <Text style={connectString && parseConnectString(connectString).ok ? s.hintOk : s.hintWarn}>
+            {connectStringHint}
+          </Text>
+        )}
+
+        <View style={s.divider} />
 
         <Text style={s.label}>Server URL</Text>
         <TextInput
@@ -186,6 +252,9 @@ function buildStyles(t: Theme) {
     ghost: { alignItems: 'center', paddingVertical: 12 },
     ghostText: { color: t.colors.placeholder, fontSize: 14 },
     hint: { color: t.colors.muted, fontSize: 13, marginTop: 8 },
+    hintOk: { color: t.colors.online, fontSize: 12, marginTop: 4 },
+    hintWarn: { color: t.colors.error, fontSize: 12, marginTop: 4 },
+    divider: { height: 1, backgroundColor: t.colors.border, marginVertical: t.spacing.md },
     code: { color: t.colors.accent, fontSize: 13, fontFamily: 'monospace', textAlign: 'center', marginTop: 4 },
     errorText: { color: t.colors.error, fontSize: 14, lineHeight: 20, marginTop: 8 },
   })
