@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Image,
@@ -47,6 +47,10 @@ function deviceName(): string {
   return `Samizdat ${plat}`
 }
 
+function splitUrls(raw: string): string[] {
+  return raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+}
+
 type Status =
   | { kind: 'idle' }
   | { kind: 'connecting' }
@@ -83,19 +87,49 @@ export default function ConnectScreen() {
   const [connectString, setConnectString] = useState('')
   const [connectStringHint, setConnectStringHint] = useState<string | null>(null)
 
+  // Auto-connect from ?c= URL param (e.g. clicking a link from `sam connect` output)
+  const urlParamHandled = useRef(false)
+  useEffect(() => {
+    if (urlParamHandled.current) return
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return
+    const c = new URLSearchParams(window.location.search).get('c')
+    if (!c) return
+    urlParamHandled.current = true
+    const parsed = parseConnectString(c)
+    if (!parsed.ok) return
+    const primaryUrl = parsed.urls[0] ?? defaultServerUrl()
+    setConnectString(c)
+    setCode(parsed.code)
+    setUrl(parsed.urls.join('\n'))
+    setConnectStringHint('Connecting…')
+    setStatus({ kind: 'connecting' })
+    pair(primaryUrl, parsed.code, deviceName())
+      .then(async (paired) => {
+        const serverUrls = paired.server_urls?.length ? paired.server_urls : parsed.urls
+        await saveConnection({ token: paired.device_token, deviceId: paired.device_id, serverUrls })
+        await reload()
+        router.replace('/')
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : 'Connection failed'
+        setConnectStringHint(msg)
+        setStatus({ kind: 'error', message: msg })
+      })
+  }, [reload, router])
+
   async function handleConnectString(val: string) {
     setConnectString(val)
     if (!val.trim()) { setConnectStringHint(null); return }
     const result = parseConnectString(val)
     if (result.ok) {
-      const resolvedUrl = result.urls[0] ?? url
+      const primaryUrl = result.urls[0] ?? url
       setCode(result.code)
-      setUrl(resolvedUrl)
+      setUrl(result.urls.join('\n'))
       setConnectStringHint('Connecting…')
       setStatus({ kind: 'connecting' })
       try {
-        const paired = await pair(resolvedUrl, result.code, deviceName())
-        const serverUrls = paired.server_urls && paired.server_urls.length > 0 ? paired.server_urls : [resolvedUrl]
+        const paired = await pair(primaryUrl, result.code, deviceName())
+        const serverUrls = paired.server_urls?.length ? paired.server_urls : result.urls
         await saveConnection({ token: paired.device_token, deviceId: paired.device_id, serverUrls })
         await reload()
         router.replace('/')
@@ -113,15 +147,19 @@ export default function ConnectScreen() {
     setStatus({ kind: 'connecting' })
     try {
       if (!code.trim()) throw new Error('Enter the pairing code from `sam connect`.')
-      const result = await pair(url, code.trim(), deviceName())
-      const urls = result.server_urls && result.server_urls.length > 0 ? result.server_urls : [url]
-      await saveConnection({ token: result.device_token, deviceId: result.device_id, serverUrls: urls })
+      const urlList = splitUrls(url)
+      const primaryUrl = urlList[0]
+      if (!primaryUrl) throw new Error('Enter a server URL.')
+      const result = await pair(primaryUrl, code.trim(), deviceName())
+      const serverUrls = result.server_urls?.length ? result.server_urls : urlList
+      await saveConnection({ token: result.device_token, deviceId: result.device_id, serverUrls })
       await reload()
       router.replace('/')
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Connection failed'
       try {
-        const h = await health(url)
+        const primaryUrl = splitUrls(url)[0] ?? url
+        const h = await health(primaryUrl)
         setStatus({ kind: 'error', message: `Server reachable (${h.status}) but not paired — ${msg}` })
       } catch {
         setStatus({ kind: 'error', message: msg })
@@ -169,11 +207,12 @@ export default function ConnectScreen() {
 
         <Text style={s.label}>Server URL</Text>
         <TextInput
-          style={s.input}
+          style={[s.input, s.inputMultiline]}
           autoCapitalize="none"
           autoCorrect={false}
-          keyboardType="url"
-          placeholder="https://samizdat.example.com"
+          multiline
+          numberOfLines={3}
+          placeholder={'https://samizdat.example.com\nhttps://100.x.x.x:8765'}
           placeholderTextColor={theme.colors.placeholder}
           value={url}
           onChangeText={setUrl}
@@ -239,6 +278,10 @@ function buildStyles(t: Theme) {
       paddingHorizontal: t.spacing.md,
       paddingVertical: 12,
       fontSize: 16,
+    },
+    inputMultiline: {
+      height: 80,
+      textAlignVertical: 'top',
     },
     button: {
       backgroundColor: t.colors.accent,
