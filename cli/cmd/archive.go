@@ -85,7 +85,7 @@ func runArchiveCurrent(_ *cobra.Command, _ []string) error {
 	}
 	fmt.Printf("Archived → %s\n", dst)
 
-	fmt.Println("Resetting live DB (keeping feeds, subscriptions, feed_items, devices, settings, pipelines)...")
+	fmt.Println("Resetting live DB (keeping feeds, subscriptions, devices, settings, pipelines)...")
 	if err := resetDB(cfg.DBPath); err != nil {
 		return fmt.Errorf("reset DB: %w", err)
 	}
@@ -93,7 +93,7 @@ func runArchiveCurrent(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-// resetDB clears content tables in FK-safe order, keeps feeds/subscriptions/feed_items/devices/settings/pipelines.
+// resetDB clears content tables in FK-safe order, keeps feeds/subscriptions/devices/settings/pipelines.
 func resetDB(dbPath string) error {
 	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
 	if err != nil {
@@ -110,6 +110,7 @@ func resetDB(dbPath string) error {
 		"pipeline_runs",
 		"jobs",
 		"read_states",
+		"feed_items",
 		"media_assets",
 		"documents",
 	}
@@ -141,9 +142,10 @@ func resetDB(dbPath string) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 
-	if _, err := db.Exec("VACUUM"); err != nil {
-		return fmt.Errorf("vacuum: %w", err)
-	}
+	// Skip VACUUM: it rebuilds the DB from the main file, which may not yet
+	// include WAL-only writes (e.g. polling_enabled) if the server is running.
+	// Space is reclaimed on the next WAL checkpoint. Run VACUUM manually when
+	// the server is stopped if compaction is needed.
 
 	return nil
 }
