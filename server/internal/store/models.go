@@ -116,18 +116,19 @@ type HighlightTag struct {
 }
 
 type Job struct {
-	ID        string  `json:"id"`
-	Kind      string  `json:"kind"`
-	Payload   string  `json:"payload"`
-	Status    string  `json:"status"`
-	Attempts  int64   `json:"attempts"`
-	RunAfter  string  `json:"run_after"`
-	LastError string  `json:"last_error"`
-	Result    string  `json:"result"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
-	Rev       int64   `json:"rev"`
-	DeletedAt *string `json:"deleted_at"`
+	ID          string  `json:"id"`
+	Kind        string  `json:"kind"`
+	Payload     string  `json:"payload"`
+	Status      string  `json:"status"`
+	Attempts    int64   `json:"attempts"`
+	RunAfter    string  `json:"run_after"`
+	LastError   string  `json:"last_error"`
+	Result      string  `json:"result"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
+	Rev         int64   `json:"rev"`
+	DeletedAt   *string `json:"deleted_at"`
+	ParentJobID *string `json:"parent_job_id"`
 }
 
 type MediaAsset struct {

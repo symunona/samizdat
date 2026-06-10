@@ -137,28 +137,30 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	logScraper.Printf("upserted document %s for %s", doc.ID[:8], canonical)
 
 	// Enqueue asset fetching job.
+	parentID := job.ID
 	assetPayload, _ := json.Marshal(map[string]string{"document_id": doc.ID, "document_title": title})
 	_, err = q.InsertJob(ctx, store.InsertJobParams{
-		ID:        uuid.NewString(),
-		Kind:      "fetch_assets",
-		Payload:   string(assetPayload),
-		RunAfter:  now,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          uuid.NewString(),
+		Kind:        "fetch_assets",
+		Payload:     string(assetPayload),
+		RunAfter:    now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		ParentJobID: &parentID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("enqueue fetch_assets: %w", err)
 	}
 
 	// Trigger matching pipelines.
-	triggerPipelines(ctx, q, doc, now)
+	triggerPipelines(ctx, q, doc, now, &parentID)
 
 	jobResult, _ := json.Marshal(map[string]string{"document_id": doc.ID, "title": title})
 	return string(jobResult), nil
 }
 
 // triggerPipelines checks all enabled on_new_document pipelines and enqueues runs for matches.
-func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document, now string) {
+func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document, now string, parentJobID *string) {
 	pipelines, err := q.ListEnabledPipelines(ctx)
 	if err != nil {
 		logScraper.Errorf("pipeline trigger: list pipelines: %v", err)
@@ -191,12 +193,13 @@ func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document,
 			"document_title": doc.Title,
 		})
 		_, err := q.InsertJob(ctx, store.InsertJobParams{
-			ID:        uuid.NewString(),
-			Kind:      "run_pipeline",
-			Payload:   string(payload),
-			RunAfter:  now,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:          uuid.NewString(),
+			Kind:        "run_pipeline",
+			Payload:     string(payload),
+			RunAfter:    now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			ParentJobID: parentJobID,
 		})
 		if err != nil {
 			logScraper.Errorf("pipeline trigger: enqueue run for pipeline %s: %v", pl.ID, err)

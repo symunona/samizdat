@@ -84,13 +84,15 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 				FeedID  *string `json:"feed_id,omitempty"`
 				FeedURL string  `json:"feed_url,omitempty"`
 			}{URL: u, FeedID: &feedID, FeedURL: feed.Url})
+			parentID := job.ID
 			_, err = q.InsertJob(ctx, store.InsertJobParams{
-				ID:        uuid.NewString(),
-				Kind:      "scrape_url",
-				Payload:   string(itemPayload),
-				RunAfter:  now,
-				CreatedAt: now,
-				UpdatedAt: now,
+				ID:          uuid.NewString(),
+				Kind:        "scrape_url",
+				Payload:     string(itemPayload),
+				RunAfter:    now,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+				ParentJobID: &parentID,
 			})
 			if err != nil {
 				logPollFeed.Errorf("enqueue scrape_url for %s: %v", u, err)

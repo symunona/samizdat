@@ -292,6 +292,7 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS highlights_document_id ON highlights(document_id)`,
 		`CREATE INDEX IF NOT EXISTS highlights_pipeline_run_id ON highlights(pipeline_run_id)`,
 		`ALTER TABLE subscriptions ADD COLUMN paused INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE jobs ADD COLUMN parent_job_id TEXT`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {

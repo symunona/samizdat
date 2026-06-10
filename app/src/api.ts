@@ -286,6 +286,7 @@ export type Job = {
   result: string
   created_at: string
   updated_at: string
+  parent_job_id: string | null
 }
 
 export async function fetchJobs(

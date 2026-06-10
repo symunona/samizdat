@@ -28,7 +28,6 @@ const STATUS_COLOR: Record<string, string> = {
   dead:    '#f87171',
 }
 
-// Must match server's IDFromURL: uuid.NewSHA1(uuid.NameSpaceURL, []byte(url))
 const UUID_NAMESPACE_URL = '6ba7b811-9dad-11d1-80b4-00c04fd430c8'
 function docIdFromUrl(url: string): string {
   return uuidv5(url, UUID_NAMESPACE_URL)
@@ -56,6 +55,54 @@ function parseResult(result: string): Record<string, unknown> {
   try { return JSON.parse(result) as Record<string, unknown> } catch { return {} }
 }
 
+// Group jobs into a tree: roots at top, children indented.
+// A job is a root if it has no parent_job_id or the parent is not in the visible set.
+function buildTree(jobs: Job[]): { job: Job; isRoot: boolean; depth: number }[] {
+  const byId = new Map<string, Job>()
+  for (const j of jobs) byId.set(j.id, j)
+
+  const result: { job: Job; isRoot: boolean; depth: number }[] = []
+  const visited = new Set<string>()
+
+  function collectGroup(job: Job, depth: number) {
+    if (visited.has(job.id)) return
+    visited.add(job.id)
+    result.push({ job, isRoot: depth === 0, depth })
+    // Find direct children
+    for (const j of jobs) {
+      if (j.parent_job_id === job.id && !visited.has(j.id)) {
+        collectGroup(j, depth + 1)
+      }
+    }
+  }
+
+  // Process roots first (no parent, or parent not in set)
+  for (const job of jobs) {
+    if (!job.parent_job_id || !byId.has(job.parent_job_id)) {
+      collectGroup(job, 0)
+    }
+  }
+  // Orphans (parent_job_id set but parent not in filtered view)
+  for (const job of jobs) {
+    if (!visited.has(job.id)) {
+      collectGroup(job, 0)
+    }
+  }
+
+  return result
+}
+
+// Aggregate status of a group (root + its subtree)
+function groupStatus(rootId: string, byParent: Map<string, Job[]>): string {
+  const children = byParent.get(rootId) ?? []
+  if (children.length === 0) return ''
+  const statuses = new Set(children.map(c => c.status))
+  if (statuses.has('running')) return 'running'
+  if (statuses.has('dead')) return 'dead'
+  if (statuses.has('queued')) return 'queued'
+  return 'done'
+}
+
 export default function JobsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
@@ -71,6 +118,7 @@ export default function JobsScreen() {
   const [filter, setFilter] = useState<Filter>('all')
   const [retryingId, setRetryingId] = useState<string | null>(null)
   const [clearing, setClearing] = useState(false)
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
   const load = useCallback(async (isRefresh = false) => {
     if (!activeUrl || !token) return
@@ -122,16 +170,58 @@ export default function JobsScreen() {
     finally { setRetryingId(null) }
   }
 
+  function toggleCollapse(id: string) {
+    setCollapsed(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
   const filtered = useMemo(() =>
     filter === 'all' ? jobs : jobs.filter(j => j.status === filter),
     [jobs, filter]
   )
 
-  function renderItem({ item }: { item: Job }) {
-    const statusColor = STATUS_COLOR[item.status] ?? '#9ca3af'
-    const p = parsePayload(item.payload)
-    const r = parseResult(item.result)
-    const isRetrying = retryingId === item.id
+  // Build flat tree list; collapse subtrees for collapsed roots
+  const treeItems = useMemo(() => {
+    const byParent = new Map<string, Job[]>()
+    for (const j of filtered) {
+      if (j.parent_job_id) {
+        const arr = byParent.get(j.parent_job_id) ?? []
+        arr.push(j)
+        byParent.set(j.parent_job_id, arr)
+      }
+    }
+
+    const tree = buildTree(filtered)
+
+    // Filter out children of collapsed roots
+    const collapsedRoots = new Set<string>()
+    for (const { job, isRoot } of tree) {
+      if (isRoot && collapsed.has(job.id)) collapsedRoots.add(job.id)
+    }
+
+    return tree
+      .filter(({ job }) => {
+        if (!job.parent_job_id) return true
+        return !collapsedRoots.has(job.parent_job_id)
+      })
+      .map(item => ({
+        ...item,
+        childCount: item.isRoot ? (byParent.get(item.job.id)?.length ?? 0) : 0,
+        groupStatus: item.isRoot ? groupStatus(item.job.id, byParent) : '',
+      }))
+  }, [filtered, collapsed])
+
+  function renderItem({ item }: { item: typeof treeItems[0] }) {
+    const { job, depth, isRoot, childCount, groupStatus: gStatus } = item
+    const statusColor = STATUS_COLOR[job.status] ?? '#9ca3af'
+    const p = parsePayload(job.payload)
+    const r = parseResult(job.result)
+    const isRetrying = retryingId === job.id
+    const isCollapsed = isRoot && collapsed.has(job.id)
 
     const payloadUrl = p.url ?? ''
     const feedId = p.feed_id ?? ''
@@ -140,10 +230,9 @@ export default function JobsScreen() {
     const documentTitle = p.document_title ?? ''
     const stepIndex = typeof p.step_index === 'number' ? p.step_index : (p.step_index != null ? parseInt(p.step_index as string, 10) : -1)
 
-    // Derive document ID: prefer result (new jobs), fall back to uuid-v5 from URL (legacy)
     const docId: string = (typeof r.document_id === 'string' && r.document_id)
       ? r.document_id
-      : (item.kind === 'scrape_url' && payloadUrl ? docIdFromUrl(payloadUrl) : '')
+      : (job.kind === 'scrape_url' && payloadUrl ? docIdFromUrl(payloadUrl) : '')
 
     const doc = docId ? docMap.get(docId) : undefined
     const docTitle = doc?.title ?? (typeof r.title === 'string' ? r.title : '')
@@ -151,16 +240,31 @@ export default function JobsScreen() {
     const discovered = typeof r.discovered === 'number' ? r.discovered : -1
     const newItems = typeof r.new === 'number' ? r.new : -1
 
+    const indentPx = depth * 16
+
     return (
-      <View style={s.card}>
+      <View style={[s.card, depth > 0 && s.childCard, { marginLeft: indentPx }]}>
+        {/* Connector line for children */}
+        {depth > 0 && <View style={s.connectorLine} />}
+
         <View style={s.cardTop}>
           <View style={[s.statusDot, { backgroundColor: statusColor }]} />
-          <Text style={s.kindText}>{kindLabel(item.kind)}</Text>
-          <Text style={s.ageText}>{formatAge(item.updated_at)}</Text>
+          <Text style={s.kindText}>{kindLabel(job.kind)}</Text>
+          <Text style={s.ageText}>{formatAge(job.updated_at)}</Text>
+
+          {/* Collapse toggle for roots with children */}
+          {isRoot && childCount > 0 && (
+            <Pressable onPress={() => toggleCollapse(job.id)} style={s.collapseBtn}>
+              <View style={[s.groupBadge, gStatus ? { backgroundColor: STATUS_COLOR[gStatus] + '33' } : undefined]}>
+                <Text style={s.groupBadgeText}>{childCount}</Text>
+              </View>
+              <Text style={s.collapseIcon}>{isCollapsed ? '▶' : '▼'}</Text>
+            </Pressable>
+          )}
         </View>
 
-        {/* scrape_url: show title (or url) linking in-app to document */}
-        {item.kind === 'scrape_url' && !!payloadUrl && (
+        {/* scrape_url */}
+        {job.kind === 'scrape_url' && !!payloadUrl && (
           <Pressable onPress={() =>
             doc
               ? router.push(`/(drawer)/document/${docId}`)
@@ -171,28 +275,24 @@ export default function JobsScreen() {
             </Text>
           </Pressable>
         )}
-
-        {/* scrape_url triggered by a feed: show feed source */}
-        {item.kind === 'scrape_url' && !!feedUrl && (
+        {job.kind === 'scrape_url' && !!feedUrl && (
           <Text style={s.sourceText} numberOfLines={1}>from feed: {feedUrl}</Text>
         )}
 
-        {/* other job kinds: just show the URL externally */}
-        {item.kind !== 'scrape_url' && !!payloadUrl && (
+        {/* other job kinds: external URL */}
+        {job.kind !== 'scrape_url' && !!payloadUrl && (
           <Pressable onPress={() => Linking.openURL(payloadUrl)}>
             <Text style={s.urlText} numberOfLines={1}>{payloadUrl}</Text>
           </Pressable>
         )}
 
-        {/* poll_feed: show feed URL (enriched) or fall back to truncated ID */}
-        {item.kind === 'poll_feed' && (
+        {/* poll_feed */}
+        {job.kind === 'poll_feed' && (
           <Text style={s.mutedText} numberOfLines={1}>
             {feedUrl || (feedId ? `feed: ${feedId.slice(0, 8)}` : '')}
           </Text>
         )}
-
-        {/* poll_feed result summary */}
-        {item.kind === 'poll_feed' && discovered >= 0 && (
+        {job.kind === 'poll_feed' && discovered >= 0 && (
           <View style={s.resultRow}>
             <Text style={s.resultText}>{discovered} discovered</Text>
             {newItems === 0
@@ -202,37 +302,37 @@ export default function JobsScreen() {
           </View>
         )}
 
-        {/* run_pipeline: show pipeline name → document title */}
-        {item.kind === 'run_pipeline' && (
+        {/* run_pipeline */}
+        {job.kind === 'run_pipeline' && (
           <Text style={s.pipelineText} numberOfLines={2}>
             {pipelineName || 'pipeline'}{documentTitle ? ` → ${documentTitle}` : ''}
           </Text>
         )}
 
-        {/* run_pipeline_step: show pipeline name, step index, document title */}
-        {item.kind === 'run_pipeline_step' && (
+        {/* run_pipeline_step */}
+        {job.kind === 'run_pipeline_step' && (
           <Text style={s.pipelineText} numberOfLines={2}>
             {pipelineName || 'pipeline'}{stepIndex >= 0 ? ` step ${stepIndex + 1}` : ''}{documentTitle ? ` → ${documentTitle}` : ''}
           </Text>
         )}
 
-        {/* fetch_assets: show document title */}
-        {item.kind === 'fetch_assets' && !!documentTitle && (
+        {/* fetch_assets */}
+        {job.kind === 'fetch_assets' && !!documentTitle && (
           <Text style={s.mutedText} numberOfLines={1}>{documentTitle}</Text>
         )}
 
-        {!!item.last_error && (
-          <Text style={s.errorText} numberOfLines={3}>{item.last_error}</Text>
+        {!!job.last_error && (
+          <Text style={s.errorText} numberOfLines={3}>{job.last_error}</Text>
         )}
 
-        {item.attempts > 0 && item.status !== 'done' && (
-          <Text style={s.attemptsText}>Attempts: {item.attempts}</Text>
+        {job.attempts > 0 && job.status !== 'done' && (
+          <Text style={s.attemptsText}>Attempts: {job.attempts}</Text>
         )}
 
-        {item.status === 'dead' && (
+        {job.status === 'dead' && (
           <Pressable
             style={({ pressed }) => [s.retryBtn, (isRetrying || pressed) && s.retryBtnPressed]}
-            onPress={() => handleRetry(item)}
+            onPress={() => handleRetry(job)}
             disabled={!!retryingId}
           >
             {isRetrying
@@ -283,11 +383,11 @@ export default function JobsScreen() {
               </Pressable>
             </View>
           : <FlatList
-              data={filtered}
-              keyExtractor={item => item.id}
+              data={treeItems}
+              keyExtractor={item => item.job.id}
               renderItem={renderItem}
               refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={theme.colors.accent} />}
-              contentContainerStyle={filtered.length === 0 ? s.emptyContainer : s.list}
+              contentContainerStyle={treeItems.length === 0 ? s.emptyContainer : s.list}
               ItemSeparatorComponent={() => <View style={s.sep} />}
               ListEmptyComponent={
                 <Text style={s.emptyText}>No {filter === 'all' ? '' : filter + ' '}jobs.</Text>
@@ -314,10 +414,16 @@ function buildStyles(t: Theme) {
     list: { padding: t.spacing.sm },
     sep: { height: t.spacing.xs },
     card: { backgroundColor: t.colors.surface, borderRadius: t.radius.sm, padding: t.spacing.md, borderWidth: 1, borderColor: t.colors.border },
+    childCard: { borderLeftWidth: 2, borderLeftColor: t.colors.accent + '55', borderRadius: t.radius.sm },
+    connectorLine: { position: 'absolute', left: -1, top: 0, bottom: 0, width: 2, backgroundColor: t.colors.accent + '33' },
     cardTop: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm, marginBottom: 4 },
-    statusDot: { width: 8, height: 8, borderRadius: 4 },
+    statusDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
     kindText: { flex: 1, color: t.colors.text, fontSize: 13, fontFamily: 'monospace', fontWeight: '600' },
     ageText: { color: t.colors.placeholder, fontSize: 11 },
+    collapseBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 4 },
+    collapseIcon: { color: t.colors.muted, fontSize: 10 },
+    groupBadge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8, backgroundColor: t.colors.border },
+    groupBadgeText: { color: t.colors.text, fontSize: 10, fontFamily: 'monospace', fontWeight: '700' },
     urlText: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace', marginBottom: 4, textDecorationLine: 'underline' },
     docLinkText: { color: t.colors.accent, fontSize: 13, fontFamily: 'monospace', fontWeight: '600', textDecorationLine: 'none' },
     mutedText: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace', marginBottom: 4 },

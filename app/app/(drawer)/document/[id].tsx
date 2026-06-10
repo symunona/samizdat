@@ -16,7 +16,7 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
-import { useUnistyles } from 'react-native-unistyles'
+import { useUnistyles, UnistylesRuntime } from 'react-native-unistyles'
 import WebView from 'react-native-webview'
 import type { WebViewMessageEvent } from 'react-native-webview'
 import {
@@ -41,9 +41,11 @@ import {
 } from '../../../src/api'
 import type { Document, Annotation, Pipeline, Highlight, PipelineRun, Feed } from '../../../src/api'
 import { useConnection } from '../../../src/ConnectionContext'
+import { saveTheme } from '../../../src/storage'
 import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
 import TagSelectorModal from '../../../src/TagSelectorModal'
+import HighlightCard from '../../../src/HighlightCard'
 
 const DEBOUNCE_MS = 1000
 const POLL_INTERVAL_MS = 2000
@@ -54,8 +56,9 @@ type ParsedMsg = { type: string; fraction?: number; data?: PendingSelection; id?
 export default function DocumentViewer() {
   const { id, from, highlight } = useLocalSearchParams<{ id: string; from?: string; highlight?: string }>()
   const router = useRouter()
-  const { theme } = useUnistyles()
+  const { theme, rt } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
+  const isDark = rt.themeName === 'dark'
 
   const [doc, setDoc] = useState<Document | null>(null)
   const [htmlContent, setHtmlContent] = useState<string | null>(null)
@@ -75,6 +78,7 @@ export default function DocumentViewer() {
   const headerHeightRef = useRef(56)
   const headerVisibleRef = useRef(true)
   const lastScrollFracRef = useRef(0)
+  const isDocLoadedRef = useRef(false)
 
   // Pipeline / Highlights state
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
@@ -98,6 +102,42 @@ export default function DocumentViewer() {
   }, [activeUrl, token, id])
 
   const [sourceFeed, setSourceFeed] = useState<Feed | null>(null)
+
+  const handleThemeToggle = useCallback(async () => {
+    const next = isDark ? 'light' : 'dark'
+    UnistylesRuntime.setTheme(next)
+    await saveTheme(next)
+  }, [isDark])
+
+  const { bg, fg, su, bo, ac, mu } = useMemo(() => ({
+    bg: theme.colors.background,
+    fg: theme.colors.text,
+    su: theme.colors.surface,
+    bo: theme.colors.border,
+    ac: theme.colors.accent,
+    mu: theme.colors.muted,
+  }), [theme.colors.background, theme.colors.text, theme.colors.surface, theme.colors.border, theme.colors.accent, theme.colors.muted])
+
+  const injectThemeCss = useCallback(() => {
+    const css = `body{background:${bg}!important;color:${fg}!important}h1,h2,h3,h4{color:${fg}!important}a{color:${ac}!important}code{background:${su}!important;color:${ac}!important}pre{background:${su}!important}pre code{color:${fg}!important}blockquote{border-left-color:${ac}!important;color:${mu}!important}hr{border-top-color:${bo}!important}#ann-btn{background:${ac}!important;color:${bg}!important}`
+    if (Platform.OS === 'web') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const doc = (iframeRef.current as any)?.contentDocument
+      if (!doc) return
+      let s = doc.getElementById('sam-theme-override') as HTMLStyleElement | null
+      if (!s) {
+        s = doc.createElement('style') as HTMLStyleElement
+        s.id = 'sam-theme-override'
+        doc.head.appendChild(s)
+      }
+      s.textContent = css
+    } else {
+      const escaped = css.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      webViewRef.current?.injectJavaScript(
+        `(function(){var s=document.getElementById('sth');if(!s){s=document.createElement('style');s.id='sth';document.head.appendChild(s);}s.textContent='${escaped}';})();true;`,
+      )
+    }
+  }, [bg, fg, su, bo, ac, mu])
 
   // Meta panel state
   const [metaVisible, setMetaVisible] = useState(false)
@@ -161,6 +201,7 @@ export default function DocumentViewer() {
 
   const load = useCallback(async () => {
     if (!activeUrl || !token) return
+    isDocLoadedRef.current = false
     setLoading(true)
     setError(null)
     try {
@@ -198,6 +239,11 @@ export default function DocumentViewer() {
       if (hlPollRef.current) clearInterval(hlPollRef.current)
     }
   }, [id, status, load])
+
+  useEffect(() => {
+    if (!isDocLoadedRef.current) return
+    injectThemeCss()
+  }, [injectThemeCss])
 
   const handleHeaderLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
     headerHeightRef.current = e.nativeEvent.layout.height
@@ -247,6 +293,8 @@ export default function DocumentViewer() {
   }, [])
 
   const handleDocumentLoad = useCallback(() => {
+    isDocLoadedRef.current = true
+    injectThemeCss()
     if (highlight) {
       setTimeout(() => injectHighlightAnnotation(highlight), 400)
     } else if (savedProgressRef.current > 0) {
@@ -256,7 +304,7 @@ export default function DocumentViewer() {
         savedProgressRef.current = 0
       }, 300)
     }
-  }, [injectScrollTo, injectHighlightAnnotation, highlight])
+  }, [injectScrollTo, injectHighlightAnnotation, highlight, injectThemeCss])
 
   const handleLinkPress = useCallback(async (href: string) => {
     if (!activeUrl || !token) return
@@ -545,6 +593,10 @@ export default function DocumentViewer() {
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: theme.spacing.lg, paddingBottom: theme.spacing.xl }} onStartShouldSetResponder={() => true}>
             <View style={s.metaHeader}>
               <Text style={s.metaTitle}>Document info</Text>
+              <Pressable onPress={handleThemeToggle} style={s.themeToggleBtn} hitSlop={8}>
+                <Text style={{ fontSize: 16 }}>{isDark ? '☀' : '☾'}</Text>
+                <Text style={s.themeToggleTxt}>{isDark ? 'Light' : 'Dark'}</Text>
+              </Pressable>
               <Pressable onPress={closeMetaPanel} hitSlop={12}>
                 <Text style={s.metaClose}>×</Text>
               </Pressable>
@@ -659,8 +711,10 @@ function buildStyles(t: Theme) {
       borderLeftWidth: 1, borderLeftColor: t.colors.border,
     },
     metaHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: t.spacing.md },
-    metaTitle: { color: t.colors.text, fontSize: 16, fontWeight: '700' },
+    metaTitle: { color: t.colors.text, fontSize: 16, fontWeight: '700', flex: 1 },
     metaClose: { color: t.colors.muted, fontSize: 24, lineHeight: 28 },
+    themeToggleBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: t.spacing.sm },
+    themeToggleTxt: { color: t.colors.muted, fontSize: 13 },
     metaRow: { marginBottom: t.spacing.sm },
     metaLabel: { color: t.colors.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
     metaValue: { color: t.colors.text, fontSize: 14 },
@@ -786,6 +840,9 @@ function HighlightsSection({
                 {run.status === 'running' || run.status === 'queued' ? 'Running…' : 'No highlights'}
               </Text>
             )}
+            {runHighlights.map(hl => (
+              <HighlightCard key={hl.id} item={hl} />
+            ))}
             {pl && (
               <Pressable
                 style={[s.rerunBtn, hlLoading && s.rerunDisabled]}

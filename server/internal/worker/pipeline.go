@@ -70,13 +70,15 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, job store.Job, llm
 		DocumentTitle: p.DocumentTitle,
 		StepIndex:     0,
 	})
+	parentID := job.ID
 	_, err = q.InsertJob(ctx, store.InsertJobParams{
-		ID:        uuid.NewString(),
-		Kind:      "run_pipeline_step",
-		Payload:   string(stepPayload),
-		RunAfter:  now,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          uuid.NewString(),
+		Kind:        "run_pipeline_step",
+		Payload:     string(stepPayload),
+		RunAfter:    now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		ParentJobID: &parentID,
 	})
 	if err != nil {
 		return "", fmt.Errorf("enqueue step: %w", err)
@@ -159,12 +161,13 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 			StepIndex:     int(nextIdx),
 		})
 		_, err = q.InsertJob(ctx, store.InsertJobParams{
-			ID:        uuid.NewString(),
-			Kind:      "run_pipeline_step",
-			Payload:   string(stepPayload),
-			RunAfter:  now,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:          uuid.NewString(),
+			Kind:        "run_pipeline_step",
+			Payload:     string(stepPayload),
+			RunAfter:    now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			ParentJobID: job.ParentJobID,
 		})
 		return `{"status":"advanced"}`, err
 	}
@@ -195,12 +198,13 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 		StepIndex:     int(run.StepIndex),
 	})
 	_, err = q.InsertJob(ctx, store.InsertJobParams{
-		ID:        uuid.NewString(),
-		Kind:      "run_pipeline_step",
-		Payload:   string(stepPayload),
-		RunAfter:  runAfter,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          uuid.NewString(),
+		Kind:        "run_pipeline_step",
+		Payload:     string(stepPayload),
+		RunAfter:    runAfter,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		ParentJobID: job.ParentJobID,
 	})
 	return `{"status":"waiting"}`, err
 }

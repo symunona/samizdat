@@ -21,18 +21,19 @@ CREATE TABLE IF NOT EXISTS server_settings (
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
-    id          TEXT    PRIMARY KEY,
-    kind        TEXT    NOT NULL,
-    payload     TEXT    NOT NULL DEFAULT '{}',
-    status      TEXT    NOT NULL DEFAULT 'queued',
-    attempts    INTEGER NOT NULL DEFAULT 0,
-    run_after   TEXT    NOT NULL,
-    last_error  TEXT    NOT NULL DEFAULT '',
-    result      TEXT    NOT NULL DEFAULT '',
-    created_at  TEXT    NOT NULL,
-    updated_at  TEXT    NOT NULL,
-    rev         INTEGER NOT NULL DEFAULT 0,
-    deleted_at  TEXT
+    id             TEXT    PRIMARY KEY,
+    kind           TEXT    NOT NULL,
+    payload        TEXT    NOT NULL DEFAULT '{}',
+    status         TEXT    NOT NULL DEFAULT 'queued',
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    run_after      TEXT    NOT NULL,
+    last_error     TEXT    NOT NULL DEFAULT '',
+    result         TEXT    NOT NULL DEFAULT '',
+    created_at     TEXT    NOT NULL,
+    updated_at     TEXT    NOT NULL,
+    rev            INTEGER NOT NULL DEFAULT 0,
+    deleted_at     TEXT,
+    parent_job_id  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS jobs_status_run_after ON jobs(status, run_after);
