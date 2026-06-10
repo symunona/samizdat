@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"time"
 
@@ -34,14 +33,14 @@ type Worker struct {
 func New(q *store.Queries, cacheDir string, extractorDir string, llmClient llm.Client) *Worker {
 	browser, err := NewBrowserPool()
 	if err != nil {
-		log.Fatalf("worker: browser init failed: %v", err)
+		logWorker.Fatalf("browser init failed: %v", err)
 	}
 	reg, err := extractor.LoadAll(extractorDir)
 	if err != nil {
-		log.Printf("worker: extractor registry load error: %v", err)
+		logWorker.Errorf("extractor registry load error: %v", err)
 		reg = make(extractor.Registry)
 	}
-	log.Printf("worker: loaded %d extractor configs from %s", len(reg), extractorDir)
+	logWorker.Printf("loaded %d extractor configs from %s", len(reg), extractorDir)
 	return &Worker{q: q, cacheDir: cacheDir, browser: browser, extractorReg: reg, llmClient: llmClient}
 }
 
@@ -75,9 +74,9 @@ func (w *Worker) resetStuckJobs(ctx context.Context) {
 		UpdatedAt:   nowStr,
 		UpdatedAt_2: cutoff,
 	}); err != nil {
-		log.Printf("worker: reset stuck jobs: %v", err)
+		logWorker.Errorf("reset stuck jobs: %v", err)
 	} else {
-		log.Printf("worker: reset stuck jobs older than %s", cutoff)
+		logWorker.Printf("reset stuck jobs older than %s", cutoff)
 	}
 }
 
@@ -93,15 +92,16 @@ func (w *Worker) FetchHTML(url string) (string, error) {
 
 func (w *Worker) schedulePollFeeds(ctx context.Context) {
 	if val, err := w.q.GetSetting(ctx, "polling_enabled"); err == nil && val == "false" {
-		log.Printf("scheduler: polling disabled, skipping")
+		logScheduler.Printf("polling disabled, skipping")
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	subs, err := w.q.ListDueSubscriptions(ctx, now)
 	if err != nil {
-		log.Printf("scheduler: list due subscriptions: %v", err)
+		logScheduler.Errorf("list due subscriptions: %v", err)
 		return
 	}
+	logScheduler.Printf("%d due subscriptions", len(subs))
 	for _, sub := range subs {
 		payload, _ := json.Marshal(map[string]string{"feed_id": sub.FeedID})
 		_, err := w.q.InsertJob(ctx, store.InsertJobParams{
@@ -113,7 +113,7 @@ func (w *Worker) schedulePollFeeds(ctx context.Context) {
 			UpdatedAt: now,
 		})
 		if err != nil {
-			log.Printf("scheduler: enqueue poll_feed for sub %s: %v", sub.ID, err)
+			logScheduler.Errorf("enqueue poll_feed for sub %s: %v", sub.ID, err)
 			continue
 		}
 		// Bump next_run_at so we don't double-enqueue on the next tick.
@@ -123,9 +123,9 @@ func (w *Worker) schedulePollFeeds(ctx context.Context) {
 			UpdatedAt: now,
 			ID:        sub.ID,
 		}); err != nil {
-			log.Printf("scheduler: bump next_run_at for sub %s: %v", sub.ID, err)
+			logScheduler.Errorf("bump next_run_at for sub %s: %v", sub.ID, err)
 		}
-		log.Printf("scheduler: enqueued poll_feed for feed %s (sub %s)", sub.FeedID, sub.ID)
+		logScheduler.Printf("enqueued poll_feed for feed %s (sub %s)", sub.FeedID, sub.ID)
 	}
 }
 
@@ -153,7 +153,7 @@ func (w *Worker) drainQueue(ctx context.Context) {
 			return
 		}
 		if err != nil {
-			log.Printf("worker: claim error: %v", err)
+			logWorker.Errorf("claim error: %v", err)
 			return
 		}
 		w.run(ctx, job)
@@ -161,6 +161,10 @@ func (w *Worker) drainQueue(ctx context.Context) {
 }
 
 func (w *Worker) run(ctx context.Context, job store.Job) {
+	logWorker.Printf("job %s (%s) attempt %d starting  payload=%s",
+		job.ID[:8], job.Kind, job.Attempts+1, job.Payload)
+	start := time.Now()
+
 	var (
 		result string
 		err    error
@@ -180,16 +184,17 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 		err = fmt.Errorf("unknown job kind: %s", job.Kind)
 	}
 
+	elapsed := time.Since(start).Round(time.Millisecond)
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err == nil {
 		if e := w.q.MarkJobDone(ctx, store.MarkJobDoneParams{Result: result, UpdatedAt: now, ID: job.ID}); e != nil {
-			log.Printf("worker: mark done: %v", e)
+			logWorker.Errorf("mark done: %v", e)
 		}
-		log.Printf("worker: job %s (%s) done", job.ID[:8], job.Kind)
+		logWorker.Printf("job %s (%s) done in %s  result=%s", job.ID[:8], job.Kind, elapsed, result)
 		return
 	}
 
-	log.Printf("worker: job %s (%s) attempt %d failed: %v", job.ID[:8], job.Kind, job.Attempts, err)
+	logWorker.Errorf("job %s (%s) attempt %d failed in %s: %v", job.ID[:8], job.Kind, job.Attempts, elapsed, err)
 
 	// Record the error message on the job for operator visibility.
 	if e := w.q.MarkJobLastError(ctx, store.MarkJobLastErrorParams{
@@ -197,7 +202,7 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 		UpdatedAt: now,
 		ID:        job.ID,
 	}); e != nil {
-		log.Printf("worker: mark last_error: %v", e)
+		logWorker.Errorf("mark last_error: %v", e)
 	}
 
 	status := "queued"
@@ -207,6 +212,9 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	backoff := time.Duration(math.Pow(2, float64(job.Attempts-1))) * 30 * time.Second
 	runAfter := time.Now().UTC().Add(backoff).Format(time.RFC3339)
 
+	logWorker.Printf("job %s (%s) → status=%s  backoff=%s  run_after=%s",
+		job.ID[:8], job.Kind, status, backoff.Round(time.Second), runAfter)
+
 	if e := w.q.MarkJobFailed(ctx, store.MarkJobFailedParams{
 		Status:    status,
 		Attempts:  job.Attempts,
@@ -214,7 +222,7 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 		UpdatedAt: now,
 		ID:        job.ID,
 	}); e != nil {
-		log.Printf("worker: mark failed: %v", e)
+		logWorker.Errorf("mark failed: %v", e)
 	}
 
 	// When a pipeline step job permanently dies, mark the run failed so pollers don't wait forever.
@@ -228,9 +236,9 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 				UpdatedAt: now,
 				ID:        p.PipelineRunID,
 			}); e != nil {
-				log.Printf("worker: mark pipeline run %s failed: %v", p.PipelineRunID[:8], e)
+				logWorker.Errorf("mark pipeline run %s failed: %v", p.PipelineRunID[:8], e)
 			} else {
-				log.Printf("worker: pipeline run %s marked failed (step job dead)", p.PipelineRunID[:8])
+				logWorker.Printf("pipeline run %s marked failed (step job dead)", p.PipelineRunID[:8])
 			}
 		}
 	}

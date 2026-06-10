@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     feed_id     TEXT    NOT NULL REFERENCES feeds(id),
     interval_h  INTEGER NOT NULL DEFAULT 24,
     next_run_at TEXT    NOT NULL,
+    paused      INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0,
@@ -290,6 +291,7 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id)`,
 		`CREATE INDEX IF NOT EXISTS highlights_document_id ON highlights(document_id)`,
 		`CREATE INDEX IF NOT EXISTS highlights_pipeline_run_id ON highlights(pipeline_run_id)`,
+		`ALTER TABLE subscriptions ADD COLUMN paused INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {

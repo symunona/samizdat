@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -50,13 +49,13 @@ func (h *subscriptionsHandler) create(w http.ResponseWriter, r *http.Request) {
 		cfg = extractor.ExtractorConfig{Kind: "rss", FeedURL: detected, MaxURLs: 100}
 		if h.extractorsDir != "" {
 			if saveErr := h.reg.SaveConfig(h.extractorsDir, domain, cfg); saveErr != nil {
-				log.Printf("subscriptions: auto-save config for %s: %v", domain, saveErr)
+				logSubs.Errorf("auto-save config for %s: %v", domain, saveErr)
 				h.reg[domain] = cfg
 			}
 		} else {
 			h.reg[domain] = cfg
 		}
-		log.Printf("subscriptions: auto-detected RSS feed for %s → %s", domain, detected)
+		logSubs.Printf("auto-detected RSS feed for %s → %s", domain, detected)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -172,6 +171,57 @@ func (h *subscriptionsHandler) poll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": job.ID})
+}
+
+// PATCH /api/v1/subscriptions/{id}
+// Body: {paused: bool}
+func (h *subscriptionsHandler) patch(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	var body struct {
+		Paused bool `json:"paused"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	paused := int64(0)
+	if body.Paused {
+		paused = 1
+	}
+	if err := h.q.UpdateSubscriptionPaused(r.Context(), store.UpdateSubscriptionPausedParams{
+		Paused:    paused,
+		UpdatedAt: now,
+		ID:        id,
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	sub, err := h.q.GetSubscription(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "subscription not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, sub)
+}
+
+// GET /api/v1/feeds/{id}
+func (h *subscriptionsHandler) getFeed(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	feed, err := h.q.GetFeed(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "feed not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, feed)
 }
 
 // DELETE /api/v1/subscriptions/{id}

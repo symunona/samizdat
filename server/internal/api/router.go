@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -54,9 +53,11 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	subsH := &subscriptionsHandler{q: q, reg: w.ExtractorRegistry(), extractorsDir: extractorDir}
 	mux.HandleFunc("POST /api/v1/subscriptions", bearerAuth(q, subsH.create))
 	mux.HandleFunc("GET /api/v1/subscriptions", bearerAuth(q, subsH.list))
+	mux.HandleFunc("PATCH /api/v1/subscriptions/{id}", bearerAuth(q, subsH.patch))
 	mux.HandleFunc("DELETE /api/v1/subscriptions/{id}", bearerAuth(q, subsH.delete))
 	mux.HandleFunc("POST /api/v1/subscriptions/{id}/poll", bearerAuth(q, subsH.poll))
 	mux.HandleFunc("GET /api/v1/feeds", bearerAuth(q, subsH.listFeeds))
+	mux.HandleFunc("GET /api/v1/feeds/{id}", bearerAuth(q, subsH.getFeed))
 	mux.HandleFunc("GET /api/v1/feeds/{id}/items", bearerAuth(q, subsH.listFeedItems))
 
 	adminFeedsH := &adminFeedsHandler{reg: w.ExtractorRegistry(), browser: w}
@@ -130,9 +131,9 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	if webDir != "" {
 		if _, err := os.Stat(webDir); err == nil {
 			mux.Handle("/", spaHandler(webDir))
-			log.Printf("serving web app from %s", webDir)
+			logAPI.Printf("serving web app from %s", webDir)
 		} else {
-			log.Printf("webdir %q not found, skipping static serving", webDir)
+			logAPI.Warnf("webdir %q not found, skipping static serving", webDir)
 		}
 	}
 

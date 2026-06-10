@@ -197,6 +197,7 @@ type Subscription struct {
 	FeedID    string  `json:"feed_id"`
 	IntervalH int64   `json:"interval_h"`
 	NextRunAt string  `json:"next_run_at"`
+	Paused    int64   `json:"paused"`
 	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
 	Rev       int64   `json:"rev"`

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,10 +26,14 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 		return "", fmt.Errorf("get feed %s: %w", p.FeedID, err)
 	}
 
+	logPollFeed.Printf("polling feed %s (%s)", feed.ID[:8], feed.Url)
+
 	cfg, ok := reg.LookupByURL(feed.Url)
 	if !ok {
 		return "", fmt.Errorf("no extractor config for %s", feed.Url)
 	}
+
+	logPollFeed.Printf("extractor kind=%s for %s", cfg.Kind, feed.Url)
 
 	adapter := extractor.AdapterFor(cfg.Kind)
 	if adapter == nil {
@@ -51,7 +54,7 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 		return "", fmt.Errorf("discover: %w", err)
 	}
 
-	log.Printf("poll_feed: feed %s (%s) discovered %d URLs", feed.ID[:8], feed.Url, len(urls))
+	logPollFeed.Printf("feed %s (%s) discovered %d URLs", feed.ID[:8], feed.Url, len(urls))
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	newCount := 0
@@ -67,7 +70,7 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 			UpdatedAt: now,
 		})
 		if err != nil {
-			log.Printf("poll_feed: upsert feed_item %s: %v", u, err)
+			logPollFeed.Errorf("upsert feed_item %s: %v", u, err)
 			continue
 		}
 
@@ -85,21 +88,22 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 				UpdatedAt: now,
 			})
 			if err != nil {
-				log.Printf("poll_feed: enqueue scrape_url for %s: %v", u, err)
+				logPollFeed.Errorf("enqueue scrape_url for %s: %v", u, err)
 			} else {
+				logPollFeed.Printf("enqueued scrape_url: %s", u)
 				newCount++
 			}
 		}
 	}
 
-	log.Printf("poll_feed: feed %s enqueued %d new scrape jobs", feed.ID[:8], newCount)
+	logPollFeed.Printf("feed %s done: discovered=%d new=%d", feed.ID[:8], len(urls), newCount)
 
 	if err := q.MarkFeedPolled(ctx, store.MarkFeedPolledParams{
 		LastPolledAt: &now,
 		UpdatedAt:    now,
 		ID:           feed.ID,
 	}); err != nil {
-		log.Printf("poll_feed: mark polled: %v", err)
+		logPollFeed.Errorf("mark polled: %v", err)
 	}
 
 	jobResult, _ := json.Marshal(map[string]int{"discovered": len(urls), "new": newCount})

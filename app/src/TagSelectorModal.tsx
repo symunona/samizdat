@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createLogger } from './logger'
+
+const log = createLogger('TagSelectorModal')
 import {
   ActivityIndicator,
   FlatList,
@@ -80,7 +83,7 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
       setAllTags(all)
       setAppliedIds(new Set(applied.map(t => t.id)))
     } catch (e) {
-      console.error('TagSelectorModal load error', e)
+      log.error('load error', e)
     } finally {
       setLoading(false)
     }
@@ -119,7 +122,7 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
         setAppliedIds(prev => new Set(prev).add(tag.id))
       }
     } catch (e) {
-      console.error('toggleTag error', e)
+      log.error('toggleTag', e)
     } finally {
       setToggling(prev => { const s = new Set(prev); s.delete(tag.id); return s })
     }
@@ -141,7 +144,7 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
       }
       setAppliedIds(prev => new Set(prev).add(tag.id))
     } catch (e) {
-      console.error('createTag error', e)
+      log.error('createTag', e)
     } finally {
       setCreating(false)
     }

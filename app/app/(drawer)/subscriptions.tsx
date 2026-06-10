@@ -6,6 +6,7 @@ import {
   RefreshControl,
   SafeAreaView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -17,6 +18,7 @@ import {
   createSubscription,
   deleteSubscription,
   pollSubscriptionNow,
+  patchSubscription,
 } from '../../src/api'
 import type { Feed, Subscription } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
@@ -61,6 +63,7 @@ export default function SubscriptionsScreen() {
 
   const [pollingId, setPollingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
 
   const load = useCallback(async (isRefresh = false) => {
     if (!activeUrl || !token) return
@@ -115,6 +118,16 @@ export default function SubscriptionsScreen() {
     finally { setTimeout(() => setPollingId(null), 2000) }
   }
 
+  async function handleTogglePaused(sub: SubWithFeed) {
+    if (!activeUrl || !token || togglingId) return
+    setTogglingId(sub.id)
+    try {
+      const updated = await patchSubscription(activeUrl, token, sub.id, { paused: sub.paused === 0 })
+      setSubs(prev => prev.map(s => s.id === sub.id ? { ...s, paused: updated.paused } : s))
+    } catch { /* ignore */ }
+    finally { setTogglingId(null) }
+  }
+
   async function handleDelete(sub: SubWithFeed) {
     if (!activeUrl || !token || deletingId) return
     setDeletingId(sub.id)
@@ -130,16 +143,27 @@ export default function SubscriptionsScreen() {
     const domain = (() => { try { return new URL(url).hostname } catch { return url } })()
     const isPollBusy = pollingId === item.id
     const isDeleteBusy = deletingId === item.id
+    const isToggleBusy = togglingId === item.id
+    const isPaused = item.paused !== 0
 
     return (
-      <View style={s.card}>
+      <View style={[s.card, isPaused && s.cardPaused]}>
         <View style={s.cardHeader}>
           <View style={s.cardMeta}>
-            <Text style={s.cardDomain} numberOfLines={1}>{domain}</Text>
+            <Text style={[s.cardDomain, isPaused && s.cardDomainMuted]} numberOfLines={1}>{domain}</Text>
             <Text style={s.cardUrl} numberOfLines={1}>{url}</Text>
           </View>
-          <View style={s.cardKind}>
-            <Text style={s.kindBadge}>{item.feed?.kind ?? '?'}</Text>
+          <View style={s.cardRight}>
+            <View style={s.cardKind}>
+              <Text style={s.kindBadge}>{item.feed?.kind ?? '?'}</Text>
+            </View>
+            <Switch
+              value={!isPaused}
+              onValueChange={() => handleTogglePaused(item)}
+              disabled={isToggleBusy}
+              trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+              thumbColor={isPaused ? theme.colors.muted : theme.colors.background}
+            />
           </View>
         </View>
         <View style={s.cardStats}>
@@ -256,10 +280,13 @@ function buildStyles(t: Theme) {
     list: { padding: t.spacing.sm },
     sep: { height: t.spacing.sm },
     card: { backgroundColor: t.colors.surface, borderRadius: t.radius.md, padding: t.spacing.md, borderWidth: 1, borderColor: t.colors.border },
+    cardPaused: { opacity: 0.65 },
     cardHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: t.spacing.sm, marginBottom: t.spacing.sm },
     cardMeta: { flex: 1 },
     cardDomain: { color: t.colors.text, fontSize: 15, fontWeight: '700' },
+    cardDomainMuted: { color: t.colors.muted },
     cardUrl: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace', marginTop: 2 },
+    cardRight: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
     cardKind: { paddingHorizontal: 6, paddingVertical: 2, backgroundColor: t.colors.border, borderRadius: t.radius.sm },
     kindBadge: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace' },
     cardStats: { flexDirection: 'row', gap: t.spacing.md, marginBottom: t.spacing.md },

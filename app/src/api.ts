@@ -85,6 +85,7 @@ export type Document = {
   excerpt: string
   hero_image_url: string
   author: string
+  source_feed_id?: string | null
   annotation_count?: number
   highlight_count?: number
 }
@@ -200,6 +201,7 @@ export type Subscription = {
   feed_id: string
   interval_h: number
   next_run_at: string
+  paused: number
   created_at: string
   updated_at: string
 }
@@ -217,6 +219,24 @@ export async function fetchFeeds(serverUrl: string, token: string): Promise<Feed
     headers: { Authorization: `Bearer ${token}` },
   })
   return json<Feed[]>(res, '/api/v1/feeds')
+}
+
+export async function fetchFeed(serverUrl: string, token: string, id: string): Promise<Feed> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/feeds/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Feed>(res, `/api/v1/feeds/${id}`)
+}
+
+export async function patchSubscription(
+  serverUrl: string, token: string, id: string, data: { paused: boolean },
+): Promise<Subscription> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/subscriptions/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return json<Subscription>(res, `/api/v1/subscriptions/${id}`)
 }
 
 export async function fetchSubscriptions(serverUrl: string, token: string): Promise<Subscription[]> {

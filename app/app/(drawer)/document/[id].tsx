@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createLogger } from '../../../src/logger'
+
+const log = createLogger('document')
 import {
   ActivityIndicator,
   Animated,
@@ -34,8 +37,9 @@ import {
   fetchDocumentPipelineRuns,
   deleteDocumentHighlights,
   runPipelineOnDocument,
+  fetchFeed,
 } from '../../../src/api'
-import type { Document, Annotation, Pipeline, Highlight, PipelineRun } from '../../../src/api'
+import type { Document, Annotation, Pipeline, Highlight, PipelineRun, Feed } from '../../../src/api'
 import { useConnection } from '../../../src/ConnectionContext'
 import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
@@ -93,6 +97,8 @@ export default function DocumentViewer() {
     } catch { /* ignore */ }
   }, [activeUrl, token, id])
 
+  const [sourceFeed, setSourceFeed] = useState<Feed | null>(null)
+
   // Meta panel state
   const [metaVisible, setMetaVisible] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
@@ -126,7 +132,7 @@ export default function DocumentViewer() {
       closeMetaPanel()
       router.replace((from as string) ?? '/documents')
     } catch (e) {
-      console.error('document delete failed', e)
+      log.error('delete failed', e)
       setDeleting(false)
       setDeleteConfirm(false)
     }
@@ -169,6 +175,11 @@ export default function DocumentViewer() {
       setHtmlContent(html)
       setAnnotations(anns)
       setHighlights(hl)
+      if (d.source_feed_id) {
+        fetchFeed(activeUrl, token, d.source_feed_id).then(setSourceFeed).catch(() => {})
+      } else {
+        setSourceFeed(null)
+      }
       if (progress && progress.scroll_y > 0) {
         savedProgressRef.current = progress.scroll_y
       }
@@ -334,7 +345,7 @@ export default function DocumentViewer() {
         injectAddMark(ann)
       }
     } catch (e) {
-      console.error('annotation save failed', e)
+      log.error('annotation save failed', e)
     }
   }, [annMode, pendingSelection, existingAnnotation, activeUrl, token, id, injectAddMark, injectRemoveMark])
 
@@ -346,7 +357,7 @@ export default function DocumentViewer() {
       setAnnotations(prev => prev.filter(a => a.id !== existingAnnotation.id))
       injectRemoveMark(existingAnnotation.id)
     } catch (e) {
-      console.error('annotation delete failed', e)
+      log.error('annotation delete failed', e)
     }
   }, [existingAnnotation, activeUrl, token, injectRemoveMark])
 
@@ -552,6 +563,17 @@ export default function DocumentViewer() {
               <Text style={s.metaLabel}>Scraped</Text>
               <Text style={s.metaValue}>{new Date(doc.fetched_at).toLocaleString()}</Text>
             </View>
+            <View style={s.metaRow}>
+              <Text style={s.metaLabel}>Source</Text>
+              {sourceFeed ? (
+                <Text style={s.metaValue} numberOfLines={2}>
+                  {sourceFeed.title || (() => { try { return new URL(sourceFeed.url).hostname } catch { return sourceFeed.url } })()}
+                  {'\n'}<Text style={s.metaMuted}>{sourceFeed.kind} feed</Text>
+                </Text>
+              ) : (
+                <Text style={s.metaValue}>Manual</Text>
+              )}
+            </View>
             <View style={s.metaDivider} />
             <Pressable style={s.viewWebBtn} onPress={() => { closeMetaPanel(); openInWeb() }}>
               <Ionicons name="open-outline" size={18} color={theme.colors.accent} />
@@ -642,6 +664,7 @@ function buildStyles(t: Theme) {
     metaRow: { marginBottom: t.spacing.sm },
     metaLabel: { color: t.colors.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
     metaValue: { color: t.colors.text, fontSize: 14 },
+    metaMuted: { color: t.colors.muted, fontSize: 12 },
     metaDivider: { height: 1, backgroundColor: t.colors.border, marginVertical: t.spacing.md },
     viewWebBtn: {
       flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,

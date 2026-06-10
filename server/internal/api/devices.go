@@ -2,7 +2,6 @@ package api
 
 import (
 	"database/sql"
-	"log"
 	"net/http"
 	"time"
 
@@ -15,7 +14,7 @@ func handleListDevices(q *store.Queries) http.HandlerFunc {
 
 		devices, err := q.ListDevices(r.Context())
 		if err != nil {
-			log.Printf("list devices: %v", err)
+			logDevs.Errorf("list devices: %v", err)
 			writeErr(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -63,14 +62,14 @@ func handleRevokeDevice(q *store.Queries) http.HandlerFunc {
 			return
 		}
 		if err != nil {
-			log.Printf("get device %s: %v", id, err)
+			logDevs.Errorf("get device %s: %v", id, err)
 			writeErr(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 
 		maxRev, err := q.MaxDeviceRev(r.Context())
 		if err != nil {
-			log.Printf("max device rev: %v", err)
+			logDevs.Errorf("max device rev: %v", err)
 			writeErr(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -89,7 +88,7 @@ func handleRevokeDevice(q *store.Queries) http.HandlerFunc {
 			ID:        id,
 		})
 		if err != nil {
-			log.Printf("soft delete device %s: %v", id, err)
+			logDevs.Errorf("soft delete device %s: %v", id, err)
 			writeErr(w, http.StatusInternalServerError, "internal error")
 			return
 		}

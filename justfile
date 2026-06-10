@@ -159,7 +159,7 @@ test-go:
 
 [group('quality')]
 [doc('Lint all code (go vet + golangci-lint + eslint)')]
-lint: lint-go lint-app
+lint: lint-go lint-app check-native-log
 
 [group('quality')]
 lint-go:
@@ -171,6 +171,18 @@ lint-go:
 lint-app:
     cd app && npx eslint .
     cd app && npx knip
+
+[group('quality')]
+[doc('Fail if any Go file uses stdlib log package directly (use internal/logger instead)')]
+check-native-log:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    hits=$(grep -rn '"log"' server/internal server/main.go --include='*.go' | grep -v 'internal/logger/logger.go' || true)
+    if [ -n "$hits" ]; then
+      echo "ERROR: raw stdlib log import found — use logger.New() instead:"
+      echo "$hits"
+      exit 1
+    fi
 
 # ── Deploy ────────────────────────────────────────────────────────────────────
 

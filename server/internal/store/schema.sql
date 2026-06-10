@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     feed_id     TEXT    NOT NULL REFERENCES feeds(id),
     interval_h  INTEGER NOT NULL DEFAULT 24,
     next_run_at TEXT    NOT NULL,
+    paused      INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0,

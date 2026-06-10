@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -11,9 +10,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/symunona/samizdat/server/internal/api"
 	cfg "github.com/symunona/samizdat/server/internal/config"
+	"github.com/symunona/samizdat/server/internal/logger"
 	"github.com/symunona/samizdat/server/internal/network"
 	"github.com/symunona/samizdat/server/internal/store"
 )
+
+var logServer = logger.New("server")
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
@@ -77,10 +79,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	handler := api.New(context.Background(), db, webDir, urls, c.CacheDir, c.ExtractorsDir, c.LLM)
 
-	log.Printf("samizdat %s listening on %s", api.Version(), addr)
-	log.Printf("reachable at:\n  %s", strings.Join(urls, "\n  "))
+	logServer.Printf("samizdat %s listening on %s", api.Version(), addr)
+	logServer.Printf("reachable at:\n  %s", strings.Join(urls, "\n  "))
 	if webDir != "" {
-		log.Printf("web app served from %s", webDir)
+		logServer.Printf("web app served from %s", webDir)
 	}
 
 	if err := http.ListenAndServe(addr, handler); err != nil {

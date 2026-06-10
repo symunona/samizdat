@@ -30,6 +30,8 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, job store.Job, llm
 		return "", fmt.Errorf("bad payload: %w", err)
 	}
 
+	logPipeline.Printf("starting pipeline %s for document %s", p.PipelineID[:8], p.DocumentID[:8])
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	run, err := q.InsertPipelineRun(ctx, store.InsertPipelineRunParams{
 		ID:         uuid.NewString(),
@@ -41,6 +43,8 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, job store.Job, llm
 	if err != nil {
 		return "", fmt.Errorf("insert pipeline run: %w", err)
 	}
+
+	logPipeline.Printf("run %s created for pipeline %s", run.ID[:8], p.PipelineID[:8])
 
 	// Mark run as running and enqueue first step
 	if err := q.UpdatePipelineRunProgress(ctx, store.UpdatePipelineRunProgressParams{
@@ -66,6 +70,8 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, job store.Job, llm
 		return "", fmt.Errorf("enqueue step: %w", err)
 	}
 
+	logPipeline.Printf("run %s step 0 enqueued", run.ID[:8])
+
 	result, _ := json.Marshal(map[string]string{"pipeline_run_id": run.ID})
 	return string(result), nil
 }
@@ -85,6 +91,9 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 	if err != nil {
 		return "", fmt.Errorf("get pipeline: %w", err)
 	}
+
+	logPipeline.Printf("run %s pipeline %s (%s) step %d dispatching",
+		run.ID[:8], pl.ID[:8], pl.Name, run.StepIndex)
 
 	result, err := pipeline.Dispatch(ctx, q, run, pl, llmClient)
 	if err != nil {
@@ -112,6 +121,8 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 			}); err != nil {
 				return "", fmt.Errorf("mark run done: %w", err)
 			}
+			logPipeline.Printf("run %s pipeline %s (%s) all %d steps done",
+				run.ID[:8], pl.ID[:8], pl.Name, stepCount)
 			return `{"status":"done"}`, nil
 		}
 
@@ -125,6 +136,8 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 		}); err != nil {
 			return "", fmt.Errorf("advance step: %w", err)
 		}
+
+		logPipeline.Printf("run %s advancing to step %d/%d", run.ID[:8], nextIdx, stepCount)
 
 		stepPayload, _ := json.Marshal(runPipelineStepPayload{PipelineRunID: run.ID})
 		_, err = q.InsertJob(ctx, store.InsertJobParams{
@@ -152,6 +165,8 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 	}); err != nil {
 		return "", fmt.Errorf("save step state: %w", err)
 	}
+
+	logPipeline.Printf("run %s step %d waiting (retry in %s)", run.ID[:8], run.StepIndex, stepRetryDelay)
 
 	runAfter := time.Now().UTC().Add(stepRetryDelay).Format(time.RFC3339)
 	stepPayload, _ := json.Marshal(runPipelineStepPayload{PipelineRunID: run.ID})

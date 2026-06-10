@@ -167,10 +167,13 @@ SELECT * FROM subscriptions WHERE id = ? AND deleted_at IS NULL LIMIT 1;
 SELECT * FROM subscriptions WHERE deleted_at IS NULL ORDER BY created_at DESC;
 
 -- name: ListDueSubscriptions :many
-SELECT * FROM subscriptions WHERE next_run_at <= ? AND deleted_at IS NULL;
+SELECT * FROM subscriptions WHERE next_run_at <= ? AND deleted_at IS NULL AND paused = 0;
 
 -- name: BumpSubscriptionNextRun :exec
 UPDATE subscriptions SET next_run_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: UpdateSubscriptionPaused :exec
+UPDATE subscriptions SET paused = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
 -- name: DeleteSubscription :exec
 UPDATE subscriptions SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;

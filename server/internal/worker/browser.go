@@ -2,7 +2,6 @@ package worker
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/playwright-community/playwright-go"
 )
@@ -16,7 +15,7 @@ type BrowserPool struct {
 
 // NewBrowserPool installs Chromium if needed, then launches it headless.
 func NewBrowserPool() (*BrowserPool, error) {
-	log.Println("browser: installing playwright browsers (no-op if already present)...")
+	logBrowser.Println("installing playwright browsers (no-op if already present)...")
 	if err := playwright.Install(&playwright.RunOptions{
 		Browsers: []string{"chromium"},
 		Verbose:  false,
@@ -42,13 +41,14 @@ func NewBrowserPool() (*BrowserPool, error) {
 		return nil, fmt.Errorf("launch chromium: %w", err)
 	}
 
-	log.Println("browser: chromium ready")
+	logBrowser.Println("chromium ready")
 	return &BrowserPool{pw: pw, browser: browser}, nil
 }
 
 // FetchHTML navigates to url in a fresh isolated context, waits for the page
 // to load, and returns the fully-rendered HTML.
 func (b *BrowserPool) FetchHTML(url string) (string, error) {
+	logBrowser.Printf("fetch %s", url)
 	ctx, err := b.browser.NewContext(playwright.BrowserNewContextOptions{
 		UserAgent: playwright.String(
 			"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
@@ -95,7 +95,7 @@ func (b *BrowserPool) FetchHTML(url string) (string, error) {
 		if err == nil && btn != nil {
 			if visible, _ := btn.IsVisible(); visible {
 				_ = btn.Click()
-				log.Printf("browser: dismissed consent banner (%s) on %s", sel, url)
+				logBrowser.Printf("dismissed consent banner (%s) on %s", sel, url)
 				// brief settle after dismissal
 				_ = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 					State:   playwright.LoadStateNetworkidle,
@@ -123,7 +123,7 @@ func (b *BrowserPool) FetchHTML(url string) (string, error) {
 			}, 80);
 		});
 	}`); err != nil {
-		log.Printf("browser: scroll error for %s (continuing): %v", url, err)
+		logBrowser.Warnf("scroll error for %s (continuing): %v", url, err)
 	}
 
 	// Wait for network to settle after lazy loads triggered by scrolling.
@@ -131,22 +131,23 @@ func (b *BrowserPool) FetchHTML(url string) (string, error) {
 		State:   playwright.LoadStateNetworkidle,
 		Timeout: playwright.Float(10_000),
 	}); err != nil {
-		log.Printf("browser: networkidle timeout for %s (continuing)", url)
+		logBrowser.Warnf("networkidle timeout for %s (continuing)", url)
 	}
 
 	html, err := page.Content()
 	if err != nil {
 		return "", fmt.Errorf("page content: %w", err)
 	}
+	logBrowser.Printf("fetched %d bytes from %s", len(html), url)
 	return html, nil
 }
 
 // Close shuts down the browser and the playwright server.
 func (b *BrowserPool) Close() {
 	if err := b.browser.Close(); err != nil {
-		log.Printf("browser: close: %v", err)
+		logBrowser.Errorf("close: %v", err)
 	}
 	if err := b.pw.Stop(); err != nil {
-		log.Printf("browser: pw stop: %v", err)
+		logBrowser.Errorf("pw stop: %v", err)
 	}
 }

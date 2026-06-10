@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"log"
 	"net"
 	"net/http"
 	"time"
@@ -22,7 +21,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("encode response: %v", err)
+		logAPI.Errorf("encode response: %v", err)
 	}
 }
 
@@ -60,7 +59,7 @@ func bearerAuth(q *store.Queries, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if err != nil {
-			log.Printf("auth db: %v", err)
+			logAPI.Errorf("auth db: %v", err)
 			writeErr(w, http.StatusInternalServerError, "internal error")
 			return
 		}

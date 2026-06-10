@@ -54,6 +54,7 @@ ALWAYS TEST YOURSELF VIA agent-browser!
 If there are inconsistencies in the specs, raise it to the user, before starting to implement.
 Always run linter before you finish a job and fix anything that comes up..
 Maintain the global linter.
+If backend changed, always restart `just dev`!
 
 ## Data destruction
 If you're doing BULK deletes or updates that are non-recoverable, always ask for confirmation.

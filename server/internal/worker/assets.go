@@ -9,7 +9,6 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	_ "golang.org/x/image/webp"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -79,6 +78,8 @@ func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cac
 		return "", fmt.Errorf("get document: %w", err)
 	}
 
+	logAssets.Printf("fetching assets for document %s", doc.ID[:8])
+
 	// Collect image candidates: hero first, then content images from markdown.
 	type candidate struct {
 		url  string
@@ -102,16 +103,20 @@ func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cac
 		candidates = append(candidates, candidate{url: imgURL, alt: alt, kind: "content"})
 	}
 
+	logAssets.Printf("document %s: %d asset candidates", doc.ID[:8], len(candidates))
+
 	mediaDir := filepath.Join(cacheDir, "media")
 	if err := os.MkdirAll(mediaDir, 0755); err != nil {
 		return "", fmt.Errorf("mkdir media: %w", err)
 	}
 
 	client := &http.Client{Timeout: 20 * time.Second}
+	downloaded := 0
 
 	for _, c := range candidates {
 		// For hero images we skip the alt-text filter (alt is synthetic "hero").
 		if c.kind != "hero" && !shouldDownload(c.url, c.alt) {
+			logAssets.Printf("skip %s (heuristic filter)", c.url)
 			continue
 		}
 		if c.kind == "hero" {
@@ -122,6 +127,7 @@ func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cac
 			}
 			lpath := strings.ToLower(u.Path)
 			if strings.HasSuffix(lpath, ".gif") || strings.HasSuffix(lpath, ".svg") {
+				logAssets.Printf("skip hero %s (gif/svg)", c.url)
 				continue
 			}
 		}
@@ -129,18 +135,22 @@ func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cac
 		// Skip if already cached.
 		_, err := q.GetMediaAssetByOriginalURL(ctx, c.url)
 		if err == nil {
-			continue // already have it
+			logAssets.Printf("skip %s (already cached)", c.url)
+			continue
 		}
 
 		assetID := IDFromURL(c.url)
 		localPath := filepath.Join("media", assetID+".jpg")
 		fullPath := filepath.Join(cacheDir, localPath)
 
+		logAssets.Printf("downloading %s [%s]", c.url, c.kind)
 		width, height, err := downloadAndThumbnail(ctx, client, c.url, fullPath)
 		if err != nil {
-			log.Printf("assets: skip %s: %v", c.url, err)
+			logAssets.Warnf("skip %s: %v", c.url, err)
 			continue
 		}
+
+		logAssets.Printf("saved %s → %s (%dx%d)", c.url, localPath, width, height)
 
 		now := time.Now().UTC().Format(time.RFC3339)
 		w64 := int64(width)
@@ -157,10 +167,15 @@ func handleFetchAssets(ctx context.Context, q *store.Queries, job store.Job, cac
 			UpdatedAt:   now,
 		})
 		if err != nil {
-			log.Printf("assets: insert media_asset: %v", err)
+			logAssets.Errorf("insert media_asset: %v", err)
 			_ = os.Remove(fullPath)
+		} else {
+			downloaded++
 		}
 	}
+
+	logAssets.Printf("document %s: downloaded %d/%d assets", doc.ID[:8], downloaded, len(candidates))
+
 	jobResult, _ := json.Marshal(map[string]int{"assets": len(candidates)})
 	return string(jobResult), nil
 }

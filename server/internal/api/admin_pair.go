@@ -1,7 +1,6 @@
 package api
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/symunona/samizdat/server/internal/pair"
@@ -16,7 +15,7 @@ type adminPairHandler struct {
 func (h *adminPairHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	code, expiresAt, err := pair.Mint(r.Context(), h.q)
 	if err != nil {
-		log.Printf("mint pair code: %v", err)
+		logPair.Errorf("mint pair code: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}

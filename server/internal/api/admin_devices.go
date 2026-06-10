@@ -2,7 +2,6 @@ package api
 
 import (
 	"database/sql"
-	"log"
 	"net/http"
 	"time"
 
@@ -16,7 +15,7 @@ type adminDevicesHandler struct {
 func (h *adminDevicesHandler) list(w http.ResponseWriter, r *http.Request) {
 	devices, err := h.q.ListDevices(r.Context())
 	if err != nil {
-		log.Printf("list devices: %v", err)
+		logDevs.Errorf("list devices: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -56,14 +55,14 @@ func (h *adminDevicesHandler) revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		log.Printf("get device %s: %v", id, err)
+		logDevs.Errorf("get device %s: %v", id, err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
 	maxRev, err := h.q.MaxDeviceRev(r.Context())
 	if err != nil {
-		log.Printf("max device rev: %v", err)
+		logDevs.Errorf("max device rev: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -82,7 +81,7 @@ func (h *adminDevicesHandler) revoke(w http.ResponseWriter, r *http.Request) {
 		ID:        id,
 	})
 	if err != nil {
-		log.Printf("soft delete device %s: %v", id, err)
+		logDevs.Errorf("soft delete device %s: %v", id, err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}

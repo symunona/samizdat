@@ -5,7 +5,7 @@ const reactHooksPlugin = require('eslint-plugin-react-hooks')
 
 module.exports = [
   {
-    ignores: ['dist/**', '.expo/**', 'node_modules/**'],
+    ignores: ['dist/**', '.expo/**', 'node_modules/**', 'src/logger.ts'],
   },
   {
     files: ['**/*.ts', '**/*.tsx'],
@@ -31,6 +31,7 @@ module.exports = [
       'react/react-in-jsx-scope': 'off',
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
+      'no-console': 'error',
     },
   },
 ]

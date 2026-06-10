@@ -524,7 +524,7 @@ func (q *Queries) GetSetting(ctx context.Context, key string) (string, error) {
 }
 
 const getSubscription = `-- name: GetSubscription :one
-SELECT id, feed_id, interval_h, next_run_at, created_at, updated_at, rev, deleted_at FROM subscriptions WHERE id = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, feed_id, interval_h, next_run_at, paused, created_at, updated_at, rev, deleted_at FROM subscriptions WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetSubscription(ctx context.Context, id string) (Subscription, error) {
@@ -535,6 +535,7 @@ func (q *Queries) GetSubscription(ctx context.Context, id string) (Subscription,
 		&i.FeedID,
 		&i.IntervalH,
 		&i.NextRunAt,
+		&i.Paused,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -966,7 +967,7 @@ func (q *Queries) InsertPipelineRun(ctx context.Context, arg InsertPipelineRunPa
 const insertSubscription = `-- name: InsertSubscription :one
 INSERT INTO subscriptions (id, feed_id, interval_h, next_run_at, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?, 0)
-RETURNING id, feed_id, interval_h, next_run_at, created_at, updated_at, rev, deleted_at
+RETURNING id, feed_id, interval_h, next_run_at, paused, created_at, updated_at, rev, deleted_at
 `
 
 type InsertSubscriptionParams struct {
@@ -993,6 +994,7 @@ func (q *Queries) InsertSubscription(ctx context.Context, arg InsertSubscription
 		&i.FeedID,
 		&i.IntervalH,
 		&i.NextRunAt,
+		&i.Paused,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -1316,7 +1318,7 @@ func (q *Queries) ListDocumentsWithAnnotationCount(ctx context.Context) ([]ListD
 }
 
 const listDueSubscriptions = `-- name: ListDueSubscriptions :many
-SELECT id, feed_id, interval_h, next_run_at, created_at, updated_at, rev, deleted_at FROM subscriptions WHERE next_run_at <= ? AND deleted_at IS NULL
+SELECT id, feed_id, interval_h, next_run_at, paused, created_at, updated_at, rev, deleted_at FROM subscriptions WHERE next_run_at <= ? AND deleted_at IS NULL AND paused = 0
 `
 
 func (q *Queries) ListDueSubscriptions(ctx context.Context, nextRunAt string) ([]Subscription, error) {
@@ -1333,6 +1335,7 @@ func (q *Queries) ListDueSubscriptions(ctx context.Context, nextRunAt string) ([
 			&i.FeedID,
 			&i.IntervalH,
 			&i.NextRunAt,
+			&i.Paused,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -1908,7 +1911,7 @@ func (q *Queries) ListPipelines(ctx context.Context) ([]Pipeline, error) {
 }
 
 const listSubscriptions = `-- name: ListSubscriptions :many
-SELECT id, feed_id, interval_h, next_run_at, created_at, updated_at, rev, deleted_at FROM subscriptions WHERE deleted_at IS NULL ORDER BY created_at DESC
+SELECT id, feed_id, interval_h, next_run_at, paused, created_at, updated_at, rev, deleted_at FROM subscriptions WHERE deleted_at IS NULL ORDER BY created_at DESC
 `
 
 func (q *Queries) ListSubscriptions(ctx context.Context) ([]Subscription, error) {
@@ -1925,6 +1928,7 @@ func (q *Queries) ListSubscriptions(ctx context.Context) ([]Subscription, error)
 			&i.FeedID,
 			&i.IntervalH,
 			&i.NextRunAt,
+			&i.Paused,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -2536,6 +2540,21 @@ func (q *Queries) UpdatePipelineRunProgress(ctx context.Context, arg UpdatePipel
 		arg.UpdatedAt,
 		arg.ID,
 	)
+	return err
+}
+
+const updateSubscriptionPaused = `-- name: UpdateSubscriptionPaused :exec
+UPDATE subscriptions SET paused = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type UpdateSubscriptionPausedParams struct {
+	Paused    int64  `json:"paused"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) UpdateSubscriptionPaused(ctx context.Context, arg UpdateSubscriptionPausedParams) error {
+	_, err := q.db.ExecContext(ctx, updateSubscriptionPaused, arg.Paused, arg.UpdatedAt, arg.ID)
 	return err
 }
 

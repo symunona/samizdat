@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -41,7 +40,7 @@ func (h *pairHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	plain, hash, err := auth.NewToken()
 	if err != nil {
-		log.Printf("new token: %v", err)
+		logPair.Errorf("new token: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -54,7 +53,7 @@ func (h *pairHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	maxRev, err := h.q.MaxDeviceRev(r.Context())
 	if err != nil {
-		log.Printf("max rev: %v", err)
+		logPair.Errorf("max rev: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -75,7 +74,7 @@ func (h *pairHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Rev:       nextRev,
 	})
 	if err != nil {
-		log.Printf("insert device: %v", err)
+		logPair.Errorf("insert device: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal error")
 		return
 	}

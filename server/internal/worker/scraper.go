@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -56,11 +55,14 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		return "", err
 	}
 
+	logScraper.Printf("scraping %s", canonical)
+
 	htmlStr, err := browser.FetchHTML(canonical)
 	if err != nil {
 		return "", fmt.Errorf("fetch: %w", err)
 	}
 	bodyBytes := []byte(htmlStr)
+	logScraper.Printf("fetched %d bytes HTML from %s", len(bodyBytes), canonical)
 
 	extracted, err := trafilatura.Extract(bytes.NewReader(bodyBytes), trafilatura.Options{
 		OriginalURL:     mustParseURL(canonical),
@@ -110,6 +112,8 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	heroImageURL := strings.TrimSpace(extracted.Metadata.Image)
 	author := strings.TrimSpace(extracted.Metadata.Author)
 
+	logScraper.Printf("extracted: title=%q  author=%q  md=%d chars", title, author, len(md))
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	docID := IDFromURL(canonical)
 
@@ -129,6 +133,8 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	if err != nil {
 		return "", fmt.Errorf("insert document: %w", err)
 	}
+
+	logScraper.Printf("upserted document %s for %s", doc.ID[:8], canonical)
 
 	// Enqueue asset fetching job.
 	assetPayload, _ := json.Marshal(map[string]string{"document_id": doc.ID})
@@ -155,7 +161,7 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document, now string) {
 	pipelines, err := q.ListEnabledPipelines(ctx)
 	if err != nil {
-		log.Printf("pipeline trigger: list pipelines: %v", err)
+		logScraper.Errorf("pipeline trigger: list pipelines: %v", err)
 		return
 	}
 	if len(pipelines) == 0 {
@@ -175,6 +181,7 @@ func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document,
 			continue
 		}
 		if !pipelineMatchesDocument(pl, doc, feedURL) {
+			logScraper.Printf("pipeline trigger: %s (%s) skipped (no match)", pl.ID[:8], pl.Name)
 			continue
 		}
 		payload, _ := json.Marshal(map[string]string{
@@ -190,9 +197,9 @@ func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document,
 			UpdatedAt: now,
 		})
 		if err != nil {
-			log.Printf("pipeline trigger: enqueue run for pipeline %s: %v", pl.ID, err)
+			logScraper.Errorf("pipeline trigger: enqueue run for pipeline %s: %v", pl.ID, err)
 		} else {
-			log.Printf("pipeline trigger: enqueued run_pipeline for pipeline %s (%s)", pl.ID, pl.Name)
+			logScraper.Printf("pipeline trigger: enqueued run_pipeline for pipeline %s (%s)", pl.ID[:8], pl.Name)
 		}
 	}
 }
