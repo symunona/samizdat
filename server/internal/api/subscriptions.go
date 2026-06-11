@@ -116,6 +116,9 @@ func (h *subscriptionsHandler) list(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
+	if subs == nil {
+		subs = []store.Subscription{}
+	}
 	writeJSON(w, http.StatusOK, subs)
 }
 
@@ -140,6 +143,9 @@ func (h *subscriptionsHandler) listFeeds(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
+	}
+	if feeds == nil {
+		feeds = []store.Feed{}
 	}
 	writeJSON(w, http.StatusOK, feeds)
 }

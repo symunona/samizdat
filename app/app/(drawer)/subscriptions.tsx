@@ -75,8 +75,8 @@ export default function SubscriptionsScreen() {
         fetchFeeds(activeUrl, token),
       ])
       const feedMap: Record<string, Feed> = {}
-      for (const f of feeds) feedMap[f.id] = f
-      setSubs(rawSubs.map(sub => ({ ...sub, feed: feedMap[sub.feed_id] })))
+      for (const f of (feeds ?? [])) feedMap[f.id] = f
+      setSubs((rawSubs ?? []).map(sub => ({ ...sub, feed: feedMap[sub.feed_id] })))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
