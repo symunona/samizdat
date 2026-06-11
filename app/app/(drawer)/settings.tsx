@@ -8,6 +8,7 @@ import { clearConnection, removeServerUrl, loadUrlLastUsedMap } from '../../src/
 import { useConnection } from '../../src/ConnectionContext'
 import { useConfirm } from '../../src/ConfirmContext'
 import { useToast } from '../../src/ToastContext'
+import { useSyncStore } from '../../src/store/syncStore'
 
 function hostname(url: string): string {
   try { return new URL(url).hostname } catch { return url }
@@ -163,6 +164,20 @@ export default function SettingsScreen() {
     await clearConnection()
     reload()
     router.replace('/connect')
+  }
+
+  const clearStore = useSyncStore((state) => state.clearStore)
+
+  async function handleClearLocalCache() {
+    const ok = await confirm({
+      title: 'Clear local cache',
+      message: 'Removes all locally cached documents, highlights, annotations, and tags. Data stays on the server. Next sync will re-download everything.',
+      confirmLabel: 'Clear cache',
+      destructive: true,
+    })
+    if (!ok) return
+    clearStore()
+    toast('Local cache cleared. Syncing from server…', 'success')
   }
 
   async function handleDeleteUrl(url: string) {
@@ -397,6 +412,18 @@ export default function SettingsScreen() {
           style={({ pressed }) => [s.disconnectBtn, pressed && s.disconnectBtnPressed]}
         >
           <Text style={s.disconnectText}>Disconnect this device</Text>
+        </Pressable>
+      </View>
+
+      {/* Local data */}
+      <View style={s.card}>
+        <Text style={s.cardTitle}>Local Data</Text>
+        <Text style={s.cardSubtitle}>Cached on this device — server copy untouched</Text>
+        <Pressable
+          onPress={handleClearLocalCache}
+          style={({ pressed }) => [s.disconnectBtn, pressed && s.disconnectBtnPressed]}
+        >
+          <Text style={s.disconnectText}>Clear local cache</Text>
         </Pressable>
       </View>
 
