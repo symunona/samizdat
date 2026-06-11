@@ -205,6 +205,7 @@ export default function SubscriptionsScreen() {
 
   return (
     <SafeAreaView style={s.screen}>
+      <View style={s.wrapper}>
       {/* Add subscription row */}
       <View style={s.addRow}>
         <TextInput
@@ -261,6 +262,7 @@ export default function SubscriptionsScreen() {
               }
             />
       }
+      </View>
     </SafeAreaView>
   )
 }
@@ -269,6 +271,7 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: t.colors.background },
+    wrapper: { flex: 1, maxWidth: 800, alignSelf: 'center', width: '100%' },
     addRow: { flexDirection: 'row', padding: t.spacing.md, gap: t.spacing.sm, borderBottomWidth: 1, borderBottomColor: t.colors.border, backgroundColor: t.colors.surface },
     input: { flex: 1, backgroundColor: t.colors.background, color: t.colors.text, borderRadius: t.radius.sm, borderWidth: 1, borderColor: t.colors.border, paddingHorizontal: t.spacing.md, paddingVertical: t.spacing.sm, fontSize: 13 },
     addBtn: { backgroundColor: t.colors.accent, borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: t.spacing.sm, justifyContent: 'center', alignItems: 'center', minWidth: 90 },
@@ -277,7 +280,7 @@ function buildStyles(t: Theme) {
     addBtnText: { color: t.colors.background, fontSize: 13, fontWeight: '700' },
     feedbackOk: { color: t.colors.online, fontSize: 13, paddingHorizontal: t.spacing.md, paddingVertical: t.spacing.xs, backgroundColor: t.colors.surface },
     feedbackErr: { color: t.colors.error, fontSize: 13, paddingHorizontal: t.spacing.md, paddingVertical: t.spacing.xs, backgroundColor: t.colors.surface },
-    list: { padding: t.spacing.sm },
+    list: { padding: t.spacing.sm, maxWidth: 800, alignSelf: 'center', width: '100%' },
     sep: { height: t.spacing.sm },
     card: { backgroundColor: t.colors.surface, borderRadius: t.radius.md, padding: t.spacing.md, borderWidth: 1, borderColor: t.colors.border },
     cardPaused: { opacity: 0.65 },
@@ -303,7 +306,7 @@ function buildStyles(t: Theme) {
     errText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
     retryText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
-    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
+    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl, maxWidth: 800, alignSelf: 'center', width: '100%' },
     emptyText: { color: t.colors.muted, fontSize: 16, fontWeight: '600', marginBottom: t.spacing.sm },
     emptyHint: { color: t.colors.placeholder, fontSize: 13, textAlign: 'center', lineHeight: 20 },
   })

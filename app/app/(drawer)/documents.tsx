@@ -203,6 +203,7 @@ export default function DocumentsScreen() {
 
   return (
     <SafeAreaView style={s.screen}>
+      <View style={s.wrapper}>
       {/* URL submit row */}
       <View style={s.addRow}>
         <TextInput
@@ -299,6 +300,7 @@ export default function DocumentsScreen() {
           ItemSeparatorComponent={() => <View style={s.separator} />}
         />
       )}
+      </View>
     </SafeAreaView>
   )
 }
@@ -308,6 +310,7 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: t.colors.background },
+    wrapper: { flex: 1, maxWidth: 800, alignSelf: 'center', width: '100%' },
     addRow: {
       flexDirection: 'row',
       paddingHorizontal: t.spacing.md,
@@ -359,8 +362,8 @@ function buildStyles(t: Theme) {
     errorText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
     retryText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
-    listContent: { paddingVertical: t.spacing.xs },
-    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
+    listContent: { paddingVertical: t.spacing.xs, maxWidth: 800, alignSelf: 'center', width: '100%' },
+    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl, maxWidth: 800, alignSelf: 'center', width: '100%' },
     emptyText: { color: t.colors.muted, fontSize: 15, textAlign: 'center' },
     separator: { height: 1, backgroundColor: t.colors.border, marginLeft: t.spacing.md },
     item: {

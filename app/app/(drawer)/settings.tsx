@@ -409,7 +409,7 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: t.colors.background },
-    content: { padding: t.spacing.md, gap: t.spacing.md, paddingBottom: t.spacing.xl },
+    content: { padding: t.spacing.md, gap: t.spacing.md, paddingBottom: t.spacing.xl, maxWidth: 800, alignSelf: 'center', width: '100%' },
     card: {
       backgroundColor: t.colors.surface,
       borderRadius: t.radius.md,

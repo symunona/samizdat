@@ -411,6 +411,7 @@ export default function JobsScreen() {
 
   return (
     <SafeAreaView style={s.screen}>
+      <View style={s.wrapper}>
       <View style={s.toolbar}>
         <View style={s.filters}>
           {STATUS_FILTERS.map(f => (
@@ -475,6 +476,7 @@ export default function JobsScreen() {
               }
             />
       }
+      </View>
     </SafeAreaView>
   )
 }
@@ -483,6 +485,7 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: t.colors.background },
+    wrapper: { flex: 1, maxWidth: 800, alignSelf: 'center', width: '100%' },
     toolbar: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: t.colors.border, backgroundColor: t.colors.surface },
     filters: { flex: 1, flexDirection: 'row', paddingHorizontal: t.spacing.sm, paddingVertical: t.spacing.sm, gap: t.spacing.xs, flexWrap: 'wrap' },
     clearBtn: { paddingHorizontal: t.spacing.md, paddingVertical: t.spacing.sm, minWidth: 52, alignItems: 'center' },
@@ -492,7 +495,7 @@ function buildStyles(t: Theme) {
     filterBtnActive: { backgroundColor: t.colors.accent, borderColor: t.colors.accent },
     filterText: { color: t.colors.muted, fontSize: 12, fontFamily: 'monospace' },
     filterTextActive: { color: t.colors.background, fontWeight: '700' },
-    list: { padding: t.spacing.sm },
+    list: { padding: t.spacing.sm, maxWidth: 800, alignSelf: 'center', width: '100%' },
     sep: { height: t.spacing.xs },
     card: { backgroundColor: t.colors.surface, borderRadius: t.radius.sm, padding: t.spacing.md, borderWidth: 1, borderColor: t.colors.border },
     childCard: { borderLeftWidth: 2, borderLeftColor: t.colors.accent + '55', borderRadius: t.radius.sm },
@@ -524,7 +527,7 @@ function buildStyles(t: Theme) {
     errText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     reloadBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
     reloadText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
-    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
+    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl, maxWidth: 800, alignSelf: 'center', width: '100%' },
     emptyText: { color: t.colors.muted, fontSize: 15 },
     footerSpinner: { paddingVertical: 16, alignItems: 'center' },
   })

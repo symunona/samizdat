@@ -316,7 +316,7 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: t.colors.background },
-    list: { padding: t.spacing.sm },
+    list: { padding: t.spacing.sm, maxWidth: 800, alignSelf: 'center', width: '100%' },
     card: {
       backgroundColor: t.colors.surface,
       borderRadius: t.radius.md,
@@ -357,7 +357,7 @@ function buildStyles(t: Theme) {
     errText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
     retryText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
-    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
+    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl, maxWidth: 800, alignSelf: 'center', width: '100%' },
     emptyText: { color: t.colors.muted, fontSize: 16, fontWeight: '600', marginBottom: t.spacing.sm },
     emptyHint: { color: t.colors.placeholder, fontSize: 13, textAlign: 'center', lineHeight: 20 },
   })

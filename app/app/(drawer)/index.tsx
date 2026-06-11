@@ -235,7 +235,7 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
     list: { flex: 1, backgroundColor: t.colors.background },
-    listContent: { padding: 12, gap: 12 },
+    listContent: { padding: 12, gap: 12, maxWidth: 800, alignSelf: 'center', width: '100%' },
     center: { flex: 1, backgroundColor: t.colors.background, justifyContent: 'center', alignItems: 'center', gap: 12 },
     swipeContainer: {
       borderRadius: 10,
