@@ -636,6 +636,8 @@ export default function DocumentViewer() {
             <View style={s.metaDivider} />
             <HighlightsSection
               docId={id}
+              doc={doc}
+              feedUrl={sourceFeed?.url ?? ''}
               serverUrl={activeUrl ?? ''}
               token={token ?? ''}
               highlights={highlights}
@@ -708,8 +710,8 @@ function buildStyles(t: Theme) {
       flexDirection: 'row', justifyContent: 'flex-end',
     },
     metaPanel: {
-      width: 300,
-      flex: 1,
+      width: 320,
+      maxWidth: 320,
       backgroundColor: t.colors.surface,
       borderLeftWidth: 1, borderLeftColor: t.colors.border,
     },
@@ -777,8 +779,32 @@ function buildStyles(t: Theme) {
 
 // ── Highlights section in meta panel ─────────────────────────────────────────
 
+type PipelineFilter = {
+  feed_url_contains?: string
+  source_feed_id?: string
+  exclude_feed_url_contains?: string[]
+  exclude_source_feed_ids?: string[]
+}
+
+function pipelineMatchesDocument(pl: Pipeline, doc: Document, feedUrl: string): boolean {
+  let f: PipelineFilter
+  try { f = JSON.parse(pl.filter) as PipelineFilter } catch { return false }
+  if (f.source_feed_id && doc.source_feed_id !== f.source_feed_id) return false
+  if (f.feed_url_contains && !feedUrl.toLowerCase().includes(f.feed_url_contains.toLowerCase())) return false
+  for (const ex of f.exclude_source_feed_ids ?? []) {
+    if (doc.source_feed_id === ex) return false
+  }
+  const feedUrlLower = feedUrl.toLowerCase()
+  for (const ex of f.exclude_feed_url_contains ?? []) {
+    if (feedUrlLower.includes(ex.toLowerCase())) return false
+  }
+  return true
+}
+
 type HighlightsSectionProps = {
   docId: string
+  doc: Document
+  feedUrl: string
   serverUrl: string
   token: string
   highlights: HighlightWithDoc[]
@@ -791,7 +817,7 @@ type HighlightsSectionProps = {
 }
 
 function HighlightsSection({
-  docId, serverUrl, token, highlights, pipelineRuns, pipelines, hlLoading, setHlLoading, reload, onDocumentPress,
+  docId, doc, feedUrl, serverUrl, token, highlights, pipelineRuns, pipelines, hlLoading, setHlLoading, reload, onDocumentPress,
 }: HighlightsSectionProps) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildHlStyles(theme), [theme])
@@ -831,6 +857,7 @@ function HighlightsSection({
       {pipelineRuns.map(run => {
         const pl = pipelines.find(p => p.id === run.pipeline_id)
         const runHighlights = highlights.filter(h => h.pipeline_run_id === run.id)
+        const matches = pl ? pipelineMatchesDocument(pl, doc, feedUrl) : true
         return (
           <View key={run.id} style={s.runBlock}>
             <View style={s.runHeader}>
@@ -862,6 +889,9 @@ function HighlightsSection({
                 disabled={hlLoading}
               >
                 <Text style={s.rerunText}>Delete all & rerun</Text>
+                <Text style={[s.matchHint, matches ? s.matchYes : s.matchNo]}>
+                  {matches ? '● filter matches' : '● filter won\'t match'}
+                </Text>
               </Pressable>
             )}
           </View>
@@ -871,16 +901,22 @@ function HighlightsSection({
       {pipelineRuns.length === 0 && pipelines.length > 0 && (
         <View>
           <Text style={s.empty}>No runs yet. Runs trigger on new documents.</Text>
-          {pipelines.map(pl => (
-            <Pressable
-              key={pl.id}
-              style={[s.rerunBtn, hlLoading && s.rerunDisabled]}
-              onPress={() => handleRerun(pl.id)}
-              disabled={hlLoading}
-            >
-              <Text style={s.rerunText}>Run "{pl.name}"</Text>
-            </Pressable>
-          ))}
+          {pipelines.map(pl => {
+            const matches = pipelineMatchesDocument(pl, doc, feedUrl)
+            return (
+              <Pressable
+                key={pl.id}
+                style={[s.rerunBtn, hlLoading && s.rerunDisabled]}
+                onPress={() => handleRerun(pl.id)}
+                disabled={hlLoading}
+              >
+                <Text style={s.rerunText}>Run "{pl.name}"</Text>
+                <Text style={[s.matchHint, matches ? s.matchYes : s.matchNo]}>
+                  {matches ? '● filter matches' : '● filter won\'t match'}
+                </Text>
+              </Pressable>
+            )
+          })}
         </View>
       )}
 
@@ -917,6 +953,9 @@ function buildHlStyles(t: ReturnType<typeof useUnistyles>['theme']) {
     },
     rerunText: { color: t.colors.accent, fontSize: 12, fontWeight: '600' },
     rerunDisabled: { opacity: 0.4 },
+    matchHint: { fontSize: 10, marginTop: 2 },
+    matchYes: { color: '#4ade80' },
+    matchNo: { color: '#f87171' },
     deleteAllBtn: {
       borderWidth: 1, borderColor: '#b91c1c', borderRadius: 6,
       paddingVertical: t.spacing.sm, alignItems: 'center', marginTop: t.spacing.sm,
