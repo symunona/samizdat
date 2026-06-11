@@ -48,9 +48,9 @@ func archivesDir(cfg *config.Config) string {
 }
 
 func loadArchiveCfg() (*config.Config, error) {
-	cfgPath, err := config.DefaultPath()
+	cfgPath, err := resolveConfigPath()
 	if err != nil {
-		return nil, fmt.Errorf("default config path: %w", err)
+		return nil, err
 	}
 	return config.Load(cfgPath)
 }

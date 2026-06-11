@@ -101,7 +101,7 @@ dev: _check-no-service build-server build-app-web
 [group('dev')]
 [doc('Build + run the sam CLI with args (e.g. just sam connect)')]
 sam *args: build-cli
-    ./cli/bin/sam {{args}}
+    ./cli/bin/sam {{_config_flag}} {{args}}
 
 [group('dev')]
 [doc('Run the Expo app (native/Expo Go)')]

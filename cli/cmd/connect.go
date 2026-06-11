@@ -28,9 +28,9 @@ func init() {
 }
 
 func runConnect(_ *cobra.Command, _ []string) error {
-	cfgPath, err := config.DefaultPath()
+	cfgPath, err := resolveConfigPath()
 	if err != nil {
-		return fmt.Errorf("default config path: %w", err)
+		return err
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
