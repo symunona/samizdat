@@ -15,7 +15,7 @@ default:
 
 [group('setup')]
 [doc('Install dev environment from a git clone (needs Go 1.22+)')]
-install-dev: _check-go _check-just setup-cli setup-server setup-tooling
+install-dev: _check-go _check-just setup-cli setup-server setup-app setup-tooling
     @echo ""
     @echo "Dev env ready."
     @echo "  Build:      just build"
