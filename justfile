@@ -156,6 +156,12 @@ fmt-js:
     cd clipper && npx prettier -w . 2>/dev/null || true
 
 [group('quality')]
+[doc('E2E smoke test: builds server, starts on port 8766, pairs device, navigates all pages, checks for JS errors')]
+e2e: build-server
+    @echo "Running smoke test (port 8766, fresh /tmp/samizdat-test DB)..."
+    cd e2e && node smoke.js
+
+[group('quality')]
 [doc('Run all tests')]
 test: test-go
 

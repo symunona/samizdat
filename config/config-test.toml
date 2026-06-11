@@ -1,0 +1,11 @@
+# Test config — isolated from dev. Server on port 8766. DB in /tmp.
+# Used by: just e2e
+data_dir       = "/tmp/samizdat-test"
+db_path        = "/tmp/samizdat-test/app.db"
+cache_dir      = "/tmp/samizdat-test/cache"
+vault_dir      = "/tmp/samizdat-test/vault"
+extractors_dir = "/home/symunona/dev/sam/extractors"
+
+[server]
+port    = 8766
+web_dir = "/home/symunona/dev/sam/app/dist"

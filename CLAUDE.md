@@ -75,6 +75,20 @@ Detailed research + decisions live in the planning vault (outside this repo):
 `~/dropx/org/50-59 pet projects and hobbies/54 samizdat/` — see `plan/003 Plan Decisions.md`, `plan/004 Onboarding Plan.md`, `plan/005 Samizdat Expo App UX.md`, `options/`, and `research/tech/` (009 naming, 019 SQLite, 020 sync/queue/API). When a decision here is ambiguous, that vault is canonical.
 
 
+## Smoke test (e2e)
+
+Run before every major feature or refactor that touches the app frontend:
+
+```bash
+just e2e
+```
+
+What it does: builds the server binary, starts it on port **8766** with a clean `/tmp/samizdat-test/` DB, pairs a device programmatically, navigates Documents / Tags / Jobs / Subscriptions in headless Chromium, and fails on any JS error or HTTP 4xx/5xx from the API.
+
+**Maintain the smoke test** — if you add a screen, add it to `e2e/smoke.js` `PAGES`. If you rename a route, update it there. The test config lives at `config/config-test.toml` (never edit for dev work — it always points to `/tmp`).
+
+**Never** claim a frontend feature done without a green `just e2e`.
+
 ## tmp/ — scratch, screenshots, browser sessions
 
 `tmp/` at the repo root is gitignored. Use it for:
