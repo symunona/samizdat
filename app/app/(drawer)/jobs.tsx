@@ -226,6 +226,12 @@ export default function JobsScreen() {
       if (isRoot && collapsed.has(job.id)) collapsedRoots.add(job.id)
     }
 
+    const queuePositions = new Map<string, number>()
+    let qPos = 0
+    for (const j of jobs) {
+      if (j.status === 'queued') queuePositions.set(j.id, ++qPos)
+    }
+
     return tree
       .filter(({ job }) => {
         if (!job.parent_job_id) return true
@@ -235,11 +241,12 @@ export default function JobsScreen() {
         ...item,
         childCount: item.isRoot ? (byParent.get(item.job.id)?.length ?? 0) : 0,
         groupStatus: item.isRoot ? groupStatus(item.job.id, byParent) : '',
+        queuePos: queuePositions.get(item.job.id),
       }))
   }, [jobs, collapsed])
 
   function renderItem({ item }: { item: typeof treeItems[0] }) {
-    const { job, depth, isRoot, childCount, groupStatus: gStatus } = item
+    const { job, depth, isRoot, childCount, groupStatus: gStatus, queuePos } = item
     const statusColor = STATUS_COLOR[job.status] ?? '#9ca3af'
     const p = parsePayload(job.payload)
     const r = parseResult(job.result)
@@ -274,6 +281,12 @@ export default function JobsScreen() {
           <View style={[s.statusDot, { backgroundColor: statusColor }]} />
           <Text style={s.kindText}>{kindLabel(job.kind)}</Text>
           <Text style={s.ageText}>{formatAge(job.updated_at)}</Text>
+          {job.status === 'queued' && queuePos != null && (
+            <Text style={s.queueLabel}>#{queuePos} queued</Text>
+          )}
+          {job.status === 'running' && (
+            <Text style={s.queueLabel}>processing</Text>
+          )}
 
           {/* Collapse toggle for roots with children */}
           {isRoot && childCount > 0 && (
@@ -462,6 +475,7 @@ function buildStyles(t: Theme) {
     statusDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
     kindText: { flex: 1, color: t.colors.text, fontSize: 13, fontFamily: 'monospace', fontWeight: '600' },
     ageText: { color: t.colors.placeholder, fontSize: 11 },
+    queueLabel: { color: t.colors.placeholder, fontSize: 10, fontFamily: 'monospace' },
     collapseBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 4 },
     collapseIcon: { color: t.colors.muted, fontSize: 10 },
     groupBadge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8, backgroundColor: t.colors.border },
