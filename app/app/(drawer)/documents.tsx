@@ -10,7 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { Link, useRouter } from 'expo-router'
+import { Link, useRouter, useFocusEffect } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDocuments, submitScrapeJob, deleteDocument } from '../../src/api'
 import type { Document } from '../../src/api'
@@ -135,6 +135,13 @@ export default function DocumentsScreen() {
       loadDocuments()
     }
   }, [status, loadDocuments])
+
+  // Reload list whenever screen comes back into focus (e.g. after deleting from document viewer)
+  useFocusEffect(
+    useCallback(() => {
+      if (status === 'connected') loadDocuments()
+    }, [status, loadDocuments]),
+  )
 
   async function handleSubmitUrl() {
     if (!activeUrl || !token) return
