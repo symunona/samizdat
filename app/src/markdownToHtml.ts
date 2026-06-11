@@ -13,6 +13,12 @@ export function mdToHtml(raw: string): string {
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
   s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>')
+
+  // Convert consecutive bullet lines to <ul>/<li> before replacing \n with <br>
+  s = s.replace(/((?:(?:^|\n)[-*] [^\n]+))+/g, (match) => {
+    const items = match.trim().split('\n').map(l => `<li>${l.replace(/^[-*]\s+/, '')}</li>`).join('')
+    return `<ul style="margin:0.5em 0;padding-left:1.4em;list-style:disc">${items}</ul>`
+  })
   s = s.replace(/\n/g, '<br>')
 
   return s

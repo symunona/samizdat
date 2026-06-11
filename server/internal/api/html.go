@@ -79,7 +79,7 @@ img{max-width:100%%;border-radius:6px;margin-bottom:1em}
 ul,ol{padding-left:1.5em;margin-bottom:1em}
 li{margin-bottom:0.3em}
 hr{border:none;border-top:1px solid #26262a;margin:1.5em 0}
-mark{background-color:rgba(232,116,59,0.35);color:#f4f1ea;border-radius:3px;padding:1px 0;cursor:pointer}
+mark{background-color:rgba(232,116,59,0.35);color:inherit;border-radius:3px;padding:1px 0;cursor:pointer}
 mark.color-yellow{background-color:rgba(250,204,21,0.3)}
 mark.color-green{background-color:rgba(74,222,128,0.3)}
 mark.color-blue{background-color:rgba(96,165,250,0.3)}
@@ -290,11 +290,13 @@ document.addEventListener('click', function(e) {
     return;
   }
   var a = e.target.closest && e.target.closest('a[href]');
-  if (a && a.href && (a.href.startsWith('http://') || a.href.startsWith('https://'))) {
+  if (a) {
     e.preventDefault();
-    var msg = { type: 'link_press', href: a.href };
-    if (a.dataset.docId) msg.doc_id = a.dataset.docId;
-    sendMsg(msg);
+    if (a.href && (a.href.startsWith('http://') || a.href.startsWith('https://'))) {
+      var msg = { type: 'link_press', href: a.href };
+      if (a.dataset.docId) msg.doc_id = a.dataset.docId;
+      sendMsg(msg);
+    }
   }
 });
 

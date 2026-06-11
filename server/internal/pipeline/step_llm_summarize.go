@@ -32,7 +32,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 		c.Model = "claude-haiku-4-5-20251001"
 	}
 	if c.Prompt == "" {
-		c.Prompt = "Summarize as caveman. Rules: drop all articles (a/an/the), drop filler words (just/really/basically/actually/simply/notably), drop hedges (seems/appears/might), no pleasantries, no intro, no outro. Fragments OK. Short synonyms (big not extensive, fix not implement a solution). Max 3 bullets. Pattern: [thing] [action] [why it matters]. Bold the key topic/name of each bullet: **keyword** where it naturally lands — one bold per bullet. Boring or thin = one line. Never start with 'This article'."
+		c.Prompt = "Summarize as caveman. Rules: drop all articles (a/an/the), drop filler words (just/really/basically/actually/simply/notably), drop hedges (seems/appears/might), no pleasantries, no intro, no outro. Fragments OK. Short synonyms (big not extensive, fix not implement a solution). Max 3 bullets. Pattern: [thing] [action] [why it matters]. Bold the key topic/name of each bullet: **keyword** where it naturally lands — one bold per bullet. Boring or thin = one line. Never start with 'This article'. IMPORTANT: if content is empty, image-only, or has no meaningful text to summarize, return exactly empty string — nothing else."
 	}
 
 	// Use step-level provider if specified, otherwise fall back to global client.
@@ -68,6 +68,10 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	}
 
 	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return StepResult{Done: true}, nil
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	meta, _ := json.Marshal(map[string]string{"model": c.Model})
 
