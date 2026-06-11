@@ -8,6 +8,8 @@ export function mdToHtml(raw: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
 
+  // images before links so ![alt](url) doesn't get eaten by the link regex
+  s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:6px;margin:0.5em 0;display:block">')
   // links before bold/italic so [**bold**](url) doesn't mis-parse
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
