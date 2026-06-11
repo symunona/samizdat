@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -13,6 +14,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/symunona/samizdat/cli/config"
 	_ "modernc.org/sqlite"
+)
+
+const (
+	red   = "\033[31m"
+	bold  = "\033[1m"
+	reset = "\033[0m"
 )
 
 var archiveCmd = &cobra.Command{
@@ -156,9 +163,48 @@ func checkpointDB(dbPath string) error {
 		return fmt.Errorf("open DB: %w", err)
 	}
 	defer func() { _ = db.Close() }()
-	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+	// PASSIVE: safe with concurrent readers — doesn't truncate or block.
+	// TRUNCATE with a live server → SQLITE_CORRUPT.
+	var busy, total, done int
+	if err := db.QueryRow("PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &total, &done); err != nil {
 		return fmt.Errorf("wal_checkpoint: %w", err)
 	}
+	if total != done {
+		fmt.Printf("\n%s%sWARNING: server is running — only %d/%d WAL frames checkpointed.%s\n", red, bold, done, total, reset)
+		fmt.Printf("%sArchive will be missing recent writes.%s\n\n", red, reset)
+		fmt.Println("  [k] Kill server and archive cleanly")
+		fmt.Println("  [c] Cancel")
+		fmt.Print("\nChoice: ")
+		var ans string
+		fmt.Scanln(&ans) //nolint:errcheck
+		switch strings.ToLower(strings.TrimSpace(ans)) {
+		case "k":
+			fmt.Println("Stopping server...")
+			if err := stopServer(); err != nil {
+				return fmt.Errorf("stop server: %w", err)
+			}
+			// Full checkpoint now that server is stopped.
+			if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+				return fmt.Errorf("wal_checkpoint after stop: %w", err)
+			}
+			fmt.Println("Server stopped, WAL fully checkpointed.")
+		default:
+			return fmt.Errorf("aborted: stop the server then retry")
+		}
+	}
+	return nil
+}
+
+func stopServer() error {
+	if err := exec.Command("pkill", "-TERM", "-x", "samizdat").Run(); err != nil {
+		// exit 1 means no process found — already stopped
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return nil
+		}
+		return err
+	}
+	// Give the server a moment to flush and close the WAL.
+	time.Sleep(500 * time.Millisecond)
 	return nil
 }
 
