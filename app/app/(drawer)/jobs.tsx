@@ -256,6 +256,7 @@ export default function JobsScreen() {
     const payloadUrl = p.url ?? ''
     const feedId = p.feed_id ?? ''
     const feedUrl = p.feed_url ?? ''
+    const deviceName = p.device_name ?? ''
     const pipelineName = p.pipeline_name ?? ''
     const documentTitle = p.document_title ?? ''
     const stepIndex = typeof p.step_index === 'number' ? p.step_index : (p.step_index != null ? parseInt(p.step_index as string, 10) : -1)
@@ -313,6 +314,11 @@ export default function JobsScreen() {
         )}
         {job.kind === 'scrape_url' && !!feedUrl && (
           <Text style={s.sourceText} numberOfLines={1}>from feed: {feedUrl}</Text>
+        )}
+        {job.kind === 'scrape_url' && !feedUrl && (
+          <Text style={s.sourceText} numberOfLines={1}>
+            {deviceName ? `Manual — ${deviceName}` : 'Manual'}
+          </Text>
         )}
 
         {/* other job kinds: external URL */}

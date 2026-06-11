@@ -3120,6 +3120,21 @@ func (q *Queries) UpdateDeviceLastSeen(ctx context.Context, arg UpdateDeviceLast
 	return err
 }
 
+const updateDeviceName = `-- name: UpdateDeviceName :exec
+UPDATE devices SET name = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL
+`
+
+type UpdateDeviceNameParams struct {
+	Name      string `json:"name"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) UpdateDeviceName(ctx context.Context, arg UpdateDeviceNameParams) error {
+	_, err := q.db.ExecContext(ctx, updateDeviceName, arg.Name, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const updateDocumentExcerptHero = `-- name: UpdateDocumentExcerptHero :exec
 UPDATE documents SET excerpt = ?, hero_image_url = ?, author = ?, updated_at = ? WHERE id = ?
 `

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { fetchDevices, revokeDevice, fetchSettings, updateSettings, ApiError } from '../../src/api'
+import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, ApiError } from '../../src/api'
 import type { DeviceInfo, AppSettings } from '../../src/api'
 import { clearConnection, removeServerUrl, loadUrlLastUsedMap } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
@@ -58,6 +58,11 @@ export default function SettingsScreen() {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [settingsLoading, setSettingsLoading] = useState(false)
   const [urlLastUsed, setUrlLastUsed] = useState<Record<string, string>>({})
+  const [deviceNameInput, setDeviceNameInput] = useState('')
+  const [deviceNameSaving, setDeviceNameSaving] = useState(false)
+  const [deviceNameSaved, setDeviceNameSaved] = useState(false)
+  const deviceNameTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const deviceNameInitialized = useRef(false)
 
   const handleUnauthorized = useCallback(async () => {
     await logout()
@@ -108,6 +113,32 @@ export default function SettingsScreen() {
       loadUrlLastUsedMap().then(setUrlLastUsed)
     }
   }, [status, loadDevices, loadSettings])
+
+  useEffect(() => {
+    if (serverInfo?.name && !deviceNameInitialized.current) {
+      deviceNameInitialized.current = true
+      setDeviceNameInput(serverInfo.name)
+    }
+  }, [serverInfo?.name])
+
+  function handleDeviceNameChange(val: string) {
+    setDeviceNameInput(val)
+    setDeviceNameSaved(false)
+    if (deviceNameTimer.current) clearTimeout(deviceNameTimer.current)
+    deviceNameTimer.current = setTimeout(async () => {
+      if (!activeUrl || !token || !val.trim()) return
+      setDeviceNameSaving(true)
+      try {
+        await updateDeviceName(activeUrl, token, val.trim())
+        setDeviceNameSaved(true)
+        setTimeout(() => setDeviceNameSaved(false), 2000)
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Failed to update device name', 'error')
+      } finally {
+        setDeviceNameSaving(false)
+      }
+    }, 800)
+  }
 
   async function handleTogglePolling(enabled: boolean) {
     if (!activeUrl || !token) return
@@ -336,9 +367,25 @@ export default function SettingsScreen() {
         )}
       </View>
 
-      {/* Disconnect */}
+      {/* This Device */}
       <View style={s.card}>
         <Text style={s.cardTitle}>This Device</Text>
+        <View style={s.thisDeviceNameRow}>
+          <Text style={s.infoLabel}>Device name</Text>
+          <View style={s.deviceNameField}>
+            <TextInput
+              style={s.deviceNameInput}
+              value={deviceNameInput}
+              onChangeText={handleDeviceNameChange}
+              placeholder="My device"
+              placeholderTextColor={theme.colors.placeholder}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {deviceNameSaving && <ActivityIndicator size="small" color={theme.colors.accent} style={s.deviceNameIndicator} />}
+            {deviceNameSaved && <Text style={s.deviceNameSaved}>✓</Text>}
+          </View>
+        </View>
         {deviceId && (
           <View style={s.infoRow}>
             <Text style={s.infoLabel}>Device ID</Text>
@@ -450,5 +497,20 @@ function buildStyles(t: Theme) {
     },
     disconnectBtnPressed: { opacity: 0.7 },
     disconnectText: { color: t.colors.error, fontSize: 14, fontWeight: '600' },
+    thisDeviceNameRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
+    deviceNameField: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: t.spacing.xs },
+    deviceNameInput: {
+      flex: 1,
+      backgroundColor: t.colors.background,
+      color: t.colors.text,
+      borderRadius: t.radius.sm,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      paddingHorizontal: t.spacing.sm,
+      paddingVertical: 6,
+      fontSize: 14,
+    },
+    deviceNameIndicator: { marginLeft: 4 },
+    deviceNameSaved: { color: t.colors.online, fontSize: 14, fontWeight: '700', marginLeft: 4 },
   })
 }

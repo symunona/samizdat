@@ -33,7 +33,12 @@ func (h *jobsHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, _ := json.Marshal(map[string]string{"url": body.URL})
+	dev := deviceFromCtx(r)
+	payload, _ := json.Marshal(map[string]string{
+		"url":         body.URL,
+		"device_id":   dev.ID,
+		"device_name": dev.Name,
+	})
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	job, err := h.q.InsertJob(r.Context(), store.InsertJobParams{

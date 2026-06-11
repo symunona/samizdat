@@ -45,6 +45,15 @@ export async function me(url: string, token: string): Promise<Me> {
   return json<Me>(res, '/api/v1/me')
 }
 
+export async function updateDeviceName(url: string, token: string, name: string): Promise<Me> {
+  const res = await fetch(`${base(url)}/api/v1/me`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  return json<Me>(res, 'PATCH /api/v1/me')
+}
+
 // Try lastSuccessfulUrl up to 3 times first, then fall through to remaining URLs in order.
 // Re-throws ApiError so callers can distinguish auth failures from network failures.
 export async function findReachable(

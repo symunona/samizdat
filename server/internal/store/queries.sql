@@ -18,6 +18,9 @@ SELECT * FROM devices WHERE deleted_at IS NULL ORDER BY created_at;
 -- name: UpdateDeviceLastSeen :exec
 UPDATE devices SET last_seen_at = ? WHERE id = ?;
 
+-- name: UpdateDeviceName :exec
+UPDATE devices SET name = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL;
+
 -- name: SoftDeleteDevice :exec
 UPDATE devices SET deleted_at = ?, updated_at = ?, rev = ?
 WHERE id = ?;
