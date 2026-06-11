@@ -131,12 +131,18 @@ func initItems(ctx context.Context, q *store.Queries, run store.PipelineRun, ski
 		// Already scraped?
 		existing, err := q.GetDocumentByCanonicalURL(ctx, url)
 		if err == nil && existing.ID != "" {
-			tracked = append(tracked, trackedItem{
-				Phase:       itemPhaseScraping,
-				HighlightID: hlID,
-				URL:         url,
-				ScrapeJobID: "existing:" + existing.ID,
-			})
+			if skipNewScrapes {
+				// skip_new_scrapes: don't poll the summarizer cycle; highlight
+				// body already has the original list-item text — leave it as-is.
+				tracked = append(tracked, trackedItem{Phase: itemPhaseDone, HighlightID: hlID})
+			} else {
+				tracked = append(tracked, trackedItem{
+					Phase:       itemPhaseScraping,
+					HighlightID: hlID,
+					URL:         url,
+					ScrapeJobID: "existing:" + existing.ID,
+				})
+			}
 			continue
 		}
 
