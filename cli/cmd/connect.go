@@ -87,7 +87,7 @@ func runConnect(_ *cobra.Command, _ []string) error {
 		fmt.Println("  Click to connect:")
 		for _, u := range result.ServerURLs {
 			link := fmt.Sprintf("%s/connect?code=%s", u, result.Code)
-			fmt.Printf("    %s\n", osc8(link, link))
+			fmt.Printf("    %s\n", colorLink(link))
 		}
 	}
 	fmt.Println()
@@ -134,4 +134,11 @@ func stripScheme(u string) string {
 // osc8 wraps text as an OSC 8 hyperlink so terminals render it clickable without showing the full URL.
 func osc8(href, text string) string {
 	return fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", href, text)
+}
+
+// colorLink renders a URL as bold cyan + OSC 8 hyperlink.
+func colorLink(url string) string {
+	const boldCyan = "\033[1;36m"
+	const reset = "\033[0m"
+	return boldCyan + osc8(url, url) + reset
 }
