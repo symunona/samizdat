@@ -1,4 +1,4 @@
-// Samizdat server client (Milestone 1: pair + health + multi-URL).
+// Samizdat server client.
 
 export type PairResult = {
   device_token: string
@@ -88,6 +88,10 @@ export type Document = {
   source_feed_id?: string | null
   annotation_count?: number
   highlight_count?: number
+  created_at: string
+  updated_at: string
+  rev: number
+  deleted_at: string | null
 }
 
 export type MediaAsset = {
@@ -379,6 +383,8 @@ export type Annotation = {
   note: string
   created_at: string
   updated_at: string
+  rev: number
+  deleted_at: string | null
 }
 
 export async function fetchDocumentHtml(serverUrl: string, token: string, docId: string): Promise<string> {
@@ -568,6 +574,8 @@ export type Highlight = {
   pinned: number    // 0 | 1
   created_at: string
   updated_at: string
+  rev: number
+  deleted_at: string | null
 }
 
 export async function fetchPipelines(serverUrl: string, token: string): Promise<Pipeline[]> {
@@ -697,4 +705,81 @@ export async function updateSettings(serverUrl: string, token: string, patch: Pa
     body: JSON.stringify(patch),
   })
   return json<AppSettings>(res, '/api/v1/settings')
+}
+
+// ── Sync ─────────────────────────────────────────────────────────────────────
+
+export type DocumentTag = {
+  id: string
+  document_id: string
+  tag_id: string
+  created_at: string
+  updated_at: string
+  rev: number
+  deleted_at: string | null
+}
+
+export type AnnotationTag = {
+  id: string
+  annotation_id: string
+  tag_id: string
+  created_at: string
+  updated_at: string
+  rev: number
+  deleted_at: string | null
+}
+
+export type HighlightTag = {
+  id: string
+  highlight_id: string
+  tag_id: string
+  created_at: string
+  updated_at: string
+  rev: number
+  deleted_at: string | null
+}
+
+export type SyncPayload = {
+  server_time: string
+  documents: Document[]
+  highlights: Highlight[]
+  annotations: Annotation[]
+  tags: Tag[]
+  document_tags: DocumentTag[]
+  annotation_tags: AnnotationTag[]
+  highlight_tags: HighlightTag[]
+}
+
+export async function fetchSync(serverUrl: string, token: string, since: string): Promise<SyncPayload> {
+  const res = await fetch(
+    `${base(serverUrl)}/api/v1/sync?since=${encodeURIComponent(since)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
+  return json<SyncPayload>(res, '/api/v1/sync')
+}
+
+// ── Jobs paging ───────────────────────────────────────────────────────────────
+
+export type JobsPage = {
+  items: Job[]
+  total: number
+  has_more: boolean
+  offset: number
+  limit: number
+}
+
+export async function fetchJobsPage(
+  serverUrl: string,
+  token: string,
+  opts: { status?: string; kind?: string; offset?: number; limit?: number } = {},
+): Promise<JobsPage> {
+  const params = new URLSearchParams()
+  if (opts.status) params.set('status', opts.status)
+  if (opts.kind) params.set('kind', opts.kind)
+  params.set('offset', String(opts.offset ?? 0))
+  params.set('limit', String(opts.limit ?? 50))
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<JobsPage>(res, '/api/v1/jobs (paged)')
 }

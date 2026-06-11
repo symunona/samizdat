@@ -154,6 +154,7 @@ func (h *documentTagsHandler) add(w http.ResponseWriter, r *http.Request) {
 		DocumentID: docID,
 		TagID:      inp.TagID,
 		CreatedAt:  now,
+		UpdatedAt:  now,
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
@@ -172,6 +173,7 @@ func (h *documentTagsHandler) remove(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := h.q.DeleteDocumentTag(r.Context(), store.DeleteDocumentTagParams{
 		DeletedAt:  &now,
+		UpdatedAt:  now,
 		DocumentID: docID,
 		TagID:      tagID,
 	}); err != nil {
@@ -223,6 +225,7 @@ func (h *annotationTagsHandler) add(w http.ResponseWriter, r *http.Request) {
 		AnnotationID: annID,
 		TagID:        inp.TagID,
 		CreatedAt:    now,
+		UpdatedAt:    now,
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
@@ -241,6 +244,7 @@ func (h *annotationTagsHandler) remove(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := h.q.DeleteAnnotationTag(r.Context(), store.DeleteAnnotationTagParams{
 		DeletedAt:    &now,
+		UpdatedAt:    now,
 		AnnotationID: annID,
 		TagID:        tagID,
 	}); err != nil {
@@ -292,6 +296,7 @@ func (h *highlightTagsHandler) add(w http.ResponseWriter, r *http.Request) {
 		HighlightID: hlID,
 		TagID:       inp.TagID,
 		CreatedAt:   now,
+		UpdatedAt:   now,
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
@@ -310,6 +315,7 @@ func (h *highlightTagsHandler) remove(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := h.q.DeleteHighlightTag(r.Context(), store.DeleteHighlightTagParams{
 		DeletedAt:   &now,
+		UpdatedAt:   now,
 		HighlightID: hlID,
 		TagID:       tagID,
 	}); err != nil {

@@ -63,6 +63,9 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	adminFeedsH := &adminFeedsHandler{reg: w.ExtractorRegistry(), browser: w}
 	mux.HandleFunc("POST /api/v1/admin/feeds/preview", localhostOnly(adminFeedsH.preview))
 
+	syncH := &syncHandler{q: q}
+	mux.HandleFunc("GET /api/v1/sync", bearerAuth(q, syncH.sync))
+
 	docsH := &documentsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents", bearerAuth(q, docsH.list))
 	mux.HandleFunc("GET /api/v1/documents/by-url", bearerAuth(q, docsH.lookupByURL))

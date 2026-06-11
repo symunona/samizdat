@@ -270,12 +270,12 @@ ORDER BY (COALESCE(SUM(CASE WHEN dt.deleted_at IS NULL THEN 1 ELSE 0 END), 0) + 
 UPDATE tags SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
 -- name: InsertDocumentTag :one
-INSERT INTO document_tags (id, document_id, tag_id, created_at, rev)
-VALUES (?, ?, ?, ?, 0)
+INSERT INTO document_tags (id, document_id, tag_id, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, 0)
 RETURNING *;
 
 -- name: DeleteDocumentTag :exec
-UPDATE document_tags SET deleted_at = ?, rev = rev + 1
+UPDATE document_tags SET deleted_at = ?, updated_at = ?, rev = rev + 1
 WHERE document_id = ? AND tag_id = ? AND deleted_at IS NULL;
 
 -- name: ListTagsByDocument :many
@@ -291,12 +291,12 @@ WHERE dt.tag_id = ? AND dt.deleted_at IS NULL AND d.deleted_at IS NULL
 ORDER BY d.created_at DESC;
 
 -- name: InsertAnnotationTag :one
-INSERT INTO annotation_tags (id, annotation_id, tag_id, created_at, rev)
-VALUES (?, ?, ?, ?, 0)
+INSERT INTO annotation_tags (id, annotation_id, tag_id, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, 0)
 RETURNING *;
 
 -- name: DeleteAnnotationTag :exec
-UPDATE annotation_tags SET deleted_at = ?, rev = rev + 1
+UPDATE annotation_tags SET deleted_at = ?, updated_at = ?, rev = rev + 1
 WHERE annotation_id = ? AND tag_id = ? AND deleted_at IS NULL;
 
 -- name: ListTagsByAnnotation :many
@@ -402,12 +402,12 @@ WHERE pipeline_run_id = ? AND deleted_at IS NULL;
 UPDATE highlights SET pinned = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
 -- name: InsertHighlightTag :one
-INSERT INTO highlight_tags (id, highlight_id, tag_id, created_at, rev)
-VALUES (?, ?, ?, ?, 0)
+INSERT INTO highlight_tags (id, highlight_id, tag_id, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, 0)
 RETURNING *;
 
 -- name: DeleteHighlightTag :exec
-UPDATE highlight_tags SET deleted_at = ?, rev = rev + 1
+UPDATE highlight_tags SET deleted_at = ?, updated_at = ?, rev = rev + 1
 WHERE highlight_id = ? AND tag_id = ? AND deleted_at IS NULL;
 
 -- name: ListTagsByHighlight :many
@@ -421,3 +421,52 @@ SELECT h.* FROM highlights h
 JOIN highlight_tags ht ON ht.highlight_id = h.id
 WHERE ht.tag_id = ? AND ht.deleted_at IS NULL AND h.deleted_at IS NULL
 ORDER BY h.created_at DESC;
+
+-- Differential sync queries (returns all rows changed after since, including tombstones)
+
+-- name: ListDocumentsSince :many
+SELECT * FROM documents WHERE updated_at > ? ORDER BY updated_at ASC;
+
+-- name: ListHighlightsSince :many
+SELECT * FROM highlights WHERE updated_at > ? ORDER BY updated_at ASC;
+
+-- name: ListAnnotationsSince :many
+SELECT * FROM annotations WHERE updated_at > ? ORDER BY updated_at ASC;
+
+-- name: ListTagsSince :many
+SELECT * FROM tags WHERE updated_at > ? ORDER BY updated_at ASC;
+
+-- name: ListDocumentTagsSince :many
+SELECT * FROM document_tags WHERE updated_at > ? ORDER BY updated_at ASC;
+
+-- name: ListAnnotationTagsSince :many
+SELECT * FROM annotation_tags WHERE updated_at > ? ORDER BY updated_at ASC;
+
+-- name: ListHighlightTagsSince :many
+SELECT * FROM highlight_tags WHERE updated_at > ? ORDER BY updated_at ASC;
+
+-- Jobs paging (offset-based for the admin UI)
+
+-- name: ListJobsPage :many
+SELECT * FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
+
+-- name: ListJobsByStatusPage :many
+SELECT * FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
+
+-- name: ListJobsByKindPage :many
+SELECT * FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
+
+-- name: ListJobsByStatusAndKindPage :many
+SELECT * FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
+
+-- name: CountJobs :one
+SELECT COUNT(*) FROM jobs WHERE deleted_at IS NULL;
+
+-- name: CountJobsByStatus :one
+SELECT COUNT(*) FROM jobs WHERE status = ? AND deleted_at IS NULL;
+
+-- name: CountJobsByKind :one
+SELECT COUNT(*) FROM jobs WHERE kind = ? AND deleted_at IS NULL;
+
+-- name: CountJobsByStatusAndKind :one
+SELECT COUNT(*) FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL;

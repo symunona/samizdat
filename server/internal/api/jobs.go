@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -65,27 +66,99 @@ func (h *jobsHandler) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
-// GET /api/v1/jobs — list with optional ?status= and ?kind= query params.
+type jobsPageResponse struct {
+	Items   []store.Job `json:"items"`
+	Total   int64       `json:"total"`
+	HasMore bool        `json:"has_more"`
+	Offset  int64       `json:"offset"`
+	Limit   int64       `json:"limit"`
+}
+
+// GET /api/v1/jobs — list with optional ?status= ?kind= ?limit= ?offset= query params.
+// When limit is provided the response is paginated; otherwise legacy flat array.
 func (h *jobsHandler) list(w http.ResponseWriter, r *http.Request) {
-	status := r.URL.Query().Get("status")
-	kind := r.URL.Query().Get("kind")
+	q := r.URL.Query()
+	status := q.Get("status")
+	kind := q.Get("kind")
+	limitStr := q.Get("limit")
+	offsetStr := q.Get("offset")
+
+	// Legacy (no pagination params) — return flat array for backwards compat
+	if limitStr == "" && offsetStr == "" {
+		var (
+			jobs []store.Job
+			err  error
+		)
+		switch {
+		case status != "" && kind != "":
+			jobs, err = h.q.ListJobsByStatusAndKind(r.Context(), store.ListJobsByStatusAndKindParams{
+				Status: status,
+				Kind:   kind,
+			})
+		case status != "":
+			jobs, err = h.q.ListJobsByStatus(r.Context(), status)
+		case kind != "":
+			jobs, err = h.q.ListJobsByKind(r.Context(), kind)
+		default:
+			jobs, err = h.q.ListJobs(r.Context())
+		}
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if jobs == nil {
+			jobs = []store.Job{}
+		}
+		writeJSON(w, http.StatusOK, jobs)
+		return
+	}
+
+	// Paginated path
+	limit, _ := strconv.ParseInt(limitStr, 10, 64)
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset, _ := strconv.ParseInt(offsetStr, 10, 64)
+	if offset < 0 {
+		offset = 0
+	}
 
 	var (
-		jobs []store.Job
-		err  error
+		jobs  []store.Job
+		total int64
+		err   error
 	)
 	switch {
 	case status != "" && kind != "":
-		jobs, err = h.q.ListJobsByStatusAndKind(r.Context(), store.ListJobsByStatusAndKindParams{
-			Status: status,
-			Kind:   kind,
+		jobs, err = h.q.ListJobsByStatusAndKindPage(r.Context(), store.ListJobsByStatusAndKindPageParams{
+			Status: status, Kind: kind, Limit: limit, Offset: offset,
 		})
+		if err == nil {
+			total, err = h.q.CountJobsByStatusAndKind(r.Context(), store.CountJobsByStatusAndKindParams{
+				Status: status, Kind: kind,
+			})
+		}
 	case status != "":
-		jobs, err = h.q.ListJobsByStatus(r.Context(), status)
+		jobs, err = h.q.ListJobsByStatusPage(r.Context(), store.ListJobsByStatusPageParams{
+			Status: status, Limit: limit, Offset: offset,
+		})
+		if err == nil {
+			total, err = h.q.CountJobsByStatus(r.Context(), status)
+		}
 	case kind != "":
-		jobs, err = h.q.ListJobsByKind(r.Context(), kind)
+		jobs, err = h.q.ListJobsByKindPage(r.Context(), store.ListJobsByKindPageParams{
+			Kind: kind, Limit: limit, Offset: offset,
+		})
+		if err == nil {
+			total, err = h.q.CountJobsByKind(r.Context(), kind)
+		}
 	default:
-		jobs, err = h.q.ListJobs(r.Context())
+		jobs, err = h.q.ListJobsPage(r.Context(), store.ListJobsPageParams{
+			Limit: limit, Offset: offset,
+		})
+		if err == nil {
+			total, err = h.q.CountJobs(r.Context())
+		}
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
@@ -94,7 +167,13 @@ func (h *jobsHandler) list(w http.ResponseWriter, r *http.Request) {
 	if jobs == nil {
 		jobs = []store.Job{}
 	}
-	writeJSON(w, http.StatusOK, jobs)
+	writeJSON(w, http.StatusOK, jobsPageResponse{
+		Items:   jobs,
+		Total:   total,
+		HasMore: offset+int64(len(jobs)) < total,
+		Offset:  offset,
+		Limit:   limit,
+	})
 }
 
 // POST /api/v1/jobs/{id}/retry — reset status=queued, attempts=0, run_after=now.

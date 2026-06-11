@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
@@ -10,11 +10,13 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { Link, useRouter, useFocusEffect } from 'expo-router'
+import { Link } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { fetchDocuments, submitScrapeJob, deleteDocument } from '../../src/api'
+import { submitScrapeJob, deleteDocument } from '../../src/api'
 import type { Document } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
+import { useDocuments, useSyncStatus } from '../../src/store/hooks'
+import { forceSync, requestSync } from '../../src/store/syncEngine'
 
 function formatDate(iso: string): string {
   try {
@@ -31,27 +33,25 @@ function formatDate(iso: string): string {
 export default function DocumentsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
-  const router = useRouter()
   const { status, error: connError, activeUrl, token, probe } = useConnection()
 
-  const [documents, setDocuments] = useState<Document[]>([])
-  const [fetchLoading, setFetchLoading] = useState(false)
+  const allDocuments = useDocuments()
+  const { status: syncStatus } = useSyncStatus()
   const [refreshing, setRefreshing] = useState(false)
-  const [fetchError, setFetchError] = useState<string | null>(null)
 
-  const [urlInput, setUrlInput] = useState('')
-  const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'queued' | 'error'>('idle')
-  const [submitError, setSubmitError] = useState<string | null>(null)
-  const queuedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // pending delete: id → { doc, countdown }
+  // ids being deleted (optimistically hidden from list while waiting for server)
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set())
   const [pendingDeletes, setPendingDeletes] = useState<Record<string, { doc: Document; countdown: number }>>({})
   const pendingTimers = useRef<Record<string, ReturnType<typeof setInterval>>>({})
 
+  const documents = useMemo(
+    () => allDocuments.filter((d) => !pendingDeleteIds.has(d.id)),
+    [allDocuments, pendingDeleteIds],
+  )
+
   const startDelete = useCallback(
     (doc: Document) => {
-      // optimistic remove from list
-      setDocuments((prev) => prev.filter((d) => d.id !== doc.id))
+      setPendingDeleteIds((prev) => new Set([...prev, doc.id]))
       setPendingDeletes((prev) => ({ ...prev, [doc.id]: { doc, countdown: 5 } }))
 
       const tick = setInterval(() => {
@@ -61,7 +61,6 @@ export default function DocumentsScreen() {
           return { ...prev, [doc.id]: { ...entry, countdown: entry.countdown - 1 } }
         })
       }, 1000)
-
       pendingTimers.current[doc.id] = tick
 
       setTimeout(async () => {
@@ -72,86 +71,46 @@ export default function DocumentsScreen() {
           delete next[doc.id]
           return next
         })
-        if (!activeUrl || !token) return
+        if (!activeUrl || !token) {
+          setPendingDeleteIds((prev) => { const s = new Set(prev); s.delete(doc.id); return s })
+          return
+        }
         try {
           await deleteDocument(activeUrl, token, doc.id)
+          // trigger sync so store gets the tombstone
+          requestSync(activeUrl, token)
         } catch {
           // restore on failure
-          setDocuments((prev) => [doc, ...prev])
+          setPendingDeleteIds((prev) => { const s = new Set(prev); s.delete(doc.id); return s })
         }
       }, 5000)
     },
     [activeUrl, token],
   )
 
-  const undoDelete = useCallback((id: string) => {
-    const entry = pendingDeletes[id]
-    if (!entry) return
-    clearInterval(pendingTimers.current[id])
-    delete pendingTimers.current[id]
-    setPendingDeletes((prev) => {
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-    setDocuments((prev) => {
-      if (prev.find((d) => d.id === id)) return prev
-      return [entry.doc, ...prev]
-    })
-  }, [pendingDeletes])
-
-  // Redirect only when no credentials stored
-  useEffect(() => {
-    if (status === 'disconnected' && !token) {
-      router.replace('/connect')
-    }
-  }, [status, token, router])
-
-  const loadDocuments = useCallback(
-    async (isRefresh = false) => {
-      if (!activeUrl || !token) return
-      if (isRefresh) {
-        setRefreshing(true)
-      } else {
-        setFetchLoading(true)
-      }
-      setFetchError(null)
-      try {
-        const docs = await fetchDocuments(activeUrl, token)
-        setDocuments(docs)
-      } catch (e: unknown) {
-        setFetchError(e instanceof Error ? e.message : 'Failed to load documents')
-      } finally {
-        setFetchLoading(false)
-        setRefreshing(false)
-      }
+  const undoDelete = useCallback(
+    (id: string) => {
+      clearInterval(pendingTimers.current[id])
+      delete pendingTimers.current[id]
+      setPendingDeletes((prev) => { const next = { ...prev }; delete next[id]; return next })
+      setPendingDeleteIds((prev) => { const s = new Set(prev); s.delete(id); return s })
     },
-    [activeUrl, token],
+    [],
   )
 
-  // Fetch documents once connection is ready
-  useEffect(() => {
-    if (status === 'connected') {
-      loadDocuments()
-    }
-  }, [status, loadDocuments])
-
-  // Reload list whenever screen comes back into focus (e.g. after deleting from document viewer)
-  useFocusEffect(
-    useCallback(() => {
-      if (status === 'connected') loadDocuments()
-    }, [status, loadDocuments]),
-  )
+  const [urlInput, setUrlInput] = useState('')
+  const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'queued' | 'error'>('idle')
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const queuedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   async function handleSubmitUrl() {
     if (!activeUrl || !token) return
     const trimmed = urlInput.trim()
     if (!trimmed) return
-
     setSubmitState('submitting')
     setSubmitError(null)
     try {
-      await submitScrapeJob(activeUrl!, token!, trimmed)
+      await submitScrapeJob(activeUrl, token, trimmed)
       setUrlInput('')
       setSubmitState('queued')
       if (queuedTimerRef.current) clearTimeout(queuedTimerRef.current)
@@ -162,19 +121,25 @@ export default function DocumentsScreen() {
     }
   }
 
+  async function handleRefresh() {
+    if (!activeUrl || !token) return
+    setRefreshing(true)
+    try {
+      await forceSync(activeUrl, token)
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
   function renderItem({ item }: { item: Document }) {
     const displayTitle = item.title?.trim() ? item.title : item.canonical_url
     return (
       <View style={s.itemRow}>
         <Link href={`/document/${item.id}?from=/documents`} style={s.item}>
-          <Text style={s.itemTitle} numberOfLines={2}>
-            {displayTitle}
-          </Text>
-          <Text style={s.itemUrl} numberOfLines={1}>
-            {item.canonical_url}
-          </Text>
+          <Text style={s.itemTitle} numberOfLines={2}>{displayTitle}</Text>
+          <Text style={s.itemUrl} numberOfLines={1}>{item.canonical_url}</Text>
           <Text style={s.itemDate}>Fetched {formatDate(item.fetched_at)}</Text>
-          {(item.highlight_count && item.highlight_count > 0) || (item.annotation_count && item.annotation_count > 0) ? (
+          {((item.highlight_count && item.highlight_count > 0) || (item.annotation_count && item.annotation_count > 0)) ? (
             <View style={s.badgeRow}>
               {item.highlight_count && item.highlight_count > 0 ? (
                 <Text style={s.hlBadge}>◆ {item.highlight_count} highlight{item.highlight_count > 1 ? 's' : ''}</Text>
@@ -267,9 +232,7 @@ export default function DocumentsScreen() {
         const title = doc.title?.trim() ? doc.title : doc.canonical_url
         return (
           <View key={id} style={s.undoRow}>
-            <Text style={s.undoText} numberOfLines={1}>
-              Deleted: {title}
-            </Text>
+            <Text style={s.undoText} numberOfLines={1}>Deleted: {title}</Text>
             <Pressable
               style={({ pressed }) => [s.undoBtn, pressed && s.undoBtnPressed]}
               onPress={() => undoDelete(id)}
@@ -281,16 +244,9 @@ export default function DocumentsScreen() {
       })}
 
       {/* Document list */}
-      {fetchLoading && !refreshing ? (
+      {syncStatus === 'syncing' && documents.length === 0 ? (
         <View style={s.centered}>
           <ActivityIndicator color={theme.colors.accent} size="large" />
-        </View>
-      ) : fetchError ? (
-        <View style={s.centered}>
-          <Text style={s.errorText}>{fetchError}</Text>
-          <Pressable onPress={() => loadDocuments()} style={s.retryBtn}>
-            <Text style={s.retryText}>Retry</Text>
-          </Pressable>
         </View>
       ) : (
         <FlatList
@@ -301,7 +257,7 @@ export default function DocumentsScreen() {
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
-              onRefresh={() => loadDocuments(true)}
+              onRefresh={handleRefresh}
               tintColor={theme.colors.accent}
             />
           }
@@ -319,10 +275,7 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 
 function buildStyles(t: Theme) {
   return StyleSheet.create({
-    screen: {
-      flex: 1,
-      backgroundColor: t.colors.background,
-    },
+    screen: { flex: 1, backgroundColor: t.colors.background },
     addRow: {
       flexDirection: 'row',
       paddingHorizontal: t.spacing.md,
@@ -381,7 +334,6 @@ function buildStyles(t: Theme) {
       flexDirection: 'column',
       textDecorationLine: 'none',
     },
-    itemPressed: { backgroundColor: t.colors.surface },
     itemTitle: { color: t.colors.text, fontSize: 15, fontWeight: '600', lineHeight: 20, marginBottom: 2 },
     itemUrl: { color: t.colors.muted, fontSize: 12, fontFamily: 'monospace', marginBottom: 2 },
     itemDate: { color: t.colors.placeholder, fontSize: 11 },

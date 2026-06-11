@@ -204,6 +204,7 @@ CREATE TABLE IF NOT EXISTS document_tags (
     document_id TEXT NOT NULL REFERENCES documents(id),
     tag_id      TEXT NOT NULL REFERENCES tags(id),
     created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL DEFAULT '',
     rev         INTEGER NOT NULL DEFAULT 0,
     deleted_at  TEXT,
     UNIQUE(document_id, tag_id)
@@ -214,6 +215,7 @@ CREATE TABLE IF NOT EXISTS annotation_tags (
     annotation_id TEXT NOT NULL REFERENCES annotations(id),
     tag_id        TEXT NOT NULL REFERENCES tags(id),
     created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL DEFAULT '',
     rev           INTEGER NOT NULL DEFAULT 0,
     deleted_at    TEXT,
     UNIQUE(annotation_id, tag_id)
@@ -265,6 +267,17 @@ CREATE TABLE IF NOT EXISTS highlights (
 
 CREATE INDEX IF NOT EXISTS highlights_document_id ON highlights(document_id);
 CREATE INDEX IF NOT EXISTS highlights_pipeline_run_id ON highlights(pipeline_run_id);
+
+CREATE TABLE IF NOT EXISTS highlight_tags (
+    id           TEXT PRIMARY KEY,
+    highlight_id TEXT NOT NULL REFERENCES highlights(id),
+    tag_id       TEXT NOT NULL REFERENCES tags(id),
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL DEFAULT '',
+    rev          INTEGER NOT NULL DEFAULT 0,
+    deleted_at   TEXT,
+    UNIQUE(highlight_id, tag_id)
+);
 `
 
 func migrate(db *sql.DB) error {
@@ -293,6 +306,21 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS highlights_pipeline_run_id ON highlights(pipeline_run_id)`,
 		`ALTER TABLE subscriptions ADD COLUMN paused INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE jobs ADD COLUMN parent_job_id TEXT`,
+		// junction table updated_at — backfill from created_at so sync cursor works
+		`ALTER TABLE document_tags ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''`,
+		`UPDATE document_tags SET updated_at = created_at WHERE updated_at = ''`,
+		`ALTER TABLE annotation_tags ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''`,
+		`UPDATE annotation_tags SET updated_at = created_at WHERE updated_at = ''`,
+		`ALTER TABLE highlight_tags ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''`,
+		`UPDATE highlight_tags SET updated_at = created_at WHERE updated_at = ''`,
+		// sync indexes
+		`CREATE INDEX IF NOT EXISTS documents_updated_at    ON documents(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS highlights_updated_at   ON highlights(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS annotations_updated_at  ON annotations(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS tags_updated_at         ON tags(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS document_tags_updated_at   ON document_tags(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS annotation_tags_updated_at ON annotation_tags(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS highlight_tags_updated_at  ON highlight_tags(updated_at)`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {

@@ -77,51 +77,118 @@ func (q *Queries) ClearCompletedJobs(ctx context.Context, arg ClearCompletedJobs
 	return q.db.ExecContext(ctx, clearCompletedJobs, arg.DeletedAt, arg.UpdatedAt)
 }
 
+const countJobs = `-- name: CountJobs :one
+SELECT COUNT(*) FROM jobs WHERE deleted_at IS NULL
+`
+
+func (q *Queries) CountJobs(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countJobs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countJobsByKind = `-- name: CountJobsByKind :one
+SELECT COUNT(*) FROM jobs WHERE kind = ? AND deleted_at IS NULL
+`
+
+func (q *Queries) CountJobsByKind(ctx context.Context, kind string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countJobsByKind, kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countJobsByStatus = `-- name: CountJobsByStatus :one
+SELECT COUNT(*) FROM jobs WHERE status = ? AND deleted_at IS NULL
+`
+
+func (q *Queries) CountJobsByStatus(ctx context.Context, status string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countJobsByStatus, status)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countJobsByStatusAndKind = `-- name: CountJobsByStatusAndKind :one
+SELECT COUNT(*) FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL
+`
+
+type CountJobsByStatusAndKindParams struct {
+	Status string `json:"status"`
+	Kind   string `json:"kind"`
+}
+
+func (q *Queries) CountJobsByStatusAndKind(ctx context.Context, arg CountJobsByStatusAndKindParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countJobsByStatusAndKind, arg.Status, arg.Kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteAnnotationTag = `-- name: DeleteAnnotationTag :exec
-UPDATE annotation_tags SET deleted_at = ?, rev = rev + 1
+UPDATE annotation_tags SET deleted_at = ?, updated_at = ?, rev = rev + 1
 WHERE annotation_id = ? AND tag_id = ? AND deleted_at IS NULL
 `
 
 type DeleteAnnotationTagParams struct {
 	DeletedAt    *string `json:"deleted_at"`
+	UpdatedAt    string  `json:"updated_at"`
 	AnnotationID string  `json:"annotation_id"`
 	TagID        string  `json:"tag_id"`
 }
 
 func (q *Queries) DeleteAnnotationTag(ctx context.Context, arg DeleteAnnotationTagParams) error {
-	_, err := q.db.ExecContext(ctx, deleteAnnotationTag, arg.DeletedAt, arg.AnnotationID, arg.TagID)
+	_, err := q.db.ExecContext(ctx, deleteAnnotationTag,
+		arg.DeletedAt,
+		arg.UpdatedAt,
+		arg.AnnotationID,
+		arg.TagID,
+	)
 	return err
 }
 
 const deleteDocumentTag = `-- name: DeleteDocumentTag :exec
-UPDATE document_tags SET deleted_at = ?, rev = rev + 1
+UPDATE document_tags SET deleted_at = ?, updated_at = ?, rev = rev + 1
 WHERE document_id = ? AND tag_id = ? AND deleted_at IS NULL
 `
 
 type DeleteDocumentTagParams struct {
 	DeletedAt  *string `json:"deleted_at"`
+	UpdatedAt  string  `json:"updated_at"`
 	DocumentID string  `json:"document_id"`
 	TagID      string  `json:"tag_id"`
 }
 
 func (q *Queries) DeleteDocumentTag(ctx context.Context, arg DeleteDocumentTagParams) error {
-	_, err := q.db.ExecContext(ctx, deleteDocumentTag, arg.DeletedAt, arg.DocumentID, arg.TagID)
+	_, err := q.db.ExecContext(ctx, deleteDocumentTag,
+		arg.DeletedAt,
+		arg.UpdatedAt,
+		arg.DocumentID,
+		arg.TagID,
+	)
 	return err
 }
 
 const deleteHighlightTag = `-- name: DeleteHighlightTag :exec
-UPDATE highlight_tags SET deleted_at = ?, rev = rev + 1
+UPDATE highlight_tags SET deleted_at = ?, updated_at = ?, rev = rev + 1
 WHERE highlight_id = ? AND tag_id = ? AND deleted_at IS NULL
 `
 
 type DeleteHighlightTagParams struct {
 	DeletedAt   *string `json:"deleted_at"`
+	UpdatedAt   string  `json:"updated_at"`
 	HighlightID string  `json:"highlight_id"`
 	TagID       string  `json:"tag_id"`
 }
 
 func (q *Queries) DeleteHighlightTag(ctx context.Context, arg DeleteHighlightTagParams) error {
-	_, err := q.db.ExecContext(ctx, deleteHighlightTag, arg.DeletedAt, arg.HighlightID, arg.TagID)
+	_, err := q.db.ExecContext(ctx, deleteHighlightTag,
+		arg.DeletedAt,
+		arg.UpdatedAt,
+		arg.HighlightID,
+		arg.TagID,
+	)
 	return err
 }
 
@@ -641,9 +708,9 @@ func (q *Queries) InsertAnnotation(ctx context.Context, arg InsertAnnotationPara
 }
 
 const insertAnnotationTag = `-- name: InsertAnnotationTag :one
-INSERT INTO annotation_tags (id, annotation_id, tag_id, created_at, rev)
-VALUES (?, ?, ?, ?, 0)
-RETURNING id, annotation_id, tag_id, created_at, rev, deleted_at
+INSERT INTO annotation_tags (id, annotation_id, tag_id, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, 0)
+RETURNING id, annotation_id, tag_id, created_at, updated_at, rev, deleted_at
 `
 
 type InsertAnnotationTagParams struct {
@@ -651,6 +718,7 @@ type InsertAnnotationTagParams struct {
 	AnnotationID string `json:"annotation_id"`
 	TagID        string `json:"tag_id"`
 	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
 func (q *Queries) InsertAnnotationTag(ctx context.Context, arg InsertAnnotationTagParams) (AnnotationTag, error) {
@@ -659,6 +727,7 @@ func (q *Queries) InsertAnnotationTag(ctx context.Context, arg InsertAnnotationT
 		arg.AnnotationID,
 		arg.TagID,
 		arg.CreatedAt,
+		arg.UpdatedAt,
 	)
 	var i AnnotationTag
 	err := row.Scan(
@@ -666,6 +735,7 @@ func (q *Queries) InsertAnnotationTag(ctx context.Context, arg InsertAnnotationT
 		&i.AnnotationID,
 		&i.TagID,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.Rev,
 		&i.DeletedAt,
 	)
@@ -711,9 +781,9 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 }
 
 const insertDocumentTag = `-- name: InsertDocumentTag :one
-INSERT INTO document_tags (id, document_id, tag_id, created_at, rev)
-VALUES (?, ?, ?, ?, 0)
-RETURNING id, document_id, tag_id, created_at, rev, deleted_at
+INSERT INTO document_tags (id, document_id, tag_id, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, 0)
+RETURNING id, document_id, tag_id, created_at, updated_at, rev, deleted_at
 `
 
 type InsertDocumentTagParams struct {
@@ -721,6 +791,7 @@ type InsertDocumentTagParams struct {
 	DocumentID string `json:"document_id"`
 	TagID      string `json:"tag_id"`
 	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 func (q *Queries) InsertDocumentTag(ctx context.Context, arg InsertDocumentTagParams) (DocumentTag, error) {
@@ -729,6 +800,7 @@ func (q *Queries) InsertDocumentTag(ctx context.Context, arg InsertDocumentTagPa
 		arg.DocumentID,
 		arg.TagID,
 		arg.CreatedAt,
+		arg.UpdatedAt,
 	)
 	var i DocumentTag
 	err := row.Scan(
@@ -736,6 +808,7 @@ func (q *Queries) InsertDocumentTag(ctx context.Context, arg InsertDocumentTagPa
 		&i.DocumentID,
 		&i.TagID,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.Rev,
 		&i.DeletedAt,
 	)
@@ -793,9 +866,9 @@ func (q *Queries) InsertHighlight(ctx context.Context, arg InsertHighlightParams
 }
 
 const insertHighlightTag = `-- name: InsertHighlightTag :one
-INSERT INTO highlight_tags (id, highlight_id, tag_id, created_at, rev)
-VALUES (?, ?, ?, ?, 0)
-RETURNING id, highlight_id, tag_id, created_at, rev, deleted_at
+INSERT INTO highlight_tags (id, highlight_id, tag_id, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, 0)
+RETURNING id, highlight_id, tag_id, created_at, updated_at, rev, deleted_at
 `
 
 type InsertHighlightTagParams struct {
@@ -803,6 +876,7 @@ type InsertHighlightTagParams struct {
 	HighlightID string `json:"highlight_id"`
 	TagID       string `json:"tag_id"`
 	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 func (q *Queries) InsertHighlightTag(ctx context.Context, arg InsertHighlightTagParams) (HighlightTag, error) {
@@ -811,6 +885,7 @@ func (q *Queries) InsertHighlightTag(ctx context.Context, arg InsertHighlightTag
 		arg.HighlightID,
 		arg.TagID,
 		arg.CreatedAt,
+		arg.UpdatedAt,
 	)
 	var i HighlightTag
 	err := row.Scan(
@@ -818,6 +893,7 @@ func (q *Queries) InsertHighlightTag(ctx context.Context, arg InsertHighlightTag
 		&i.HighlightID,
 		&i.TagID,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.Rev,
 		&i.DeletedAt,
 	)
@@ -1043,6 +1119,41 @@ func (q *Queries) InsertTag(ctx context.Context, arg InsertTagParams) (Tag, erro
 	return i, err
 }
 
+const listAnnotationTagsSince = `-- name: ListAnnotationTagsSince :many
+SELECT id, annotation_id, tag_id, created_at, updated_at, rev, deleted_at FROM annotation_tags WHERE updated_at > ? ORDER BY updated_at ASC
+`
+
+func (q *Queries) ListAnnotationTagsSince(ctx context.Context, updatedAt string) ([]AnnotationTag, error) {
+	rows, err := q.db.QueryContext(ctx, listAnnotationTagsSince, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AnnotationTag
+	for rows.Next() {
+		var i AnnotationTag
+		if err := rows.Scan(
+			&i.ID,
+			&i.AnnotationID,
+			&i.TagID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAnnotationsByDocument = `-- name: ListAnnotationsByDocument :many
 SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE document_id = ? AND deleted_at IS NULL ORDER BY pos_start ASC
 `
@@ -1130,6 +1241,48 @@ func (q *Queries) ListAnnotationsByTag(ctx context.Context, tagID string) ([]Ann
 	return items, nil
 }
 
+const listAnnotationsSince = `-- name: ListAnnotationsSince :many
+SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE updated_at > ? ORDER BY updated_at ASC
+`
+
+func (q *Queries) ListAnnotationsSince(ctx context.Context, updatedAt string) ([]Annotation, error) {
+	rows, err := q.db.QueryContext(ctx, listAnnotationsSince, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Annotation
+	for rows.Next() {
+		var i Annotation
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.HighlightID,
+			&i.Exact,
+			&i.Prefix,
+			&i.Suffix,
+			&i.PosStart,
+			&i.PosEnd,
+			&i.Color,
+			&i.Note,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDevices = `-- name: ListDevices :many
 SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at, last_seen_at FROM devices WHERE deleted_at IS NULL ORDER BY created_at
 `
@@ -1152,6 +1305,41 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 			&i.Rev,
 			&i.DeletedAt,
 			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDocumentTagsSince = `-- name: ListDocumentTagsSince :many
+SELECT id, document_id, tag_id, created_at, updated_at, rev, deleted_at FROM document_tags WHERE updated_at > ? ORDER BY updated_at ASC
+`
+
+func (q *Queries) ListDocumentTagsSince(ctx context.Context, updatedAt string) ([]DocumentTag, error) {
+	rows, err := q.db.QueryContext(ctx, listDocumentTagsSince, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DocumentTag
+	for rows.Next() {
+		var i DocumentTag
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.TagID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1216,6 +1404,49 @@ ORDER BY d.created_at DESC
 
 func (q *Queries) ListDocumentsByTag(ctx context.Context, tagID string) ([]Document, error) {
 	rows, err := q.db.QueryContext(ctx, listDocumentsByTag, tagID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.CanonicalUrl,
+			&i.Title,
+			&i.Markdown,
+			&i.FetchedAt,
+			&i.Excerpt,
+			&i.HeroImageUrl,
+			&i.Author,
+			&i.SourceFeedID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDocumentsSince = `-- name: ListDocumentsSince :many
+
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, source_feed_id, created_at, updated_at, rev, deleted_at FROM documents WHERE updated_at > ? ORDER BY updated_at ASC
+`
+
+// Differential sync queries (returns all rows changed after since, including tombstones)
+func (q *Queries) ListDocumentsSince(ctx context.Context, updatedAt string) ([]Document, error) {
+	rows, err := q.db.QueryContext(ctx, listDocumentsSince, updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1472,6 +1703,41 @@ func (q *Queries) ListFeeds(ctx context.Context) ([]Feed, error) {
 	return items, nil
 }
 
+const listHighlightTagsSince = `-- name: ListHighlightTagsSince :many
+SELECT id, highlight_id, tag_id, created_at, updated_at, rev, deleted_at FROM highlight_tags WHERE updated_at > ? ORDER BY updated_at ASC
+`
+
+func (q *Queries) ListHighlightTagsSince(ctx context.Context, updatedAt string) ([]HighlightTag, error) {
+	rows, err := q.db.QueryContext(ctx, listHighlightTagsSince, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []HighlightTag
+	for rows.Next() {
+		var i HighlightTag
+		if err := rows.Scan(
+			&i.ID,
+			&i.HighlightID,
+			&i.TagID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listHighlights = `-- name: ListHighlights :many
 SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at FROM highlights WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?
 `
@@ -1635,6 +1901,46 @@ func (q *Queries) ListHighlightsByTag(ctx context.Context, tagID string) ([]High
 	return items, nil
 }
 
+const listHighlightsSince = `-- name: ListHighlightsSince :many
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at FROM highlights WHERE updated_at > ? ORDER BY updated_at ASC
+`
+
+func (q *Queries) ListHighlightsSince(ctx context.Context, updatedAt string) ([]Highlight, error) {
+	rows, err := q.db.QueryContext(ctx, listHighlightsSince, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Highlight
+	for rows.Next() {
+		var i Highlight
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.PipelineRunID,
+			&i.Kind,
+			&i.Title,
+			&i.Body,
+			&i.Metadata,
+			&i.Pinned,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJobs = `-- name: ListJobs :many
 SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
 `
@@ -1682,6 +1988,53 @@ SELECT id, kind, payload, status, attempts, run_after, last_error, result, creat
 
 func (q *Queries) ListJobsByKind(ctx context.Context, kind string) ([]Job, error) {
 	rows, err := q.db.QueryContext(ctx, listJobsByKind, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.Result,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+			&i.ParentJobID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobsByKindPage = `-- name: ListJobsByKindPage :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+`
+
+type ListJobsByKindPageParams struct {
+	Kind   string `json:"kind"`
+	Limit  int64  `json:"limit"`
+	Offset int64  `json:"offset"`
+}
+
+func (q *Queries) ListJobsByKindPage(ctx context.Context, arg ListJobsByKindPageParams) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listJobsByKindPage, arg.Kind, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -1769,6 +2122,154 @@ type ListJobsByStatusAndKindParams struct {
 
 func (q *Queries) ListJobsByStatusAndKind(ctx context.Context, arg ListJobsByStatusAndKindParams) ([]Job, error) {
 	rows, err := q.db.QueryContext(ctx, listJobsByStatusAndKind, arg.Status, arg.Kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.Result,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+			&i.ParentJobID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobsByStatusAndKindPage = `-- name: ListJobsByStatusAndKindPage :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+`
+
+type ListJobsByStatusAndKindPageParams struct {
+	Status string `json:"status"`
+	Kind   string `json:"kind"`
+	Limit  int64  `json:"limit"`
+	Offset int64  `json:"offset"`
+}
+
+func (q *Queries) ListJobsByStatusAndKindPage(ctx context.Context, arg ListJobsByStatusAndKindPageParams) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listJobsByStatusAndKindPage,
+		arg.Status,
+		arg.Kind,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.Result,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+			&i.ParentJobID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobsByStatusPage = `-- name: ListJobsByStatusPage :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+`
+
+type ListJobsByStatusPageParams struct {
+	Status string `json:"status"`
+	Limit  int64  `json:"limit"`
+	Offset int64  `json:"offset"`
+}
+
+func (q *Queries) ListJobsByStatusPage(ctx context.Context, arg ListJobsByStatusPageParams) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listJobsByStatusPage, arg.Status, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.Result,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+			&i.ParentJobID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobsPage = `-- name: ListJobsPage :many
+
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+`
+
+type ListJobsPageParams struct {
+	Limit  int64 `json:"limit"`
+	Offset int64 `json:"offset"`
+}
+
+// Jobs paging (offset-based for the admin UI)
+func (q *Queries) ListJobsPage(ctx context.Context, arg ListJobsPageParams) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listJobsPage, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -2041,6 +2542,41 @@ ORDER BY t.name ASC
 
 func (q *Queries) ListTagsByHighlight(ctx context.Context, highlightID string) ([]Tag, error) {
 	rows, err := q.db.QueryContext(ctx, listTagsByHighlight, highlightID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Tag
+	for rows.Next() {
+		var i Tag
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Color,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTagsSince = `-- name: ListTagsSince :many
+SELECT id, name, color, created_at, updated_at, rev, deleted_at FROM tags WHERE updated_at > ? ORDER BY updated_at ASC
+`
+
+func (q *Queries) ListTagsSince(ctx context.Context, updatedAt string) ([]Tag, error) {
+	rows, err := q.db.QueryContext(ctx, listTagsSince, updatedAt)
 	if err != nil {
 		return nil, err
 	}

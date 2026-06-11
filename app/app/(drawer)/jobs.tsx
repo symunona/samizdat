@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
@@ -10,10 +10,11 @@ import {
   Text,
   View,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import { useUnistyles } from 'react-native-unistyles'
 import { v5 as uuidv5 } from 'uuid'
-import { fetchJobs, fetchDocuments, retryJob, clearCompletedJobs } from '../../src/api'
+import { fetchJobsPage, fetchDocuments, retryJob, clearCompletedJobs } from '../../src/api'
 import type { Job, Document } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
 import { useToast } from '../../src/ToastContext'
@@ -103,6 +104,8 @@ function groupStatus(rootId: string, byParent: Map<string, Job[]>): string {
   return 'done'
 }
 
+const PAGE_LIMIT = 30
+
 export default function JobsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
@@ -110,41 +113,60 @@ export default function JobsScreen() {
   const router = useRouter()
   const { toast } = useToast()
 
-  const [jobs, setJobs] = useState<Job[]>([])
   const [docMap, setDocMap] = useState<Map<string, Document>>(new Map())
-  const [loading, setLoading] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [retryingId, setRetryingId] = useState<string | null>(null)
   const [clearing, setClearing] = useState(false)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
-  const load = useCallback(async (isRefresh = false) => {
+  const enabled = status === 'connected' && !!activeUrl && !!token
+
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    isRefetching,
+  } = useInfiniteQuery({
+    queryKey: ['jobs', activeUrl, filter],
+    queryFn: async ({ pageParam }) => {
+      const opts = {
+        offset: pageParam as number,
+        limit: PAGE_LIMIT,
+        ...(filter !== 'all' ? { status: filter } : {}),
+      }
+      return fetchJobsPage(activeUrl!, token!, opts)
+    },
+    initialPageParam: 0,
+    getNextPageParam: (page) =>
+      page.has_more ? page.offset + page.items.length : undefined,
+    enabled,
+  })
+
+  // Load documents map for title lookups (not paged — lightweight)
+  const loadDocMap = useCallback(async () => {
     if (!activeUrl || !token) return
-    isRefresh ? setRefreshing(true) : setLoading(true)
-    setError(null)
     try {
-      const opts = filter === 'all' ? {} : { status: filter }
-      const [jobsData, docsData] = await Promise.all([
-        fetchJobs(activeUrl, token, opts),
-        fetchDocuments(activeUrl, token),
-      ])
-      setJobs(jobsData ?? [])
+      const docsData = await fetchDocuments(activeUrl, token)
       const m = new Map<string, Document>()
       for (const d of (docsData ?? [])) m.set(d.id, d)
       setDocMap(m)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load')
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
-    }
-  }, [activeUrl, token, filter])
+    } catch { /* non-critical */ }
+  }, [activeUrl, token])
 
-  useEffect(() => {
-    if (status === 'connected') load()
-  }, [status, load])
+  // Refetch on screen focus
+  useFocusEffect(
+    useCallback(() => {
+      if (status === 'connected') {
+        void refetch()
+        void loadDocMap()
+      }
+    }, [status, refetch, loadDocMap])
+  )
 
   async function handleClear() {
     if (!activeUrl || !token || clearing) return
@@ -157,7 +179,7 @@ export default function JobsScreen() {
     } finally {
       setClearing(false)
     }
-    await load()
+    await refetch()
   }
 
   async function handleRetry(job: Job) {
@@ -165,7 +187,7 @@ export default function JobsScreen() {
     setRetryingId(job.id)
     try {
       await retryJob(activeUrl, token, job.id)
-      await load()
+      await refetch()
     } catch { /* ignore */ }
     finally { setRetryingId(null) }
   }
@@ -179,15 +201,16 @@ export default function JobsScreen() {
     })
   }
 
-  const filtered = useMemo(() =>
-    filter === 'all' ? jobs : jobs.filter(j => j.status === filter),
-    [jobs, filter]
+  // Flatten all pages
+  const jobs = useMemo(
+    () => data?.pages.flatMap(p => p.items) ?? [],
+    [data]
   )
 
   // Build flat tree list; collapse subtrees for collapsed roots
   const treeItems = useMemo(() => {
     const byParent = new Map<string, Job[]>()
-    for (const j of filtered) {
+    for (const j of jobs) {
       if (j.parent_job_id) {
         const arr = byParent.get(j.parent_job_id) ?? []
         arr.push(j)
@@ -195,7 +218,7 @@ export default function JobsScreen() {
       }
     }
 
-    const tree = buildTree(filtered)
+    const tree = buildTree(jobs)
 
     // Filter out children of collapsed roots
     const collapsedRoots = new Set<string>()
@@ -213,7 +236,7 @@ export default function JobsScreen() {
         childCount: item.isRoot ? (byParent.get(item.job.id)?.length ?? 0) : 0,
         groupStatus: item.isRoot ? groupStatus(item.job.id, byParent) : '',
       }))
-  }, [filtered, collapsed])
+  }, [jobs, collapsed])
 
   function renderItem({ item }: { item: typeof treeItems[0] }) {
     const { job, depth, isRoot, childCount, groupStatus: gStatus } = item
@@ -345,6 +368,8 @@ export default function JobsScreen() {
     )
   }
 
+  const errorMessage = isError ? (error instanceof Error ? error.message : 'Failed to load') : null
+
   return (
     <SafeAreaView style={s.screen}>
       <View style={s.toolbar}>
@@ -373,12 +398,12 @@ export default function JobsScreen() {
         </Pressable>
       </View>
 
-      {loading && !refreshing
+      {isLoading && !isRefetching
         ? <View style={s.centered}><ActivityIndicator color={theme.colors.accent} size="large" /></View>
-        : error
+        : errorMessage
           ? <View style={s.centered}>
-              <Text style={s.errText}>{error}</Text>
-              <Pressable onPress={() => load()} style={s.reloadBtn}>
+              <Text style={s.errText}>{errorMessage}</Text>
+              <Pressable onPress={() => refetch()} style={s.reloadBtn}>
                 <Text style={s.reloadText}>Retry</Text>
               </Pressable>
             </View>
@@ -386,11 +411,28 @@ export default function JobsScreen() {
               data={treeItems}
               keyExtractor={item => item.job.id}
               renderItem={renderItem}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={theme.colors.accent} />}
+              refreshControl={
+                <RefreshControl
+                  refreshing={isRefetching}
+                  onRefresh={() => refetch()}
+                  tintColor={theme.colors.accent}
+                />
+              }
               contentContainerStyle={treeItems.length === 0 ? s.emptyContainer : s.list}
               ItemSeparatorComponent={() => <View style={s.sep} />}
               ListEmptyComponent={
                 <Text style={s.emptyText}>No {filter === 'all' ? '' : filter + ' '}jobs.</Text>
+              }
+              onEndReachedThreshold={0.3}
+              onEndReached={() => {
+                if (hasNextPage && !isFetchingNextPage) {
+                  void fetchNextPage()
+                }
+              }}
+              ListFooterComponent={
+                isFetchingNextPage
+                  ? <View style={s.footerSpinner}><ActivityIndicator color={theme.colors.accent} /></View>
+                  : null
               }
             />
       }
@@ -443,5 +485,6 @@ function buildStyles(t: Theme) {
     reloadText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
     emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
     emptyText: { color: t.colors.muted, fontSize: 15 },
+    footerSpinner: { paddingVertical: 16, alignItems: 'center' },
   })
 }

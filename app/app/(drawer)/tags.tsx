@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
@@ -11,9 +11,10 @@ import {
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { fetchTags } from '../../src/api'
-import type { Tag } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
+import { useTagsWithCounts, useSyncStatus } from '../../src/store/hooks'
+import type { TagWithCounts } from '../../src/store/hooks'
+import { forceSync } from '../../src/store/syncEngine'
 
 function tagDotColor(color: string): string {
   switch (color) {
@@ -34,35 +35,21 @@ export default function TagsScreen() {
   const router = useRouter()
   const { activeUrl, token, status } = useConnection()
 
-  const [tags, setTags] = useState<Tag[]>([])
-  const [loading, setLoading] = useState(false)
+  const tags = useTagsWithCounts()
+  const { status: syncStatus, error: syncError } = useSyncStatus()
   const [refreshing, setRefreshing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
-  const loadTags = useCallback(async (isRefresh = false) => {
+  async function handleRefresh() {
     if (!activeUrl || !token) return
-    if (isRefresh) setRefreshing(true)
-    else setLoading(true)
-    setError(null)
+    setRefreshing(true)
     try {
-      const data = await fetchTags(activeUrl, token)
-      setTags(data)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load tags')
+      await forceSync(activeUrl, token)
     } finally {
-      setLoading(false)
       setRefreshing(false)
     }
-  }, [activeUrl, token])
+  }
 
-  useEffect(() => {
-    if (status === 'connected') loadTags()
-    else if (status === 'disconnected') { setError('Not connected'); setLoading(false) }
-  }, [status, loadTags])
-
-  function renderItem({ item }: { item: Tag }) {
-    const docCount = typeof item.doc_count === 'number' ? item.doc_count : Number(item.doc_count ?? 0)
-    const annCount = typeof item.ann_count === 'number' ? item.ann_count : Number(item.ann_count ?? 0)
+  function renderItem({ item }: { item: TagWithCounts }) {
     return (
       <Pressable style={s.item} onPress={() => router.push(`/tags/${item.id}`)}>
         <View style={s.itemLeft}>
@@ -70,17 +57,17 @@ export default function TagsScreen() {
           <Text style={s.itemName}>{item.name}</Text>
         </View>
         <View style={s.chips}>
-          {docCount > 0 && (
+          {item.doc_count > 0 && (
             <View style={s.chip}>
-              <Text style={s.chipText}>{docCount} doc{docCount !== 1 ? 's' : ''}</Text>
+              <Text style={s.chipText}>{item.doc_count} doc{item.doc_count !== 1 ? 's' : ''}</Text>
             </View>
           )}
-          {annCount > 0 && (
+          {item.ann_count > 0 && (
             <View style={[s.chip, s.chipAnn]}>
-              <Text style={s.chipText}>{annCount} ann{annCount !== 1 ? 's' : ''}</Text>
+              <Text style={s.chipText}>{item.ann_count} ann{item.ann_count !== 1 ? 's' : ''}</Text>
             </View>
           )}
-          {docCount === 0 && annCount === 0 && (
+          {item.doc_count === 0 && item.ann_count === 0 && (
             <Text style={s.emptyChip}>empty</Text>
           )}
         </View>
@@ -88,7 +75,7 @@ export default function TagsScreen() {
     )
   }
 
-  if (loading && !refreshing) {
+  if (status === 'loading' || (syncStatus === 'syncing' && tags.length === 0)) {
     return (
       <SafeAreaView style={s.screen}>
         <View style={s.centered}><ActivityIndicator color={theme.colors.accent} size="large" /></View>
@@ -96,34 +83,38 @@ export default function TagsScreen() {
     )
   }
 
-  return (
-    <SafeAreaView style={s.screen}>
-      {error ? (
+  if (syncStatus === 'error' && tags.length === 0) {
+    return (
+      <SafeAreaView style={s.screen}>
         <View style={s.centered}>
-          <Text style={s.errorText}>{error}</Text>
-          <Pressable onPress={() => loadTags()} style={s.retryBtn}>
+          <Text style={s.errorText}>{syncError ?? 'Sync failed'}</Text>
+          <Pressable onPress={handleRefresh} style={s.retryBtn}>
             <Text style={s.retryText}>Retry</Text>
           </Pressable>
         </View>
-      ) : (
-        <FlatList
-          data={tags}
-          keyExtractor={item => item.id}
-          renderItem={renderItem}
-          contentContainerStyle={tags.length === 0 ? s.emptyContainer : s.listContent}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => loadTags(true)}
-              tintColor={theme.colors.accent}
-            />
-          }
-          ListEmptyComponent={
-            <Text style={s.emptyText}>No tags yet. Create tags from an annotation or document.</Text>
-          }
-          ItemSeparatorComponent={() => <View style={s.separator} />}
-        />
-      )}
+      </SafeAreaView>
+    )
+  }
+
+  return (
+    <SafeAreaView style={s.screen}>
+      <FlatList
+        data={tags}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        contentContainerStyle={tags.length === 0 ? s.emptyContainer : s.listContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={theme.colors.accent}
+          />
+        }
+        ListEmptyComponent={
+          <Text style={s.emptyText}>No tags yet. Create tags from an annotation or document.</Text>
+        }
+        ItemSeparatorComponent={() => <View style={s.separator} />}
+      />
     </SafeAreaView>
   )
 }

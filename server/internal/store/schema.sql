@@ -161,20 +161,26 @@ CREATE TABLE IF NOT EXISTS document_tags (
   document_id TEXT NOT NULL REFERENCES documents(id),
   tag_id      TEXT NOT NULL REFERENCES tags(id),
   created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
   rev         INTEGER NOT NULL DEFAULT 0,
   deleted_at  TEXT,
   UNIQUE(document_id, tag_id)
 );
+
+CREATE INDEX IF NOT EXISTS document_tags_updated_at ON document_tags(updated_at);
 
 CREATE TABLE IF NOT EXISTS annotation_tags (
   id            TEXT PRIMARY KEY,
   annotation_id TEXT NOT NULL REFERENCES annotations(id),
   tag_id        TEXT NOT NULL REFERENCES tags(id),
   created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
   rev           INTEGER NOT NULL DEFAULT 0,
   deleted_at    TEXT,
   UNIQUE(annotation_id, tag_id)
 );
+
+CREATE INDEX IF NOT EXISTS annotation_tags_updated_at ON annotation_tags(updated_at);
 
 CREATE TABLE IF NOT EXISTS pipelines (
     id          TEXT    PRIMARY KEY,
@@ -228,7 +234,16 @@ CREATE TABLE IF NOT EXISTS highlight_tags (
   highlight_id TEXT NOT NULL REFERENCES highlights(id),
   tag_id       TEXT NOT NULL REFERENCES tags(id),
   created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
   rev          INTEGER NOT NULL DEFAULT 0,
   deleted_at   TEXT,
   UNIQUE(highlight_id, tag_id)
 );
+
+CREATE INDEX IF NOT EXISTS highlight_tags_updated_at ON highlight_tags(updated_at);
+
+-- sync indexes: all syncable tables need updated_at indexed for fast delta queries
+CREATE INDEX IF NOT EXISTS documents_updated_at    ON documents(updated_at);
+CREATE INDEX IF NOT EXISTS highlights_updated_at   ON highlights(updated_at);
+CREATE INDEX IF NOT EXISTS annotations_updated_at  ON annotations(updated_at);
+CREATE INDEX IF NOT EXISTS tags_updated_at         ON tags(updated_at);

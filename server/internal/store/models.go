@@ -26,6 +26,7 @@ type AnnotationTag struct {
 	AnnotationID string  `json:"annotation_id"`
 	TagID        string  `json:"tag_id"`
 	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
 	Rev          int64   `json:"rev"`
 	DeletedAt    *string `json:"deleted_at"`
 }
@@ -62,6 +63,7 @@ type DocumentTag struct {
 	DocumentID string  `json:"document_id"`
 	TagID      string  `json:"tag_id"`
 	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
 	Rev        int64   `json:"rev"`
 	DeletedAt  *string `json:"deleted_at"`
 }
@@ -111,6 +113,7 @@ type HighlightTag struct {
 	HighlightID string  `json:"highlight_id"`
 	TagID       string  `json:"tag_id"`
 	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
 	Rev         int64   `json:"rev"`
 	DeletedAt   *string `json:"deleted_at"`
 }
