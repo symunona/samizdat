@@ -148,7 +148,7 @@ export default function TagDetailScreen() {
             >
               <Text style={s.annExact} numberOfLines={3}>{exactSnippet}</Text>
               {ann.note ? (
-                <Text style={s.annNote} numberOfLines={1}>{ann.note}</Text>
+                <Text style={s.annNote} numberOfLines={1}>✏ {ann.note}</Text>
               ) : null}
             </Pressable>
           )

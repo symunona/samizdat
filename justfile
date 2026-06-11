@@ -96,7 +96,7 @@ _check-no-dev:
 dev: _check-no-service build-server build-cli build-app-web
     @rm -rf /tmp/playwright_chromiumdev_profile-* /tmp/playwright-artifacts-* 2>/dev/null || true
     nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist > /tmp/samizdat-{{_dev_port}}.log 2>&1 &
-    @sleep 1 && echo "server started on :{{_dev_port}}, log: /tmp/samizdat-{{_dev_port}}.log"
+    @PORT={{_dev_port}}; for i in $(seq 1 20); do ss -tlnp | grep -q ":$PORT" && break; sleep 0.5; done && echo "server started on :{{_dev_port}}, log: /tmp/samizdat-{{_dev_port}}.log"
     @./cli/bin/sam {{_config_flag}} connect
 
 [group('dev')]
