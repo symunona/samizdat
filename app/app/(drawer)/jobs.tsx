@@ -145,6 +145,11 @@ export default function JobsScreen() {
     getNextPageParam: (page) =>
       page.has_more ? page.offset + page.items.length : undefined,
     enabled,
+    refetchInterval: (query) => {
+      const allJobs = query.state.data?.pages.flatMap(p => p.items) ?? []
+      const hasActive = allJobs.some(j => j.status === 'queued' || j.status === 'running')
+      return hasActive ? 3000 : false
+    },
   })
 
   // Load documents map for title lookups (not paged — lightweight)
