@@ -92,6 +92,12 @@ func runConnect(_ *cobra.Command, _ []string) error {
 	}
 	fmt.Println()
 
+	// Connect string: paste into app's connect field.
+	fmt.Println()
+	fmt.Println("  Connect string (paste into app):")
+	fmt.Printf("  %s\n", connectStr)
+	fmt.Println()
+
 	// Terminal QR (ASCII art)
 	qrterminal.GenerateWithConfig(string(payload), qrterminal.Config{
 		Level:     qrterminal.L,
@@ -100,11 +106,6 @@ func runConnect(_ *cobra.Command, _ []string) error {
 		WhiteChar: qrterminal.WHITE,
 		QuietZone: 1,
 	})
-
-	// Connect string: paste into app's connect field.
-	fmt.Println()
-	fmt.Println("  Connect string (paste into app):")
-	fmt.Printf("  %s\n", connectStr)
 	fmt.Println()
 	return nil
 }
