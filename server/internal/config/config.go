@@ -31,6 +31,12 @@ type LLMSection struct {
 }
 
 func DefaultPath() (string, error) {
+	if _, err := os.Stat("config.toml"); err == nil {
+		abs, err := filepath.Abs("config.toml")
+		if err == nil {
+			return abs, nil
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)

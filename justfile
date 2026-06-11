@@ -3,6 +3,10 @@
 
 set shell := ["bash", "-uc"]
 
+# Port + config path read from repo-local config.toml if present, else global ~/.samizdat/config.toml
+_dev_port := `if [ -f config.toml ]; then grep -E '^\s*port\s*=' config.toml | grep -oE '[0-9]+' | head -1; else echo 8765; fi`
+_config_flag := if path_exists("config.toml") == "true" { "--config " + justfile_directory() + "/config.toml" } else { "" }
+
 # List available recipes
 default:
     @just --list
@@ -58,28 +62,30 @@ _check-go:
 _check-just:
     @command -v just >/dev/null 2>&1 || (echo "error: just not installed — https://just.systems/"; exit 1)
 
-# Checks port 8765: stops our service automatically; kills unknown process with notice.
+# Checks configured port: stops our service automatically; kills unknown process with notice.
 _check-no-service:
-    @if ss -tlnp 2>/dev/null | grep -q ':8765'; then \
+    @PORT={{_dev_port}}; \
+    if ss -tlnp 2>/dev/null | grep -q ":$PORT"; then \
         if systemctl is-active --quiet samizdat 2>/dev/null; then \
             echo "samizdat service running — stopping for dev mode..."; \
             sudo systemctl stop samizdat && echo "Service stopped."; \
         else \
-            PID=$(ss -tlnp | grep ':8765' | grep -oP 'pid=\K[0-9]+' | head -1); \
+            PID=$(ss -tlnp | grep ":$PORT" | grep -oP 'pid=\K[0-9]+' | head -1); \
             if [ -n "$PID" ]; then \
-                echo "Port 8765 in use by PID $PID ($(ps -p $PID -o comm= 2>/dev/null || echo unknown)) — killing..."; \
+                echo "Port $PORT in use by PID $PID ($(ps -p $PID -o comm= 2>/dev/null || echo unknown)) — killing..."; \
                 kill $PID && sleep 0.5 && echo "Process killed."; \
             else \
-                echo "Port 8765 in use — could not identify PID, trying fuser..."; \
-                fuser -k 8765/tcp && sleep 0.5 && echo "Port freed."; \
+                echo "Port $PORT in use — could not identify PID, trying fuser..."; \
+                fuser -k ${PORT}/tcp && sleep 0.5 && echo "Port freed."; \
             fi; \
         fi; \
     fi
 
-# Fails if port 8765 is occupied by a non-service process (i.e. a dev server is running).
+# Fails if configured port is occupied by a non-service process (i.e. a dev server is running).
 _check-no-dev:
-    @if ss -tlnp 2>/dev/null | grep -q ':8765' && ! systemctl is-active --quiet samizdat 2>/dev/null; then \
-        echo "ERROR: dev server already running on :8765 — stop it before installing the service"; \
+    @PORT={{_dev_port}}; \
+    if ss -tlnp 2>/dev/null | grep -q ":$PORT" && ! systemctl is-active --quiet samizdat 2>/dev/null; then \
+        echo "ERROR: dev server already running on :$PORT — stop it before installing the service"; \
         exit 1; \
     fi
 
@@ -89,8 +95,8 @@ _check-no-dev:
 [doc('Build app + server, restart background server (dev mode, HTTP)')]
 dev: _check-no-service build-server build-app-web
     @rm -rf /tmp/playwright_chromiumdev_profile-* /tmp/playwright-artifacts-* 2>/dev/null || true
-    cd server && nohup ./bin/samizdat serve --webdir ../app/dist > /tmp/samizdat.log 2>&1 &
-    @sleep 1 && echo "server started, log: /tmp/samizdat.log"
+    nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist > /tmp/samizdat-{{_dev_port}}.log 2>&1 &
+    @sleep 1 && echo "server started on :{{_dev_port}}, log: /tmp/samizdat-{{_dev_port}}.log"
 
 [group('dev')]
 [doc('Build + run the sam CLI with args (e.g. just sam connect)')]
@@ -255,7 +261,7 @@ debug-session:
     set -euo pipefail
     mkdir -p "{{justfile_directory()}}/tmp/debug-session"
     STATE="{{justfile_directory()}}/tmp/debug-session/state.json"
-    URL="${URL:-http://localhost:8765}"
+    URL="${URL:-http://localhost:{{_dev_port}}}"
     export AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:---no-sandbox}"
     agent-browser close --all 2>/dev/null || true
     if [ -f "$STATE" ]; then
@@ -289,7 +295,7 @@ browser-session name="default":
         echo "Loading session: $SESSION"
         cp "$SESSION" "$PROFILE/session-restore.json"
     fi
-    URL="${URL:-http://localhost:8765}"
+    URL="${URL:-http://localhost:{{_dev_port}}}"
     echo "Opening $URL with profile '${{name}}'"
     google-chrome \
         --user-data-dir="$PROFILE" \
@@ -309,7 +315,7 @@ screenshot name="app":
     #!/usr/bin/env bash
     mkdir -p "{{justfile_directory()}}/tmp/screenshots"
     OUT="{{justfile_directory()}}/tmp/screenshots/{{name}}-$(date +%Y%m%d-%H%M%S).png"
-    URL="${URL:-http://localhost:8765}"
+    URL="${URL:-http://localhost:{{_dev_port}}}"
     google-chrome --headless --screenshot="$OUT" --window-size=1280,900 "$URL" 2>/dev/null || \
     chromium-browser --headless --screenshot="$OUT" --window-size=1280,900 "$URL" 2>/dev/null
     echo "Screenshot saved: $OUT"
