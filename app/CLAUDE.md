@@ -63,6 +63,9 @@ Digest: assembled citations, LLM draft, export.
 
 ## UI guidelines
 Always look for existing components before making a new one.
+
+**Icon conventions** — use these consistently everywhere:
+- Notes / annotations: `✏` (pencil) — applies to annotation badges, note previews, annotate action buttons
 Interactions: when user clicks on something that does an API call - indicate loading, disable button. On error, toast, indicate error on button. Make this a component, reuse wherever.
 
 ## Connection state — NEVER bypass ConnectionProvider

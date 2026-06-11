@@ -145,7 +145,7 @@ export default function DocumentsScreen() {
                 <Text style={s.hlBadge}>◆ {item.highlight_count} highlight{item.highlight_count > 1 ? 's' : ''}</Text>
               ) : null}
               {item.annotation_count && item.annotation_count > 0 ? (
-                <Text style={s.annBadge}>● {item.annotation_count} annotation{item.annotation_count > 1 ? 's' : ''}</Text>
+                <Text style={s.annBadge}>✏ {item.annotation_count} annotation{item.annotation_count > 1 ? 's' : ''}</Text>
               ) : null}
             </View>
           ) : null}
