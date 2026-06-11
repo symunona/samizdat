@@ -32,11 +32,32 @@ const PAGES = [
 let serverProc = null
 let browser = null
 let failed = false
+let cleaningUp = false
 
 function fail(msg) {
   console.error(`\n  FAIL: ${msg}`)
   failed = true
 }
+
+async function cleanup() {
+  if (cleaningUp) return
+  cleaningUp = true
+  if (browser) { try { await browser.close() } catch {} browser = null }
+  if (serverProc) {
+    try { process.kill(-serverProc.pid, 'SIGTERM') } catch {}
+    await sleep(600)
+    try { process.kill(-serverProc.pid, 'SIGKILL') } catch {}
+    serverProc = null
+  }
+}
+
+// Synchronous last-resort kill on exit (catches normal exit + uncaught throws)
+process.on('exit', () => {
+  if (serverProc) { try { process.kill(-serverProc.pid, 'SIGKILL') } catch {} }
+})
+
+process.on('SIGINT', async () => { await cleanup(); process.exit(130) })
+process.on('SIGTERM', async () => { await cleanup(); process.exit(143) })
 
 async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms))
@@ -58,6 +79,7 @@ async function startServer() {
   console.log('  starting test server on port', TEST_PORT, '...')
   serverProc = spawn(SERVER_BIN, ['--config', TEST_CONFIG], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true, // own process group — lets cleanup kill the whole tree (samizdat + playwright-go + chromium)
   })
   serverProc.stdout.on('data', d => process.stdout.write(`  [server] ${d}`))
   serverProc.stderr.on('data', d => process.stdout.write(`  [server] ${d}`))
@@ -193,11 +215,7 @@ async function main() {
     console.error(e.message)
     process.exitCode = 1
   } finally {
-    if (browser) await browser.close().catch(() => {})
-    if (serverProc) {
-      serverProc.kill('SIGTERM')
-      await sleep(500)
-    }
+    await cleanup()
   }
 }
 

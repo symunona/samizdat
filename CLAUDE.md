@@ -97,3 +97,20 @@ What it does: builds the server binary, starts it on port **8766** with a clean 
 - **Temporary debug data**, API response dumps, one-off scripts
 
 To run the web app in a browser with a persisted session, use `just browser-session <name>` — it launches headless Chrome loading `tmp/sessions/<name>.json` if it exists, and saves the session back on exit. Create `tmp/` with `mkdir -p tmp/sessions`.
+
+## agent-browser cleanup (mandatory)
+
+After **every** agent-browser task, verify no zombie processes remain:
+
+```bash
+pgrep -a -f "agent-browser|chrome-linux64/chrome" | grep -v grep
+```
+
+If any linger, kill them:
+
+```bash
+pkill -f "agent-browser-linux-x64" 2>/dev/null || true
+pkill -f "chrome-linux64/chrome" 2>/dev/null || true
+```
+
+**Never leave an agent-browser session open after a task is done.** Chrome + renderer processes each consume 50–200 MB and do not self-terminate when the parent task ends.

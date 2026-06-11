@@ -339,6 +339,43 @@ browser-session name="default":
     xdg-open "$URL"
 
 [group('debug')]
+[doc('Kill all samizdat dev servers, agent-browser sessions, and leftover headless Chrome/Playwright processes')]
+kill:
+    #!/usr/bin/env bash
+    killed=0
+
+    _kill() {
+        local label="$1"; shift
+        local pids
+        pids=$(pgrep -f "$1" 2>/dev/null) || true
+        if [ -n "$pids" ]; then
+            echo "  killing $label (PIDs: $pids)"
+            kill -TERM $pids 2>/dev/null || true
+            sleep 0.4
+            kill -KILL $pids 2>/dev/null || true
+            killed=$((killed + 1))
+        fi
+    }
+
+    echo "=== just kill: cleaning up samizdat dev processes ==="
+    _kill "samizdat dev server"   "bin/samizdat serve"
+    _kill "e2e test server"       "bin/samizdat.*config-test"
+    _kill "agent-browser"         "agent-browser-linux-x64"
+    _kill "playwright-go driver"  "ms-playwright-go.*run-driver"
+    _kill "chrome-headless-shell" "chrome-headless-shell-linux64/chrome-headless-shell"
+    _kill "chromium (playwright)" "ms-playwright/chromium.*chrome-linux64/chrome[^-]"
+    _kill "e2e smoke node"        "node.*smoke\\.js"
+
+    # Wipe playwright tmp dirs left by unclean shutdowns
+    rm -rf /tmp/playwright_chromiumdev_profile-* /tmp/playwright-artifacts-* /tmp/samizdat-test 2>/dev/null || true
+
+    if [ $killed -eq 0 ]; then
+        echo "  nothing to kill"
+    else
+        echo "  done"
+    fi
+
+[group('debug')]
 [doc('Take a screenshot of the running app (saves to tmp/screenshots/)')]
 screenshot name="app":
     #!/usr/bin/env bash
