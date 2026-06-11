@@ -109,10 +109,6 @@ export default function ConnectScreen() {
     const [url, setUrl] = useState(defaultServerUrl);
     const [code, setCode] = useState("");
     const [status, setStatus] = useState<Status>({ kind: "idle" });
-    const [connectString, setConnectString] = useState("");
-    const [connectStringHint, setConnectStringHint] = useState<string | null>(
-        null,
-    );
 
     // Auto-connect from URL params emitted by `sam connect`
     const urlParamHandled = useRef(false);
@@ -151,17 +147,15 @@ export default function ConnectScreen() {
             return;
         }
 
-        // ?c=<base64> — full connect string (QR scan / paste flow)
+        // ?c=<base64> — full connect string (QR scan flow)
         const c = params.get("c");
         if (!c) return;
         urlParamHandled.current = true;
         const parsed = parseConnectString(c);
         if (!parsed.ok) return;
         const primaryUrl = parsed.urls[0] ?? defaultServerUrl();
-        setConnectString(c);
         setCode(parsed.code);
-        setUrl(parsed.urls.join("\n"));
-        setConnectStringHint("Connecting…");
+        setUrl(parsed.urls[0] ?? defaultServerUrl());
         setStatus({ kind: "connecting" });
         pair(primaryUrl, parsed.code, deviceName())
             .then(async (paired) => {
@@ -177,52 +171,12 @@ export default function ConnectScreen() {
                 router.replace("/");
             })
             .catch((e: unknown) => {
-                const msg =
-                    e instanceof Error ? e.message : "Connection failed";
-                setConnectStringHint(msg);
-                setStatus({ kind: "error", message: msg });
+                setStatus({
+                    kind: "error",
+                    message: e instanceof Error ? e.message : "Connection failed",
+                });
             });
     }, [reload, router]);
-
-    async function handleConnectString(val: string) {
-        setConnectString(val);
-        if (!val.trim()) {
-            setConnectStringHint(null);
-            return;
-        }
-        const result = parseConnectString(val);
-        if (result.ok) {
-            const primaryUrl = result.urls[0] ?? url;
-            setCode(result.code);
-            setUrl(result.urls.join("\n"));
-            setConnectStringHint("Connecting…");
-            setStatus({ kind: "connecting" });
-            try {
-                const paired = await pair(
-                    primaryUrl,
-                    result.code,
-                    deviceName(),
-                );
-                const serverUrls = paired.server_urls?.length
-                    ? paired.server_urls
-                    : result.urls;
-                await saveConnection({
-                    token: paired.device_token,
-                    deviceId: paired.device_id,
-                    serverUrls,
-                });
-                await reload();
-                router.replace("/");
-            } catch (e: unknown) {
-                const msg =
-                    e instanceof Error ? e.message : "Connection failed";
-                setConnectStringHint(msg);
-                setStatus({ kind: "error", message: msg });
-            }
-        } else {
-            setConnectStringHint(result.reason || null);
-        }
-    }
 
     async function connect() {
         setStatus({ kind: "connecting" });
@@ -279,42 +233,17 @@ export default function ConnectScreen() {
                 <Text style={s.brand}>samizdat</Text>
                 <Text style={s.sub}>Connect to your server</Text>
 
-                <Text style={s.label}>Connect string</Text>
-                <TextInput
-                    style={s.input}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    autoComplete="off"
-                    placeholder="Paste base64 string from `sam connect`"
-                    placeholderTextColor={theme.colors.placeholder}
-                    value={connectString}
-                    onChangeText={handleConnectString}
-                />
-                {connectStringHint !== null && (
-                    <Text
-                        style={
-                            connectString &&
-                            parseConnectString(connectString).ok
-                                ? s.hintOk
-                                : s.hintWarn
-                        }
-                    >
-                        {connectStringHint}
-                    </Text>
-                )}
+                <Text style={s.code}>sam connect</Text>
+                <Text style={s.hint}>Click the link it prints to connect automatically.</Text>
 
                 <View style={s.divider} />
 
                 <Text style={s.label}>Server URL</Text>
                 <TextInput
-                    style={[s.input, s.inputMultiline]}
+                    style={s.input}
                     autoCapitalize="none"
                     autoCorrect={false}
-                    multiline
-                    numberOfLines={3}
-                    placeholder={
-                        "https://samizdat.example.com\nhttps://100.x.x.x:8765"
-                    }
+                    placeholder="https://samizdat.example.com"
                     placeholderTextColor={theme.colors.placeholder}
                     value={url}
                     onChangeText={setUrl}
@@ -346,18 +275,14 @@ export default function ConnectScreen() {
                     )}
                 </Pressable>
 
-                <Pressable style={s.ghost} disabled>
-                    <Text style={s.ghostText}>Scan QR — coming soon</Text>
-                </Pressable>
-                <Text style={s.code}>sam connect</Text>
+                {Platform.OS !== "web" && (
+                    <Pressable style={s.ghost} disabled>
+                        <Text style={s.ghostText}>Scan QR code</Text>
+                    </Pressable>
+                )}
 
                 {status.kind === "error" && (
                     <Text style={s.errorText}>{status.message}</Text>
-                )}
-                {status.kind === "idle" && (
-                    <Text style={s.hint}>
-                        Run the above on your server to get a pairing code.
-                    </Text>
                 )}
 
                 <Pressable style={s.ghost} onPress={disconnect}>
@@ -376,8 +301,14 @@ function buildStyles(t: Theme) {
             flex: 1,
             backgroundColor: t.colors.background,
             justifyContent: "center",
+            alignItems: "center",
         },
-        card: { paddingHorizontal: t.spacing.xl, gap: t.spacing.sm },
+        card: {
+            paddingHorizontal: t.spacing.xl,
+            gap: t.spacing.sm,
+            width: "100%",
+            maxWidth: 440,
+        },
         logo: { width: 80, height: 80, marginBottom: 8, alignSelf: "center" },
         brand: {
             color: t.colors.text,
@@ -387,7 +318,7 @@ function buildStyles(t: Theme) {
             marginBottom: 4,
             textAlign: "center",
         },
-        sub: { color: t.colors.muted, fontSize: 15, marginBottom: 20 },
+        sub: { color: t.colors.muted, fontSize: 15, marginBottom: 8, textAlign: "center" },
         label: {
             color: t.colors.muted,
             fontSize: 13,
@@ -404,10 +335,6 @@ function buildStyles(t: Theme) {
             paddingVertical: 12,
             fontSize: 16,
         },
-        inputMultiline: {
-            height: 80,
-            textAlignVertical: "top",
-        },
         button: {
             backgroundColor: t.colors.accent,
             borderRadius: t.radius.md,
@@ -423,9 +350,7 @@ function buildStyles(t: Theme) {
         },
         ghost: { alignItems: "center", paddingVertical: 12 },
         ghostText: { color: t.colors.placeholder, fontSize: 14 },
-        hint: { color: t.colors.muted, fontSize: 13, marginTop: 8 },
-        hintOk: { color: t.colors.online, fontSize: 12, marginTop: 4 },
-        hintWarn: { color: t.colors.error, fontSize: 12, marginTop: 4 },
+        hint: { color: t.colors.muted, fontSize: 13, textAlign: "center" },
         divider: {
             height: 1,
             backgroundColor: t.colors.border,
@@ -433,10 +358,10 @@ function buildStyles(t: Theme) {
         },
         code: {
             color: t.colors.accent,
-            fontSize: 13,
+            fontSize: 16,
             fontFamily: "monospace",
+            fontWeight: "700",
             textAlign: "center",
-            marginTop: 4,
         },
         errorText: {
             color: t.colors.error,

@@ -198,6 +198,28 @@ check-native-log:
       exit 1
     fi
 
+# ── Landing ───────────────────────────────────────────────────────────────────
+
+[group('deploy')]
+[doc('Copy landing/index.html → gh-pages branch root and push (updates GitHub Pages)')]
+update-landing:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CURRENT=$(git rev-parse --abbrev-ref HEAD)
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "ERROR: uncommitted changes — stash or commit first"
+        exit 1
+    fi
+    git checkout gh-pages
+    git checkout main -- landing/index.html
+    cp landing/index.html index.html
+    git checkout -- landing/index.html
+    git add index.html
+    git commit -m "feat(landing): update index.html from main"
+    git push origin gh-pages
+    git checkout "$CURRENT"
+    echo "Done — gh-pages updated and pushed."
+
 # ── Deploy ────────────────────────────────────────────────────────────────────
 
 [group('deploy')]
