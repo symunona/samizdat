@@ -278,6 +278,20 @@ CREATE TABLE IF NOT EXISTS highlight_tags (
     deleted_at   TEXT,
     UNIQUE(highlight_id, tag_id)
 );
+
+CREATE TABLE IF NOT EXISTS llm_usages (
+    id              TEXT    PRIMARY KEY,
+    job_id          TEXT,
+    pipeline_run_id TEXT,
+    provider        TEXT    NOT NULL DEFAULT '',
+    model           TEXT    NOT NULL,
+    input_tokens    INTEGER NOT NULL DEFAULT 0,
+    output_tokens   INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS llm_usages_job_id     ON llm_usages(job_id);
+CREATE INDEX IF NOT EXISTS llm_usages_created_at ON llm_usages(created_at);
 `
 
 func migrate(db *sql.DB) error {
@@ -321,6 +335,10 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS document_tags_updated_at   ON document_tags(updated_at)`,
 		`CREATE INDEX IF NOT EXISTS annotation_tags_updated_at ON annotation_tags(updated_at)`,
 		`CREATE INDEX IF NOT EXISTS highlight_tags_updated_at  ON highlight_tags(updated_at)`,
+		// LLM usage audit log
+		`CREATE TABLE IF NOT EXISTS llm_usages (id TEXT PRIMARY KEY, job_id TEXT, pipeline_run_id TEXT, provider TEXT NOT NULL DEFAULT '', model TEXT NOT NULL, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS llm_usages_job_id     ON llm_usages(job_id)`,
+		`CREATE INDEX IF NOT EXISTS llm_usages_created_at ON llm_usages(created_at)`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {

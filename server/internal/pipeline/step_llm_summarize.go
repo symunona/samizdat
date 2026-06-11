@@ -20,9 +20,9 @@ func init() {
 type llmSummarizeConfig struct {
 	Model    string `json:"model"`
 	Prompt   string `json:"prompt"`
-	Provider string `json:"provider"`   // optional: override global client provider
-	BaseURL  string `json:"base_url"`   // optional: override base URL (for openai_compat)
-	APIKey   string `json:"api_key"`    // optional: override API key
+	Provider string `json:"provider"` // optional: override global client provider
+	BaseURL  string `json:"base_url"` // optional: override base URL (for openai_compat)
+	APIKey   string `json:"api_key"`  // optional: override API key
 }
 
 func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, globalClient llm.Client) (StepResult, error) {
@@ -60,12 +60,24 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	}
 
 	userMsg := c.Prompt + "\n\n# " + doc.Title + "\n\n" + content
-	reply, err := client.Complete(ctx, c.Model, []llm.Message{
+	reply, usage, err := client.Complete(ctx, c.Model, []llm.Message{
 		{Role: "user", Content: userMsg},
 	})
 	if err != nil {
 		return StepResult{}, fmt.Errorf("llm_summarize: llm call: %w", err)
 	}
+
+	// Record LLM usage regardless of whether we use the reply.
+	_ = q.InsertLLMUsage(ctx, store.InsertLLMUsageParams{
+		ID:            uuid.NewString(),
+		JobID:         ParentJobIDFromCtx(ctx),
+		PipelineRunID: &run.ID,
+		Provider:      usage.Provider,
+		Model:         c.Model,
+		InputTokens:   int64(usage.InputTokens),
+		OutputTokens:  int64(usage.OutputTokens),
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	})
 
 	reply = strings.TrimSpace(reply)
 	if reply == "" {

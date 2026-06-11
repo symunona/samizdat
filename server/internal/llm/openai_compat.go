@@ -20,7 +20,7 @@ type openAICompatClient struct {
 	apiKey  string
 }
 
-func (c *openAICompatClient) Complete(ctx context.Context, model string, messages []Message) (string, error) {
+func (c *openAICompatClient) Complete(ctx context.Context, model string, messages []Message) (string, Usage, error) {
 	type oaiMsg struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
@@ -39,7 +39,7 @@ func (c *openAICompatClient) Complete(ctx context.Context, model string, message
 	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -48,12 +48,12 @@ func (c *openAICompatClient) Complete(ctx context.Context, model string, message
 
 	resp, err := llmHTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("openai_compat request: %w", err)
+		return "", Usage{}, fmt.Errorf("openai_compat request: %w", err)
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("openai_compat %d: %s", resp.StatusCode, string(data))
+		return "", Usage{}, fmt.Errorf("openai_compat %d: %s", resp.StatusCode, string(data))
 	}
 
 	var out struct {
@@ -62,12 +62,21 @@ func (c *openAICompatClient) Complete(ctx context.Context, model string, message
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
-		return "", fmt.Errorf("openai_compat parse: %w", err)
+		return "", Usage{}, fmt.Errorf("openai_compat parse: %w", err)
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("openai_compat: no choices in response")
+		return "", Usage{}, fmt.Errorf("openai_compat: no choices in response")
 	}
-	return out.Choices[0].Message.Content, nil
+	usage := Usage{
+		Provider:     "openai_compat",
+		InputTokens:  out.Usage.PromptTokens,
+		OutputTokens: out.Usage.CompletionTokens,
+	}
+	return out.Choices[0].Message.Content, usage, nil
 }

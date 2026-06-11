@@ -247,3 +247,18 @@ CREATE INDEX IF NOT EXISTS documents_updated_at    ON documents(updated_at);
 CREATE INDEX IF NOT EXISTS highlights_updated_at   ON highlights(updated_at);
 CREATE INDEX IF NOT EXISTS annotations_updated_at  ON annotations(updated_at);
 CREATE INDEX IF NOT EXISTS tags_updated_at         ON tags(updated_at);
+
+-- append-only LLM call audit log; NEVER empty or reset this table
+CREATE TABLE IF NOT EXISTS llm_usages (
+    id              TEXT    PRIMARY KEY,
+    job_id          TEXT,
+    pipeline_run_id TEXT,
+    provider        TEXT    NOT NULL DEFAULT '',
+    model           TEXT    NOT NULL,
+    input_tokens    INTEGER NOT NULL DEFAULT 0,
+    output_tokens   INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS llm_usages_job_id     ON llm_usages(job_id);
+CREATE INDEX IF NOT EXISTS llm_usages_created_at ON llm_usages(created_at);

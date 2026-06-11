@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -56,6 +57,11 @@ func (h *jobsHandler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": job.ID})
 }
 
+type jobWithCost struct {
+	store.Job
+	LLMCostUSD float64 `json:"llm_cost_usd"`
+}
+
 // GET /api/v1/jobs/:id — get single job by ID.
 func (h *jobsHandler) get(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -68,7 +74,14 @@ func (h *jobsHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, job)
+	usageRows, _ := h.q.GetLLMUsageByJob(r.Context(), &id)
+	var costUSD float64
+	for _, row := range usageRows {
+		in := toInt64(row.InputTokens)
+		out := toInt64(row.OutputTokens)
+		costUSD += llm.EstimateCost(row.Model, int(in), int(out))
+	}
+	writeJSON(w, http.StatusOK, jobWithCost{Job: job, LLMCostUSD: costUSD})
 }
 
 type jobsPageResponse struct {

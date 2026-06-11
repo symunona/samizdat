@@ -114,12 +114,24 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 	}
 
 	userMsg := aiNewsletterSystemPrompt + "\n\n# " + doc.Title + "\n\n" + content
-	reply, err := client.Complete(ctx, c.Model, []llm.Message{
+	reply, usage, err := client.Complete(ctx, c.Model, []llm.Message{
 		{Role: "user", Content: userMsg},
 	})
 	if err != nil {
 		return StepResult{}, fmt.Errorf("llm_ai_newsletter: llm call: %w", err)
 	}
+
+	// Record LLM usage.
+	_ = q.InsertLLMUsage(ctx, store.InsertLLMUsageParams{
+		ID:            uuid.NewString(),
+		JobID:         ParentJobIDFromCtx(ctx),
+		PipelineRunID: &run.ID,
+		Provider:      usage.Provider,
+		Model:         c.Model,
+		InputTokens:   int64(usage.InputTokens),
+		OutputTokens:  int64(usage.OutputTokens),
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	})
 
 	reply = strings.TrimSpace(reply)
 	// Strip markdown fences if model wrapped response anyway.

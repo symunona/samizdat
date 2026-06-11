@@ -14,10 +14,17 @@ type Message struct {
 	Content string
 }
 
+// Usage holds token counts returned by the provider.
+type Usage struct {
+	Provider     string
+	InputTokens  int
+	OutputTokens int
+}
+
 // Client is a provider-agnostic LLM interface.
 type Client interface {
-	// Complete sends messages and returns the assistant reply.
-	Complete(ctx context.Context, model string, messages []Message) (string, error)
+	// Complete sends messages and returns the assistant reply plus token usage.
+	Complete(ctx context.Context, model string, messages []Message) (string, Usage, error)
 }
 
 // New constructs a Client from LLM config. Returns nil (no LLM) if provider is empty.

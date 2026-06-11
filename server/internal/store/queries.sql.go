@@ -436,6 +436,108 @@ func (q *Queries) GetJob(ctx context.Context, id string) (Job, error) {
 	return i, err
 }
 
+const getLLMUsageByJob = `-- name: GetLLMUsageByJob :many
+SELECT provider, model,
+       COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+       COALESCE(SUM(output_tokens), 0) AS output_tokens
+FROM llm_usages
+WHERE job_id = ?
+GROUP BY provider, model
+`
+
+type GetLLMUsageByJobRow struct {
+	Provider     string      `json:"provider"`
+	Model        string      `json:"model"`
+	InputTokens  interface{} `json:"input_tokens"`
+	OutputTokens interface{} `json:"output_tokens"`
+}
+
+func (q *Queries) GetLLMUsageByJob(ctx context.Context, jobID *string) ([]GetLLMUsageByJobRow, error) {
+	rows, err := q.db.QueryContext(ctx, getLLMUsageByJob, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetLLMUsageByJobRow
+	for rows.Next() {
+		var i GetLLMUsageByJobRow
+		if err := rows.Scan(
+			&i.Provider,
+			&i.Model,
+			&i.InputTokens,
+			&i.OutputTokens,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getLLMUsageTotals = `-- name: GetLLMUsageTotals :one
+SELECT
+    COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
+    COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+    COUNT(*)                         AS total_calls
+FROM llm_usages
+`
+
+type GetLLMUsageTotalsRow struct {
+	TotalInputTokens  interface{} `json:"total_input_tokens"`
+	TotalOutputTokens interface{} `json:"total_output_tokens"`
+	TotalCalls        int64       `json:"total_calls"`
+}
+
+func (q *Queries) GetLLMUsageTotals(ctx context.Context) (GetLLMUsageTotalsRow, error) {
+	row := q.db.QueryRowContext(ctx, getLLMUsageTotals)
+	var i GetLLMUsageTotalsRow
+	err := row.Scan(&i.TotalInputTokens, &i.TotalOutputTokens, &i.TotalCalls)
+	return i, err
+}
+
+const getLLMUsageTotalsByModel = `-- name: GetLLMUsageTotalsByModel :many
+SELECT model,
+       COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+       COALESCE(SUM(output_tokens), 0) AS output_tokens
+FROM llm_usages
+GROUP BY model
+`
+
+type GetLLMUsageTotalsByModelRow struct {
+	Model        string      `json:"model"`
+	InputTokens  interface{} `json:"input_tokens"`
+	OutputTokens interface{} `json:"output_tokens"`
+}
+
+func (q *Queries) GetLLMUsageTotalsByModel(ctx context.Context) ([]GetLLMUsageTotalsByModelRow, error) {
+	rows, err := q.db.QueryContext(ctx, getLLMUsageTotalsByModel)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetLLMUsageTotalsByModelRow
+	for rows.Next() {
+		var i GetLLMUsageTotalsByModelRow
+		if err := rows.Scan(&i.Model, &i.InputTokens, &i.OutputTokens); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getMediaAssetByID = `-- name: GetMediaAssetByID :one
 SELECT id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev, deleted_at FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
@@ -954,6 +1056,38 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, erro
 		&i.ParentJobID,
 	)
 	return i, err
+}
+
+const insertLLMUsage = `-- name: InsertLLMUsage :exec
+
+INSERT INTO llm_usages (id, job_id, pipeline_run_id, provider, model, input_tokens, output_tokens, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertLLMUsageParams struct {
+	ID            string  `json:"id"`
+	JobID         *string `json:"job_id"`
+	PipelineRunID *string `json:"pipeline_run_id"`
+	Provider      string  `json:"provider"`
+	Model         string  `json:"model"`
+	InputTokens   int64   `json:"input_tokens"`
+	OutputTokens  int64   `json:"output_tokens"`
+	CreatedAt     string  `json:"created_at"`
+}
+
+// LLM usage audit log
+func (q *Queries) InsertLLMUsage(ctx context.Context, arg InsertLLMUsageParams) error {
+	_, err := q.db.ExecContext(ctx, insertLLMUsage,
+		arg.ID,
+		arg.JobID,
+		arg.PipelineRunID,
+		arg.Provider,
+		arg.Model,
+		arg.InputTokens,
+		arg.OutputTokens,
+		arg.CreatedAt,
+	)
+	return err
 }
 
 const insertPairCode = `-- name: InsertPairCode :exec

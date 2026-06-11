@@ -300,6 +300,7 @@ export type Job = {
   created_at: string
   updated_at: string
   parent_job_id: string | null
+  llm_cost_usd?: number
 }
 
 export async function fetchJobs(
@@ -728,8 +729,16 @@ export async function removeHighlightTag(serverUrl: string, token: string, hlId:
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
+export type LLMUsageSummary = {
+  total_calls: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+}
+
 export type AppSettings = {
   polling_enabled: boolean
+  llm_usage: LLMUsageSummary
 }
 
 export async function fetchSettings(serverUrl: string, token: string): Promise<AppSettings> {

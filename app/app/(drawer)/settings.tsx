@@ -415,6 +415,32 @@ export default function SettingsScreen() {
         </Pressable>
       </View>
 
+      {/* LLM Usage */}
+      {settings?.llm_usage && (
+        <View style={s.card}>
+          <Text style={s.cardTitle}>LLM API Usage</Text>
+          <Text style={s.cardSubtitle}>Cumulative — never reset</Text>
+          <View style={s.infoRow}>
+            <Text style={s.infoLabel}>Total calls</Text>
+            <Text style={s.infoValue}>{settings.llm_usage.total_calls.toLocaleString()}</Text>
+          </View>
+          <View style={s.infoRow}>
+            <Text style={s.infoLabel}>Input tokens</Text>
+            <Text style={s.infoValue}>{settings.llm_usage.total_input_tokens.toLocaleString()}</Text>
+          </View>
+          <View style={s.infoRow}>
+            <Text style={s.infoLabel}>Output tokens</Text>
+            <Text style={s.infoValue}>{settings.llm_usage.total_output_tokens.toLocaleString()}</Text>
+          </View>
+          <View style={s.infoRow}>
+            <Text style={s.infoLabel}>Est. cost</Text>
+            <Text style={[s.infoValue, s.llmCostValue]}>
+              ${settings.llm_usage.total_cost_usd.toFixed(4)}
+            </Text>
+          </View>
+        </View>
+      )}
+
       {/* Local data */}
       <View style={s.card}>
         <Text style={s.cardTitle}>Local Data</Text>
@@ -539,5 +565,6 @@ function buildStyles(t: Theme) {
     },
     deviceNameIndicator: { marginLeft: 4 },
     deviceNameSaved: { color: t.colors.online, fontSize: 14, fontWeight: '700', marginLeft: 4 },
+    llmCostValue: { color: t.colors.accent, fontWeight: '700' },
   })
 }

@@ -134,6 +134,17 @@ type Job struct {
 	ParentJobID *string `json:"parent_job_id"`
 }
 
+type LlmUsage struct {
+	ID            string  `json:"id"`
+	JobID         *string `json:"job_id"`
+	PipelineRunID *string `json:"pipeline_run_id"`
+	Provider      string  `json:"provider"`
+	Model         string  `json:"model"`
+	InputTokens   int64   `json:"input_tokens"`
+	OutputTokens  int64   `json:"output_tokens"`
+	CreatedAt     string  `json:"created_at"`
+}
+
 type MediaAsset struct {
 	ID          string  `json:"id"`
 	DocumentID  string  `json:"document_id"`

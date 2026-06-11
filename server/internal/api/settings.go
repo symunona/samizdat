@@ -4,19 +4,66 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
 type settingsHandler struct{ q *store.Queries }
 
+type llmUsageSummary struct {
+	TotalCalls        int64   `json:"total_calls"`
+	TotalInputTokens  int64   `json:"total_input_tokens"`
+	TotalOutputTokens int64   `json:"total_output_tokens"`
+	TotalCostUSD      float64 `json:"total_cost_usd"`
+}
+
 type settingsPayload struct {
-	PollingEnabled bool `json:"polling_enabled"`
+	PollingEnabled bool            `json:"polling_enabled"`
+	LLMUsage       llmUsageSummary `json:"llm_usage"`
 }
 
 func (h *settingsHandler) get(w http.ResponseWriter, r *http.Request) {
 	val, err := h.q.GetSetting(r.Context(), "polling_enabled")
 	enabled := err != nil || val != "false"
-	writeJSON(w, http.StatusOK, settingsPayload{PollingEnabled: enabled})
+
+	usage := h.llmUsage(r)
+	writeJSON(w, http.StatusOK, settingsPayload{PollingEnabled: enabled, LLMUsage: usage})
+}
+
+func (h *settingsHandler) llmUsage(r *http.Request) llmUsageSummary {
+	totals, err := h.q.GetLLMUsageTotals(r.Context())
+	if err != nil {
+		return llmUsageSummary{}
+	}
+	rows, err := h.q.GetLLMUsageTotalsByModel(r.Context())
+	if err != nil {
+		return llmUsageSummary{}
+	}
+	var totalCost float64
+	for _, row := range rows {
+		in := toInt64(row.InputTokens)
+		out := toInt64(row.OutputTokens)
+		totalCost += llm.EstimateCost(row.Model, int(in), int(out))
+	}
+	return llmUsageSummary{
+		TotalCalls:        totals.TotalCalls,
+		TotalInputTokens:  toInt64(totals.TotalInputTokens),
+		TotalOutputTokens: toInt64(totals.TotalOutputTokens),
+		TotalCostUSD:      totalCost,
+	}
+}
+
+// toInt64 coerces SQLite's dynamic COALESCE/SUM result (interface{}) to int64.
+func toInt64(v interface{}) int64 {
+	switch x := v.(type) {
+	case int64:
+		return x
+	case int:
+		return int64(x)
+	case float64:
+		return int64(x)
+	}
+	return 0
 }
 
 func (h *settingsHandler) put(w http.ResponseWriter, r *http.Request) {
@@ -36,5 +83,6 @@ func (h *settingsHandler) put(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	writeJSON(w, http.StatusOK, settingsPayload{PollingEnabled: body.PollingEnabled})
+	usage := h.llmUsage(r)
+	writeJSON(w, http.StatusOK, settingsPayload{PollingEnabled: body.PollingEnabled, LLMUsage: usage})
 }
