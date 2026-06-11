@@ -79,12 +79,13 @@ func handleExtractLinks(ctx context.Context, q *store.Queries, run store.Pipelin
 			payload, _ := json.Marshal(map[string]string{"url": link.url})
 			jobID := uuid.NewString()
 			_, err = q.InsertJob(ctx, store.InsertJobParams{
-				ID:        jobID,
-				Kind:      "scrape_url",
-				Payload:   string(payload),
-				RunAfter:  now,
-				CreatedAt: now,
-				UpdatedAt: now,
+				ID:          jobID,
+				Kind:        "scrape_url",
+				Payload:     string(payload),
+				RunAfter:    now,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+				ParentJobID: ParentJobIDFromCtx(ctx),
 			})
 			if err != nil {
 				continue

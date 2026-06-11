@@ -109,7 +109,7 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 	logPipeline.Printf("run %s pipeline %s (%s) step %d dispatching",
 		run.ID[:8], pl.ID[:8], pl.Name, run.StepIndex)
 
-	result, err := pipeline.Dispatch(ctx, q, run, pl, llmClient)
+	result, err := pipeline.Dispatch(pipeline.WithParentJobID(ctx, job.ID), q, run, pl, llmClient)
 	if err != nil {
 		return "", err
 	}

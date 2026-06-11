@@ -12,6 +12,26 @@ import (
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
+type contextKey int
+
+const parentJobIDKey contextKey = iota
+
+// WithParentJobID injects the driving job's ID into ctx so step handlers can
+// set it as ParentJobID on any child jobs they enqueue.
+func WithParentJobID(ctx context.Context, jobID string) context.Context {
+	return context.WithValue(ctx, parentJobIDKey, jobID)
+}
+
+// ParentJobIDFromCtx returns the parent job ID stored by WithParentJobID, or
+// nil if not set.
+func ParentJobIDFromCtx(ctx context.Context) *string {
+	v, _ := ctx.Value(parentJobIDKey).(string)
+	if v == "" {
+		return nil
+	}
+	return &v
+}
+
 // StepConfig is a single step from the pipeline.steps JSON array.
 type StepConfig struct {
 	Kind   string          `json:"kind"`

@@ -137,12 +137,13 @@ func initItems(ctx context.Context, q *store.Queries, run store.PipelineRun) (ex
 		payload, _ := json.Marshal(map[string]string{"url": url})
 		jobID := uuid.NewString()
 		if _, err := q.InsertJob(ctx, store.InsertJobParams{
-			ID:        jobID,
-			Kind:      "scrape_url",
-			Payload:   string(payload),
-			RunAfter:  now,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:          jobID,
+			Kind:        "scrape_url",
+			Payload:     string(payload),
+			RunAfter:    now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			ParentJobID: ParentJobIDFromCtx(ctx),
 		}); err != nil {
 			// Enqueue failed — treat as no-link.
 			tracked = append(tracked, trackedItem{Phase: itemPhaseNoLink, HighlightID: hlID})
