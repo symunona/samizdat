@@ -26,6 +26,7 @@ const PAGES = [
   ['/tags', 'tags'],
   ['/jobs', 'jobs'],
   ['/subscriptions', 'subscriptions'],
+  ['/pipelines', 'pipelines'],
 ]
 
 let serverProc = null

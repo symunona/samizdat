@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
@@ -10,9 +10,9 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { Link } from 'expo-router'
+import { Link, useLocalSearchParams } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { submitScrapeJob, deleteDocument } from '../../src/api'
+import { submitScrapeJob, deleteDocument, fetchPipelineDocuments } from '../../src/api'
 import type { Document } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
 import { useDocuments, useSyncStatus } from '../../src/store/hooks'
@@ -34,20 +34,39 @@ export default function DocumentsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const { status, error: connError, activeUrl, token, probe } = useConnection()
+  const { feed_id: feedIdParam, pipeline_id: pipelineIdParam } = useLocalSearchParams<{ feed_id?: string; pipeline_id?: string }>()
 
   const allDocuments = useDocuments()
   const { status: syncStatus } = useSyncStatus()
   const [refreshing, setRefreshing] = useState(false)
+  const [pipelineDocs, setPipelineDocs] = useState<Document[] | null>(null)
+  const [pipelineDocsLoading, setPipelineDocsLoading] = useState(false)
 
   // ids being deleted (optimistically hidden from list while waiting for server)
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set())
   const [pendingDeletes, setPendingDeletes] = useState<Record<string, { doc: Document; countdown: number }>>({})
   const pendingTimers = useRef<Record<string, ReturnType<typeof setInterval>>>({})
 
-  const documents = useMemo(
-    () => allDocuments.filter((d) => !pendingDeleteIds.has(d.id)),
-    [allDocuments, pendingDeleteIds],
-  )
+  // Load pipeline-filtered docs from server when pipeline_id param is set
+  useEffect(() => {
+    if (!pipelineIdParam || !activeUrl || !token) return
+    setPipelineDocsLoading(true)
+    fetchPipelineDocuments(activeUrl, token, pipelineIdParam)
+      .then(data => setPipelineDocs(data))
+      .catch(() => setPipelineDocs([]))
+      .finally(() => setPipelineDocsLoading(false))
+  }, [pipelineIdParam, activeUrl, token])
+
+  const documents = useMemo(() => {
+    if (pipelineIdParam) {
+      return (pipelineDocs ?? []).filter(d => !pendingDeleteIds.has(d.id))
+    }
+    let docs = allDocuments.filter((d) => !pendingDeleteIds.has(d.id))
+    if (feedIdParam) {
+      docs = docs.filter(d => d.source_feed_id === feedIdParam)
+    }
+    return docs
+  }, [allDocuments, pendingDeleteIds, feedIdParam, pipelineIdParam, pipelineDocs])
 
   const startDelete = useCallback(
     (doc: Document) => {
@@ -243,8 +262,21 @@ export default function DocumentsScreen() {
         )
       })}
 
+      {/* Filter indicator */}
+      {(feedIdParam || pipelineIdParam) && (
+        <View style={s.filterBar}>
+          <Text style={s.filterBarText}>
+            {pipelineIdParam ? `pipeline: ${pipelineIdParam.slice(0, 8)}…` : `feed: ${feedIdParam?.slice(0, 8)}…`}
+          </Text>
+        </View>
+      )}
+
       {/* Document list */}
-      {syncStatus === 'syncing' && documents.length === 0 ? (
+      {(pipelineIdParam && pipelineDocsLoading) ? (
+        <View style={s.centered}>
+          <ActivityIndicator color={theme.colors.accent} size="large" />
+        </View>
+      ) : syncStatus === 'syncing' && documents.length === 0 ? (
         <View style={s.centered}>
           <ActivityIndicator color={theme.colors.accent} size="large" />
         </View>
@@ -308,6 +340,14 @@ function buildStyles(t: Theme) {
     addButtonDisabled: { opacity: 0.6 },
     addButtonPressed: { opacity: 0.85 },
     addButtonText: { color: t.colors.background, fontSize: 14, fontWeight: '700' },
+    filterBar: {
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.xs,
+      backgroundColor: t.colors.accent + '22',
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.accent + '55',
+    },
+    filterBarText: { color: t.colors.accent, fontSize: 12, fontFamily: 'monospace', fontWeight: '600' },
     feedbackRow: {
       paddingHorizontal: t.spacing.md,
       paddingVertical: t.spacing.xs,

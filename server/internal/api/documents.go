@@ -18,6 +18,20 @@ type documentListItem struct {
 }
 
 func (h *documentsHandler) list(w http.ResponseWriter, r *http.Request) {
+	feedID := r.URL.Query().Get("feed_id")
+	if feedID != "" {
+		docs, err := h.q.ListDocumentsByFeed(r.Context(), &feedID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if docs == nil {
+			docs = []store.Document{}
+		}
+		writeJSON(w, http.StatusOK, docs)
+		return
+	}
+
 	rows, err := h.q.ListDocumentsWithAnnotationCount(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")

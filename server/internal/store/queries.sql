@@ -470,3 +470,27 @@ SELECT COUNT(*) FROM jobs WHERE kind = ? AND deleted_at IS NULL;
 
 -- name: CountJobsByStatusAndKind :one
 SELECT COUNT(*) FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL;
+
+-- name: ListJobsByPipelineId :many
+SELECT * FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
+
+-- name: CountJobsByPipelineId :one
+SELECT COUNT(*) FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND deleted_at IS NULL;
+
+-- name: ListDocumentsByPipeline :many
+SELECT DISTINCT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
+       d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,
+       d.rev, d.deleted_at
+FROM documents d
+JOIN pipeline_runs pr ON pr.document_id = d.id
+WHERE pr.pipeline_id = ? AND pr.deleted_at IS NULL AND d.deleted_at IS NULL
+ORDER BY pr.updated_at DESC
+LIMIT 200;
+
+-- name: ListDocumentsByFeed :many
+SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
+       d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,
+       d.rev, d.deleted_at
+FROM documents d
+WHERE d.source_feed_id = ? AND d.deleted_at IS NULL
+ORDER BY d.created_at DESC;

@@ -10,6 +10,7 @@ const SCREENS = [
   { name: 'documents', label: 'Documents', href: '/documents' as const },
   { name: 'tags', label: 'Tags', href: '/tags' as const },
   { name: 'subscriptions', label: 'Subscriptions', href: '/subscriptions' as const },
+  { name: 'pipelines', label: 'Pipelines', href: '/pipelines' as const },
   { name: 'jobs', label: 'Jobs', href: '/jobs' as const },
   { name: 'settings', label: 'Settings', href: '/settings' as const },
 ]
@@ -109,6 +110,7 @@ export default function DrawerLayout() {
       <Drawer.Screen name="documents" options={{ title: 'Documents' }} />
       <Drawer.Screen name="tags" options={{ title: 'Tags' }} />
       <Drawer.Screen name="subscriptions" options={{ title: 'Subscriptions' }} />
+      <Drawer.Screen name="pipelines" options={{ title: 'Pipelines' }} />
       <Drawer.Screen name="jobs" options={{ title: 'Jobs' }} />
       <Drawer.Screen name="settings" options={{ title: 'Settings' }} />
       <Drawer.Screen

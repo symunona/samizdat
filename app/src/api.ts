@@ -585,6 +585,38 @@ export async function fetchPipelines(serverUrl: string, token: string): Promise<
   return json<Pipeline[]>(res, '/api/v1/pipelines')
 }
 
+export async function patchPipeline(
+  serverUrl: string, token: string, id: string,
+  data: { enabled?: boolean; name?: string; trigger?: string; filter?: string; steps?: string },
+): Promise<Pipeline> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/pipelines/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return json<Pipeline>(res, `/api/v1/pipelines/${id} PUT`)
+}
+
+export async function fetchPipelineDocuments(serverUrl: string, token: string, pipelineId: string): Promise<Document[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/pipelines/${encodeURIComponent(pipelineId)}/documents`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Document[]>(res, `/api/v1/pipelines/${pipelineId}/documents`)
+}
+
+export async function fetchPipelineJobs(
+  serverUrl: string, token: string, pipelineId: string,
+  opts: { limit?: number; offset?: number } = {},
+): Promise<JobsPage> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? 20))
+  params.set('offset', String(opts.offset ?? 0))
+  const res = await fetch(`${base(serverUrl)}/api/v1/pipelines/${encodeURIComponent(pipelineId)}/jobs?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<JobsPage>(res, `/api/v1/pipelines/${pipelineId}/jobs`)
+}
+
 export async function createPipeline(
   serverUrl: string, token: string,
   data: { name: string; filter: string; steps: string; trigger?: string },

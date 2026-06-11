@@ -339,18 +339,38 @@ export default function JobsScreen() {
         )}
 
         {/* run_pipeline */}
-        {job.kind === 'run_pipeline' && (
-          <Text style={s.pipelineText} numberOfLines={2}>
-            {pipelineName || 'pipeline'}{documentTitle ? ` → ${documentTitle}` : ''}
-          </Text>
-        )}
+        {job.kind === 'run_pipeline' && (() => {
+          const rpDocId = p.document_id ?? ''
+          const rpDoc = rpDocId ? docMap.get(rpDocId) : undefined
+          const rpTitle = rpDoc?.title ?? documentTitle
+          return (
+            <Pressable
+              disabled={!rpDocId}
+              onPress={() => rpDocId ? router.push(`/(drawer)/document/${rpDocId}`) : undefined}
+            >
+              <Text style={[s.pipelineText, !!rpDocId && s.pipelineLinkText]} numberOfLines={2}>
+                {pipelineName || 'pipeline'}{rpTitle ? ` → ${rpTitle}` : ''}{rpDocId ? ' →' : ''}
+              </Text>
+            </Pressable>
+          )
+        })()}
 
         {/* run_pipeline_step */}
-        {job.kind === 'run_pipeline_step' && (
-          <Text style={s.pipelineText} numberOfLines={2}>
-            {pipelineName || 'pipeline'}{stepIndex >= 0 ? ` step ${stepIndex + 1}` : ''}{documentTitle ? ` → ${documentTitle}` : ''}
-          </Text>
-        )}
+        {job.kind === 'run_pipeline_step' && (() => {
+          const rpsDocId = p.document_id ?? ''
+          const rpsDoc = rpsDocId ? docMap.get(rpsDocId) : undefined
+          const rpsTitle = rpsDoc?.title ?? documentTitle
+          return (
+            <Pressable
+              disabled={!rpsDocId}
+              onPress={() => rpsDocId ? router.push(`/(drawer)/document/${rpsDocId}`) : undefined}
+            >
+              <Text style={[s.pipelineText, !!rpsDocId && s.pipelineLinkText]} numberOfLines={2}>
+                {pipelineName || 'pipeline'}{stepIndex >= 0 ? ` step ${stepIndex + 1}` : ''}{rpsTitle ? ` → ${rpsTitle}` : ''}{rpsDocId ? ' →' : ''}
+              </Text>
+            </Pressable>
+          )
+        })()}
 
         {/* fetch_assets */}
         {job.kind === 'fetch_assets' && !!documentTitle && (
@@ -485,6 +505,7 @@ function buildStyles(t: Theme) {
     mutedText: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace', marginBottom: 4 },
     sourceText: { color: t.colors.placeholder, fontSize: 10, fontFamily: 'monospace', marginBottom: 4 },
     pipelineText: { color: t.colors.text, fontSize: 12, fontFamily: 'monospace', marginBottom: 4 },
+    pipelineLinkText: { color: t.colors.accent, fontWeight: '600', textDecorationLine: 'underline' },
     resultRow: { flexDirection: 'row', gap: t.spacing.sm, marginBottom: 4, alignItems: 'center' },
     resultText: { color: t.colors.muted, fontSize: 12 },
     nothingNew: { color: t.colors.placeholder, fontSize: 11, fontStyle: 'italic' },

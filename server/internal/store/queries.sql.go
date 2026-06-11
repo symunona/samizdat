@@ -99,6 +99,17 @@ func (q *Queries) CountJobsByKind(ctx context.Context, kind string) (int64, erro
 	return count, err
 }
 
+const countJobsByPipelineId = `-- name: CountJobsByPipelineId :one
+SELECT COUNT(*) FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND deleted_at IS NULL
+`
+
+func (q *Queries) CountJobsByPipelineId(ctx context.Context, payload string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countJobsByPipelineId, payload)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countJobsByStatus = `-- name: CountJobsByStatus :one
 SELECT COUNT(*) FROM jobs WHERE status = ? AND deleted_at IS NULL
 `
@@ -1395,6 +1406,100 @@ func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
 	return items, nil
 }
 
+const listDocumentsByFeed = `-- name: ListDocumentsByFeed :many
+SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
+       d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,
+       d.rev, d.deleted_at
+FROM documents d
+WHERE d.source_feed_id = ? AND d.deleted_at IS NULL
+ORDER BY d.created_at DESC
+`
+
+func (q *Queries) ListDocumentsByFeed(ctx context.Context, sourceFeedID *string) ([]Document, error) {
+	rows, err := q.db.QueryContext(ctx, listDocumentsByFeed, sourceFeedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.CanonicalUrl,
+			&i.Title,
+			&i.Markdown,
+			&i.FetchedAt,
+			&i.Excerpt,
+			&i.HeroImageUrl,
+			&i.Author,
+			&i.SourceFeedID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDocumentsByPipeline = `-- name: ListDocumentsByPipeline :many
+SELECT DISTINCT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
+       d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,
+       d.rev, d.deleted_at
+FROM documents d
+JOIN pipeline_runs pr ON pr.document_id = d.id
+WHERE pr.pipeline_id = ? AND pr.deleted_at IS NULL AND d.deleted_at IS NULL
+ORDER BY pr.updated_at DESC
+LIMIT 200
+`
+
+func (q *Queries) ListDocumentsByPipeline(ctx context.Context, pipelineID string) ([]Document, error) {
+	rows, err := q.db.QueryContext(ctx, listDocumentsByPipeline, pipelineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.CanonicalUrl,
+			&i.Title,
+			&i.Markdown,
+			&i.FetchedAt,
+			&i.Excerpt,
+			&i.HeroImageUrl,
+			&i.Author,
+			&i.SourceFeedID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDocumentsByTag = `-- name: ListDocumentsByTag :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt, d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at, d.rev, d.deleted_at FROM documents d
 JOIN document_tags dt ON dt.document_id = d.id
@@ -2035,6 +2140,53 @@ type ListJobsByKindPageParams struct {
 
 func (q *Queries) ListJobsByKindPage(ctx context.Context, arg ListJobsByKindPageParams) ([]Job, error) {
 	rows, err := q.db.QueryContext(ctx, listJobsByKindPage, arg.Kind, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.Result,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+			&i.ParentJobID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobsByPipelineId = `-- name: ListJobsByPipelineId :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+`
+
+type ListJobsByPipelineIdParams struct {
+	Payload string `json:"payload"`
+	Limit   int64  `json:"limit"`
+	Offset  int64  `json:"offset"`
+}
+
+func (q *Queries) ListJobsByPipelineId(ctx context.Context, arg ListJobsByPipelineIdParams) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listJobsByPipelineId, arg.Payload, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}

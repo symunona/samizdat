@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -154,6 +155,62 @@ func (h *pipelinesHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *pipelinesHandler) listDocuments(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := h.q.GetPipeline(r.Context(), id); err != nil {
+		writeErr(w, http.StatusNotFound, "pipeline not found")
+		return
+	}
+	docs, err := h.q.ListDocumentsByPipeline(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list documents failed")
+		return
+	}
+	if docs == nil {
+		docs = []store.Document{}
+	}
+	writeJSON(w, http.StatusOK, docs)
+}
+
+func (h *pipelinesHandler) listJobs(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := h.q.GetPipeline(r.Context(), id); err != nil {
+		writeErr(w, http.StatusNotFound, "pipeline not found")
+		return
+	}
+	q := r.URL.Query()
+	limitStr := q.Get("limit")
+	offsetStr := q.Get("offset")
+	limit := int64(50)
+	offset := int64(0)
+	if v, err := strconv.ParseInt(limitStr, 10, 64); err == nil && v > 0 && v <= 200 {
+		limit = v
+	}
+	if v, err := strconv.ParseInt(offsetStr, 10, 64); err == nil && v >= 0 {
+		offset = v
+	}
+	jobs, err := h.q.ListJobsByPipelineId(r.Context(), store.ListJobsByPipelineIdParams{
+		Payload: id,
+		Limit:   limit,
+		Offset:  offset,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list jobs failed")
+		return
+	}
+	if jobs == nil {
+		jobs = []store.Job{}
+	}
+	total, _ := h.q.CountJobsByPipelineId(r.Context(), id)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"items":    jobs,
+		"total":    total,
+		"has_more": offset+int64(len(jobs)) < total,
+		"offset":   offset,
+		"limit":    limit,
+	})
 }
 
 type runPipelineRequest struct {
