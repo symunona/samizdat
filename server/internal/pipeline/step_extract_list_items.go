@@ -40,7 +40,14 @@ type extractListItemsState struct {
 	Items []trackedItem `json:"items"`
 }
 
-func handleExtractListItems(ctx context.Context, q *store.Queries, run store.PipelineRun, _ json.RawMessage, _ llm.Client) (StepResult, error) {
+type extractListItemsConfig struct {
+	// SkipNewScrapes: only enrich items whose URLs are already scraped; never enqueue new scrape jobs.
+	SkipNewScrapes bool `json:"skip_new_scrapes"`
+}
+
+func handleExtractListItems(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, _ llm.Client) (StepResult, error) {
+	var c extractListItemsConfig
+	_ = ParseStepConfig(cfg, &c)
 	var state extractListItemsState
 	if run.State != "" && run.State != "{}" {
 		if err := json.Unmarshal([]byte(run.State), &state); err != nil {
@@ -51,7 +58,7 @@ func handleExtractListItems(ctx context.Context, q *store.Queries, run store.Pip
 	// First invocation: parse document and create initial items.
 	if len(state.Items) == 0 {
 		var err error
-		state, err = initItems(ctx, q, run)
+		state, err = initItems(ctx, q, run, c.SkipNewScrapes)
 		if err != nil {
 			return StepResult{}, err
 		}
@@ -88,7 +95,7 @@ func handleExtractListItems(ctx context.Context, q *store.Queries, run store.Pip
 }
 
 // initItems parses the document and creates one highlight + trackedItem per list entry.
-func initItems(ctx context.Context, q *store.Queries, run store.PipelineRun) (extractListItemsState, error) {
+func initItems(ctx context.Context, q *store.Queries, run store.PipelineRun, skipNewScrapes bool) (extractListItemsState, error) {
 	doc, err := q.GetDocumentByID(ctx, run.DocumentID)
 	if err != nil {
 		return extractListItemsState{}, fmt.Errorf("extract_list_items: get document: %w", err)
@@ -130,6 +137,11 @@ func initItems(ctx context.Context, q *store.Queries, run store.PipelineRun) (ex
 				URL:         url,
 				ScrapeJobID: "existing:" + existing.ID,
 			})
+			continue
+		}
+
+		if skipNewScrapes {
+			tracked = append(tracked, trackedItem{Phase: itemPhaseNoLink, HighlightID: hlID})
 			continue
 		}
 

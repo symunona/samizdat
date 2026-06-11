@@ -17,11 +17,16 @@ func init() {
 	Register("extract_links", handleExtractLinks)
 }
 
+type extractLinksConfig struct {
+	// SkipNewScrapes: only process already-scraped links; never enqueue new scrape jobs.
+	SkipNewScrapes bool `json:"skip_new_scrapes"`
+}
+
 // extractLinksState is stored in pipeline_runs.state while this step is in progress.
 type extractLinksState struct {
-	Phase   string             `json:"phase"` // "" | "waiting" | "done"
+	Phase   string              `json:"phase"` // "" | "waiting" | "done"
 	Pending []pendingLinkScrape `json:"pending,omitempty"`
-	Done    []doneLink         `json:"done,omitempty"`
+	Done    []doneLink          `json:"done,omitempty"`
 }
 
 type pendingLinkScrape struct {
@@ -42,6 +47,9 @@ type doneLink struct {
 var mdLinkRe = regexp.MustCompile(`\[([^\]]+)\]\((https?://[^)\s]+)\)`)
 
 func handleExtractLinks(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, _ llm.Client) (StepResult, error) {
+	var c extractLinksConfig
+	_ = ParseStepConfig(cfg, &c)
+
 	var state extractLinksState
 	if run.State != "" && run.State != "{}" {
 		if err := json.Unmarshal([]byte(run.State), &state); err != nil {
@@ -72,6 +80,10 @@ func handleExtractLinks(ctx context.Context, q *store.Queries, run store.Pipelin
 					DocID:   existing.ID,
 					Excerpt: existing.Excerpt,
 				})
+				continue
+			}
+
+			if c.SkipNewScrapes {
 				continue
 			}
 

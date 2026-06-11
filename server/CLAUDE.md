@@ -111,6 +111,11 @@ Banned: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`
 - **`Highlight`** — LLM-extracted unit from a Document. Machine data. Server→phone **one-way**. Created by `Pipeline`.
 - **`Annotation`** — user-created text selection on a `Document` or `Highlight`. Has a text anchor (W3C TextQuoteSelector JSON) + optional note body (markdown). User-authored → **two-way sync** (LWW push). Never machine-generated.
 
+## Job enqueueing rules
+- **Always set `ParentJobID`** when enqueueing a job from inside a pipeline step or worker handler. Use `ParentJobIDFromCtx(ctx)` in pipeline steps; use `&job.ID` or `job.ParentJobID` in worker handlers. Never insert a job with a nil parent when a driving job exists — this is required for job-tree visibility in the UI.
+- **Pipeline filter exclusions**: use `exclude_source_feed_ids` in a pipeline's filter JSON to prevent it from running on specific feeds (e.g., a global summarizer pipeline should exclude feed IDs that have their own dedicated pipeline). Never rely on pipeline ordering or naming conventions to avoid double-processing.
+- **`skip_new_scrapes` config**: both `extract_links` and `extract_list_items` steps support `{"skip_new_scrapes": true}` — set this on pipelines that should only enrich already-scraped links, never trigger new scrapes.
+
 ## LLM routing
 - Two adapters only: Anthropic Messages API + OpenAI-compatible
 - Tier routing: triage→Haiku (`claude-haiku-4-5-20251001`), breakdown→Sonnet (`claude-sonnet-4-6`), digest→Opus (`claude-opus-4-8`)
