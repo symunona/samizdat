@@ -214,8 +214,10 @@ export default function JobsScreen() {
 
   // Build flat tree list; collapse subtrees for collapsed roots
   const treeItems = useMemo(() => {
+    const byId = new Map<string, Job>()
     const byParent = new Map<string, Job[]>()
     for (const j of jobs) {
+      byId.set(j.id, j)
       if (j.parent_job_id) {
         const arr = byParent.get(j.parent_job_id) ?? []
         arr.push(j)
@@ -240,7 +242,13 @@ export default function JobsScreen() {
     return tree
       .filter(({ job }) => {
         if (!job.parent_job_id) return true
-        return !collapsedRoots.has(job.parent_job_id)
+        // Walk ancestor chain — hide if any ancestor is a collapsed root
+        let parentId: string | undefined = job.parent_job_id
+        while (parentId) {
+          if (collapsedRoots.has(parentId)) return false
+          parentId = byId.get(parentId)?.parent_job_id ?? undefined
+        }
+        return true
       })
       .map(item => ({
         ...item,
