@@ -23,7 +23,6 @@ import {
   fetchDocument,
   fetchReadingProgress,
   saveReadingProgress,
-  fetchDocumentHtml,
   fetchAnnotations,
   createAnnotation,
   updateAnnotation,
@@ -47,7 +46,8 @@ import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
 import TagSelectorModal from '../../../src/TagSelectorModal'
 import HighlightCard from '../../../src/HighlightCard'
-import { mdToHtml } from '../../../src/markdownToHtml'
+import { mdToHtml, buildDocumentHtml } from '../../../src/markdownToHtml'
+import { useSyncStore } from '../../../src/store/syncStore'
 
 const DEBOUNCE_MS = 1000
 const POLL_INTERVAL_MS = 2000
@@ -207,15 +207,19 @@ export default function DocumentViewer() {
     setLoading(true)
     setError(null)
     try {
-      const [d, progress, html, anns, hl] = await Promise.all([
+      const storeDocs = useSyncStore.getState().documents
+      const docsByUrl: Record<string, string> = {}
+      for (const d of Object.values(storeDocs)) {
+        if (!d.deleted_at) docsByUrl[d.canonical_url] = d.id
+      }
+      const [d, progress, anns, hl] = await Promise.all([
         fetchDocument(activeUrl, token, id),
         fetchReadingProgress(activeUrl, token, id),
-        fetchDocumentHtml(activeUrl, token, id),
         fetchAnnotations(activeUrl, token, id),
         fetchDocumentHighlights(activeUrl, token, id),
       ])
       setDoc(d)
-      setHtmlContent(html)
+      setHtmlContent(buildDocumentHtml(d.markdown, d.title || d.canonical_url, anns, docsByUrl))
       setAnnotations(anns)
       setHighlights(hl)
       if (d.source_feed_id) {

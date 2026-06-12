@@ -97,9 +97,6 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("POST /api/v1/annotations/{id}/tags", bearerAuth(q, annTagsH.add))
 	mux.HandleFunc("DELETE /api/v1/annotations/{id}/tags/{tag_id}", bearerAuth(q, annTagsH.remove))
 
-	htmlH := &htmlHandler{q: q}
-	mux.HandleFunc("GET /api/v1/documents/{id}/html", bearerAuth(q, htmlH.render))
-
 	mediaH := &mediaHandler{q: q, cacheDir: cacheDir}
 	mux.HandleFunc("GET /api/v1/media/{id}", mediaH.serve)
 

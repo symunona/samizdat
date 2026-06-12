@@ -397,13 +397,6 @@ export type Annotation = {
   deleted_at: string | null
 }
 
-export async function fetchDocumentHtml(serverUrl: string, token: string, docId: string): Promise<string> {
-  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/html`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) throw new ApiError(res.status, `fetchDocumentHtml failed: HTTP ${res.status}`)
-  return res.text()
-}
 
 export async function fetchAnnotations(serverUrl: string, token: string, docId: string): Promise<Annotation[]> {
   const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/annotations`, {
