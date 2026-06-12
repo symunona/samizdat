@@ -137,6 +137,55 @@ func (q *Queries) CountJobsByStatusAndKind(ctx context.Context, arg CountJobsByS
 	return count, err
 }
 
+const countRootJobs = `-- name: CountRootJobs :one
+SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL AND deleted_at IS NULL
+`
+
+func (q *Queries) CountRootJobs(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRootJobs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRootJobsByKind = `-- name: CountRootJobsByKind :one
+SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL AND kind = ? AND deleted_at IS NULL
+`
+
+func (q *Queries) CountRootJobsByKind(ctx context.Context, kind string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRootJobsByKind, kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRootJobsByStatus = `-- name: CountRootJobsByStatus :one
+SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL AND status = ? AND deleted_at IS NULL
+`
+
+func (q *Queries) CountRootJobsByStatus(ctx context.Context, status string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRootJobsByStatus, status)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRootJobsByStatusAndKind = `-- name: CountRootJobsByStatusAndKind :one
+SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL AND status = ? AND kind = ? AND deleted_at IS NULL
+`
+
+type CountRootJobsByStatusAndKindParams struct {
+	Status string `json:"status"`
+	Kind   string `json:"kind"`
+}
+
+func (q *Queries) CountRootJobsByStatusAndKind(ctx context.Context, arg CountRootJobsByStatusAndKindParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRootJobsByStatusAndKind, arg.Status, arg.Kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteAnnotationTag = `-- name: DeleteAnnotationTag :exec
 UPDATE annotation_tags SET deleted_at = ?, updated_at = ?, rev = rev + 1
 WHERE annotation_id = ? AND tag_id = ? AND deleted_at IS NULL
@@ -2692,6 +2741,201 @@ func (q *Queries) ListPipelines(ctx context.Context) ([]Pipeline, error) {
 			&i.UpdatedAt,
 			&i.Rev,
 			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRootJobsByKindPage = `-- name: ListRootJobsByKindPage :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE parent_job_id IS NULL AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+`
+
+type ListRootJobsByKindPageParams struct {
+	Kind   string `json:"kind"`
+	Limit  int64  `json:"limit"`
+	Offset int64  `json:"offset"`
+}
+
+func (q *Queries) ListRootJobsByKindPage(ctx context.Context, arg ListRootJobsByKindPageParams) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listRootJobsByKindPage, arg.Kind, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.Result,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+			&i.ParentJobID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRootJobsByStatusAndKindPage = `-- name: ListRootJobsByStatusAndKindPage :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE parent_job_id IS NULL AND status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+`
+
+type ListRootJobsByStatusAndKindPageParams struct {
+	Status string `json:"status"`
+	Kind   string `json:"kind"`
+	Limit  int64  `json:"limit"`
+	Offset int64  `json:"offset"`
+}
+
+func (q *Queries) ListRootJobsByStatusAndKindPage(ctx context.Context, arg ListRootJobsByStatusAndKindPageParams) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listRootJobsByStatusAndKindPage,
+		arg.Status,
+		arg.Kind,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.Result,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+			&i.ParentJobID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRootJobsByStatusPage = `-- name: ListRootJobsByStatusPage :many
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE parent_job_id IS NULL AND status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+`
+
+type ListRootJobsByStatusPageParams struct {
+	Status string `json:"status"`
+	Limit  int64  `json:"limit"`
+	Offset int64  `json:"offset"`
+}
+
+func (q *Queries) ListRootJobsByStatusPage(ctx context.Context, arg ListRootJobsByStatusPageParams) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listRootJobsByStatusPage, arg.Status, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.Result,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+			&i.ParentJobID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRootJobsPage = `-- name: ListRootJobsPage :many
+
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE parent_job_id IS NULL AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+`
+
+type ListRootJobsPageParams struct {
+	Limit  int64 `json:"limit"`
+	Offset int64 `json:"offset"`
+}
+
+// Root-only paging: paginate by top-level jobs (parent_job_id IS NULL)
+func (q *Queries) ListRootJobsPage(ctx context.Context, arg ListRootJobsPageParams) ([]Job, error) {
+	rows, err := q.db.QueryContext(ctx, listRootJobsPage, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Job
+	for rows.Next() {
+		var i Job
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.RunAfter,
+			&i.LastError,
+			&i.Result,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+			&i.ParentJobID,
 		); err != nil {
 			return nil, err
 		}

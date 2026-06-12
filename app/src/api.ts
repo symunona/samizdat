@@ -301,6 +301,7 @@ export type Job = {
   updated_at: string
   parent_job_id: string | null
   llm_cost_usd?: number
+  children_count?: number
 }
 
 export async function fetchJobs(

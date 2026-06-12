@@ -474,6 +474,32 @@ SELECT COUNT(*) FROM jobs WHERE kind = ? AND deleted_at IS NULL;
 -- name: CountJobsByStatusAndKind :one
 SELECT COUNT(*) FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL;
 
+-- Root-only paging: paginate by top-level jobs (parent_job_id IS NULL)
+
+-- name: ListRootJobsPage :many
+SELECT * FROM jobs WHERE parent_job_id IS NULL AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
+
+-- name: ListRootJobsByStatusPage :many
+SELECT * FROM jobs WHERE parent_job_id IS NULL AND status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
+
+-- name: ListRootJobsByKindPage :many
+SELECT * FROM jobs WHERE parent_job_id IS NULL AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
+
+-- name: ListRootJobsByStatusAndKindPage :many
+SELECT * FROM jobs WHERE parent_job_id IS NULL AND status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
+
+-- name: CountRootJobs :one
+SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL AND deleted_at IS NULL;
+
+-- name: CountRootJobsByStatus :one
+SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL AND status = ? AND deleted_at IS NULL;
+
+-- name: CountRootJobsByKind :one
+SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL AND kind = ? AND deleted_at IS NULL;
+
+-- name: CountRootJobsByStatusAndKind :one
+SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL AND status = ? AND kind = ? AND deleted_at IS NULL;
+
 -- name: ListJobsByPipelineId :many
 SELECT * FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
 

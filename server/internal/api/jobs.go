@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -11,7 +12,10 @@ import (
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
-type jobsHandler struct{ q *store.Queries }
+type jobsHandler struct {
+	q  *store.Queries
+	db *sql.DB
+}
 
 func (h *jobsHandler) create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -57,6 +61,46 @@ func (h *jobsHandler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": job.ID})
 }
 
+// listDescendants fetches all descendants (recursive) of the given root job IDs.
+func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string) ([]store.Job, error) {
+	if len(rootIDs) == 0 {
+		return nil, nil
+	}
+	idsJSON, err := json.Marshal(rootIDs)
+	if err != nil {
+		return nil, err
+	}
+	const qry = `
+		WITH RECURSIVE desc AS (
+			SELECT j.* FROM jobs j, json_each(?) r
+			WHERE j.parent_job_id = r.value AND j.deleted_at IS NULL
+			UNION ALL
+			SELECT j.* FROM jobs j JOIN desc d ON j.parent_job_id = d.id WHERE j.deleted_at IS NULL
+		)
+		SELECT id, kind, payload, status, attempts, run_after, last_error, result,
+		       created_at, updated_at, rev, deleted_at, parent_job_id
+		FROM desc ORDER BY updated_at DESC
+	`
+	rows, err := h.db.QueryContext(r.Context(), qry, string(idsJSON))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var jobs []store.Job
+	for rows.Next() {
+		var j store.Job
+		if err := rows.Scan(
+			&j.ID, &j.Kind, &j.Payload, &j.Status, &j.Attempts, &j.RunAfter,
+			&j.LastError, &j.Result, &j.CreatedAt, &j.UpdatedAt, &j.Rev,
+			&j.DeletedAt, &j.ParentJobID,
+		); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, rows.Err()
+}
+
 type jobWithCost struct {
 	store.Job
 	LLMCostUSD float64 `json:"llm_cost_usd"`
@@ -86,9 +130,9 @@ func (h *jobsHandler) get(w http.ResponseWriter, r *http.Request) {
 
 type jobsPageResponse struct {
 	Items   []store.Job `json:"items"`
-	Total   int64       `json:"total"`
+	Total   int64       `json:"total"`  // count of root jobs only
 	HasMore bool        `json:"has_more"`
-	Offset  int64       `json:"offset"`
+	Offset  int64       `json:"offset"` // offset into root jobs
 	Limit   int64       `json:"limit"`
 }
 
@@ -131,7 +175,7 @@ func (h *jobsHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Paginated path
+	// Paginated path — paginate by root jobs only, then attach all descendants.
 	limit, _ := strconv.ParseInt(limitStr, 10, 64)
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -142,53 +186,67 @@ func (h *jobsHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		jobs  []store.Job
+		roots []store.Job
 		total int64
 		err   error
 	)
 	switch {
 	case status != "" && kind != "":
-		jobs, err = h.q.ListJobsByStatusAndKindPage(r.Context(), store.ListJobsByStatusAndKindPageParams{
+		roots, err = h.q.ListRootJobsByStatusAndKindPage(r.Context(), store.ListRootJobsByStatusAndKindPageParams{
 			Status: status, Kind: kind, Limit: limit, Offset: offset,
 		})
 		if err == nil {
-			total, err = h.q.CountJobsByStatusAndKind(r.Context(), store.CountJobsByStatusAndKindParams{
+			total, err = h.q.CountRootJobsByStatusAndKind(r.Context(), store.CountRootJobsByStatusAndKindParams{
 				Status: status, Kind: kind,
 			})
 		}
 	case status != "":
-		jobs, err = h.q.ListJobsByStatusPage(r.Context(), store.ListJobsByStatusPageParams{
+		roots, err = h.q.ListRootJobsByStatusPage(r.Context(), store.ListRootJobsByStatusPageParams{
 			Status: status, Limit: limit, Offset: offset,
 		})
 		if err == nil {
-			total, err = h.q.CountJobsByStatus(r.Context(), status)
+			total, err = h.q.CountRootJobsByStatus(r.Context(), status)
 		}
 	case kind != "":
-		jobs, err = h.q.ListJobsByKindPage(r.Context(), store.ListJobsByKindPageParams{
+		roots, err = h.q.ListRootJobsByKindPage(r.Context(), store.ListRootJobsByKindPageParams{
 			Kind: kind, Limit: limit, Offset: offset,
 		})
 		if err == nil {
-			total, err = h.q.CountJobsByKind(r.Context(), kind)
+			total, err = h.q.CountRootJobsByKind(r.Context(), kind)
 		}
 	default:
-		jobs, err = h.q.ListJobsPage(r.Context(), store.ListJobsPageParams{
+		roots, err = h.q.ListRootJobsPage(r.Context(), store.ListRootJobsPageParams{
 			Limit: limit, Offset: offset,
 		})
 		if err == nil {
-			total, err = h.q.CountJobs(r.Context())
+			total, err = h.q.CountRootJobs(r.Context())
 		}
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if jobs == nil {
-		jobs = []store.Job{}
+
+	// Collect all root IDs and fetch their full descendant subtrees.
+	rootIDs := make([]string, len(roots))
+	for i, j := range roots {
+		rootIDs[i] = j.ID
 	}
+	descendants, err := h.listDescendants(r, rootIDs)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	// Return roots first, then descendants (flat); client buildTree re-assembles.
+	items := make([]store.Job, 0, len(roots)+len(descendants))
+	items = append(items, roots...)
+	items = append(items, descendants...)
+
 	writeJSON(w, http.StatusOK, jobsPageResponse{
-		Items:   jobs,
+		Items:   items,
 		Total:   total,
-		HasMore: offset+int64(len(jobs)) < total,
+		HasMore: offset+int64(len(roots)) < total,
 		Offset:  offset,
 		Limit:   limit,
 	})

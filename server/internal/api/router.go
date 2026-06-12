@@ -43,7 +43,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("GET /api/v1/admin/devices", localhostOnly(devH.list))
 	mux.HandleFunc("DELETE /api/v1/admin/devices/{id}", localhostOnly(devH.revoke))
 
-	jobsH := &jobsHandler{q: q}
+	jobsH := &jobsHandler{q: q, db: db}
 	mux.HandleFunc("POST /api/v1/jobs", bearerAuth(q, jobsH.create))
 	mux.HandleFunc("GET /api/v1/jobs", bearerAuth(q, jobsH.list))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", bearerAuth(q, jobsH.get))

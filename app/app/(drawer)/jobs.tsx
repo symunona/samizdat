@@ -239,6 +239,12 @@ export default function JobsScreen() {
       if (j.status === 'queued') queuePositions.set(j.id, ++qPos)
     }
 
+    // Count all descendants recursively for each root
+    function countDescendants(id: string): number {
+      const children = byParent.get(id) ?? []
+      return children.reduce((sum, c) => sum + 1 + countDescendants(c.id), 0)
+    }
+
     return tree
       .filter(({ job }) => {
         if (!job.parent_job_id) return true
@@ -252,7 +258,7 @@ export default function JobsScreen() {
       })
       .map(item => ({
         ...item,
-        childCount: item.isRoot ? (byParent.get(item.job.id)?.length ?? 0) : 0,
+        childCount: item.isRoot ? countDescendants(item.job.id) : 0,
         groupStatus: item.isRoot ? groupStatus(item.job.id, byParent) : '',
         queuePos: queuePositions.get(item.job.id),
       }))
