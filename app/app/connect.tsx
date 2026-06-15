@@ -16,6 +16,7 @@ import { useUnistyles } from "react-native-unistyles";
 import { health, pair } from "../src/api";
 import { clearConnection, saveConnection } from "../src/storage";
 import { useConnection } from "../src/ConnectionContext";
+import { QRScannerModal } from "../src/QRScannerModal";
 
 function defaultServerUrl(): string {
     if (Platform.OS === "web" && typeof window !== "undefined") {
@@ -69,6 +70,10 @@ function splitUrls(raw: string): string[] {
         .filter(Boolean);
 }
 
+function mergeUrls(primary: string, apiUrls: string[]): string[] {
+    return [primary, ...apiUrls.filter((u) => u !== primary)];
+}
+
 type Status =
     | { kind: "idle" }
     | { kind: "connecting" }
@@ -109,6 +114,55 @@ export default function ConnectScreen() {
     const [url, setUrl] = useState(defaultServerUrl);
     const [code, setCode] = useState("");
     const [status, setStatus] = useState<Status>({ kind: "idle" });
+    const [hasCamera, setHasCamera] = useState(false);
+    const [scannerOpen, setScannerOpen] = useState(false);
+
+    // Detect camera availability once on mount
+    useEffect(() => {
+        if (Platform.OS === "web") {
+            if (typeof navigator === "undefined" || !navigator.mediaDevices) return;
+            navigator.mediaDevices.enumerateDevices().then((devices) => {
+                const hasVideo = devices.some((d) => d.kind === "videoinput");
+                // BarcodeDetector required for web scanning
+                // @ts-expect-error BarcodeDetector not in TS lib yet
+                const hasBarcodeDetector = typeof BarcodeDetector !== "undefined";
+                setHasCamera(hasVideo && hasBarcodeDetector);
+            }).catch(() => {});
+        } else {
+            // All iOS/Android devices have cameras; show the button, handle permission in modal
+            setHasCamera(true);
+        }
+    }, []);
+
+    function handleQRScan(data: string) {
+        setScannerOpen(false);
+        const parsed = parseConnectString(data);
+        if (!parsed.ok) {
+            setStatus({ kind: "error", message: parsed.reason || "Invalid QR code" });
+            return;
+        }
+        const primaryUrl = parsed.urls[0] ?? defaultServerUrl();
+        setCode(parsed.code);
+        setUrl(primaryUrl);
+        setStatus({ kind: "connecting" });
+        pair(primaryUrl, parsed.code, deviceName())
+            .then(async (paired) => {
+                const serverUrls = mergeUrls(primaryUrl, paired.server_urls ?? []);
+                await saveConnection({
+                    token: paired.device_token,
+                    deviceId: paired.device_id,
+                    serverUrls,
+                });
+                await reload();
+                router.replace("/");
+            })
+            .catch((e: unknown) => {
+                setStatus({
+                    kind: "error",
+                    message: e instanceof Error ? e.message : "Connection failed",
+                });
+            });
+    }
 
     // Auto-connect from URL params emitted by `sam connect`
     const urlParamHandled = useRef(false);
@@ -127,9 +181,7 @@ export default function ConnectScreen() {
             setStatus({ kind: "connecting" });
             pair(serverUrl, codeParam, deviceName())
                 .then(async (paired) => {
-                    const serverUrls = paired.server_urls?.length
-                        ? paired.server_urls
-                        : [serverUrl];
+                    const serverUrls = mergeUrls(serverUrl, paired.server_urls ?? []);
                     await saveConnection({
                         token: paired.device_token,
                         deviceId: paired.device_id,
@@ -159,9 +211,7 @@ export default function ConnectScreen() {
         setStatus({ kind: "connecting" });
         pair(primaryUrl, parsed.code, deviceName())
             .then(async (paired) => {
-                const serverUrls = paired.server_urls?.length
-                    ? paired.server_urls
-                    : parsed.urls;
+                const serverUrls = mergeUrls(primaryUrl, paired.server_urls ?? []);
                 await saveConnection({
                     token: paired.device_token,
                     deviceId: paired.device_id,
@@ -187,9 +237,7 @@ export default function ConnectScreen() {
             const primaryUrl = urlList[0];
             if (!primaryUrl) throw new Error("Enter a server URL.");
             const result = await pair(primaryUrl, code.trim(), deviceName());
-            const serverUrls = result.server_urls?.length
-                ? result.server_urls
-                : urlList;
+            const serverUrls = mergeUrls(primaryUrl, result.server_urls ?? []);
             await saveConnection({
                 token: result.device_token,
                 deviceId: result.device_id,
@@ -275,11 +323,17 @@ export default function ConnectScreen() {
                     )}
                 </Pressable>
 
-                {Platform.OS !== "web" && (
-                    <Pressable style={s.ghost} disabled>
+                {hasCamera && (
+                    <Pressable style={s.ghost} onPress={() => setScannerOpen(true)}>
                         <Text style={s.ghostText}>Scan QR code</Text>
                     </Pressable>
                 )}
+
+                <QRScannerModal
+                    visible={scannerOpen}
+                    onScan={handleQRScan}
+                    onClose={() => setScannerOpen(false)}
+                />
 
                 {status.kind === "error" && (
                     <Text style={s.errorText}>{status.message}</Text>
