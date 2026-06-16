@@ -102,6 +102,12 @@ func initItems(ctx context.Context, q *store.Queries, run store.PipelineRun, ski
 	}
 
 	rawItems := extractListItems(doc.Markdown)
+	// Prose-only post: no bullet/list items found. Fall back to paragraph chunks
+	// so the step produces at least some highlights instead of silently finishing
+	// with nothing.
+	if len(rawItems) == 0 {
+		rawItems = extractProseParagraphs(doc.Markdown)
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	var tracked []trackedItem
 
@@ -312,6 +318,45 @@ func findSummarizerPipeline(ctx context.Context, q *store.Queries) (string, erro
 		}
 	}
 	return "", nil
+}
+
+// extractProseParagraphs splits markdown prose into non-empty paragraph chunks.
+// Used as a fallback when the document contains no bullet/list items.
+// A paragraph is a run of non-blank lines separated by one or more blank lines.
+// Markdown headings (# lines) are treated as paragraph separators and are not
+// included in the output. Short paragraphs (< 40 chars) are skipped to avoid
+// stubs like lone image captions or empty section dividers.
+func extractProseParagraphs(md string) []string {
+	const minLen = 40
+	var paragraphs []string
+	var current strings.Builder
+
+	flush := func() {
+		s := strings.TrimSpace(current.String())
+		if len(s) >= minLen {
+			paragraphs = append(paragraphs, s)
+		}
+		current.Reset()
+	}
+
+	for _, line := range strings.Split(md, "\n") {
+		// Heading or horizontal rule → paragraph break, skip the line itself.
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "===") {
+			flush()
+			continue
+		}
+		// Blank line → paragraph boundary.
+		if strings.TrimSpace(line) == "" {
+			flush()
+			continue
+		}
+		if current.Len() > 0 {
+			current.WriteByte(' ')
+		}
+		current.WriteString(strings.TrimSpace(line))
+	}
+	flush()
+	return paragraphs
 }
 
 // extractListItems parses top-level markdown list items (- or *).
