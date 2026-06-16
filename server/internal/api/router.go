@@ -64,6 +64,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("GET /api/v1/feeds", bearerAuth(q, subsH.listFeeds))
 	mux.HandleFunc("GET /api/v1/feeds/{id}", bearerAuth(q, subsH.getFeed))
 	mux.HandleFunc("GET /api/v1/feeds/{id}/items", bearerAuth(q, subsH.listFeedItems))
+	mux.HandleFunc("POST /api/v1/feeds/{id}/queue-pipelines", bearerAuth(q, subsH.queuePipelines))
 
 	adminFeedsH := &adminFeedsHandler{reg: w.ExtractorRegistry(), browser: w}
 	mux.HandleFunc("POST /api/v1/admin/feeds/preview", localhostOnly(adminFeedsH.preview))
@@ -77,6 +78,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("GET /api/v1/documents/{id}", bearerAuth(q, docsH.get))
 	mux.HandleFunc("DELETE /api/v1/documents/{id}", bearerAuth(q, docsH.delete))
 	mux.HandleFunc("GET /api/v1/documents/{id}/media", bearerAuth(q, docsH.listMedia))
+	mux.HandleFunc("POST /api/v1/documents/{id}/queue-pipelines", bearerAuth(q, docsH.queuePipelines))
 
 	annH := &annotationsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents/{id}/annotations", bearerAuth(q, annH.list))

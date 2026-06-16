@@ -226,6 +226,14 @@ WHERE kind = 'poll_feed'
   AND status IN ('queued', 'running')
   AND deleted_at IS NULL;
 
+-- name: CountActiveRunPipelineJobsForDoc :one
+SELECT COUNT(*) FROM jobs
+WHERE kind = 'run_pipeline'
+  AND json_extract(payload, '$.document_id') = ?
+  AND json_extract(payload, '$.pipeline_id') = ?
+  AND status IN ('queued', 'running', 'paused')
+  AND deleted_at IS NULL;
+
 -- name: ClearCompletedJobs :execresult
 UPDATE jobs SET deleted_at = ?, updated_at = ?
 WHERE status IN ('done', 'dead', 'paused') AND deleted_at IS NULL;
@@ -414,7 +422,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 RETURNING *;
 
 -- name: ListHighlights :many
-SELECT * FROM highlights WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?;
+SELECT * FROM highlights WHERE deleted_at IS NULL AND archived_at IS NULL ORDER BY created_at DESC LIMIT ?;
+
+-- name: ListArchivedHighlights :many
+SELECT * FROM highlights WHERE deleted_at IS NULL AND archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT ?;
 
 -- name: ListHighlightsByDocument :many
 SELECT * FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at ASC;
@@ -434,6 +445,9 @@ WHERE pipeline_run_id = ? AND deleted_at IS NULL;
 
 -- name: UpdateHighlightPinned :exec
 UPDATE highlights SET pinned = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: ArchiveHighlight :exec
+UPDATE highlights SET archived_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
 -- name: InsertHighlightTag :one
 INSERT INTO highlight_tags (id, highlight_id, tag_id, created_at, updated_at, rev)

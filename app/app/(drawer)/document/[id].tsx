@@ -38,9 +38,11 @@ import {
   deleteHighlight,
   runPipelineOnDocument,
   fetchFeed,
+  queueDocumentPipelines,
 } from '../../../src/api'
 import type { Document, Annotation, Pipeline, HighlightWithDoc, PipelineRun, Feed } from '../../../src/api'
 import { useConnection } from '../../../src/ConnectionContext'
+import { useToast } from '../../../src/ToastContext'
 import { saveTheme } from '../../../src/storage'
 import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
@@ -70,6 +72,9 @@ export default function DocumentViewer() {
   const [scrollProgress, setScrollProgress] = useState(0)
 
   const { activeUrl, token, status } = useConnection()
+  const { toast } = useToast()
+
+  const [queueingPipelines, setQueueingPipelines] = useState(false)
 
   const webViewRef = useRef<WebView>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -432,6 +437,24 @@ export default function DocumentViewer() {
     }
   }, [existingAnnotation, activeUrl, token, injectRemoveMark])
 
+  const handleQueuePipelines = useCallback(async () => {
+    if (!activeUrl || !token || queueingPipelines) return
+    setQueueingPipelines(true)
+    try {
+      const result = await queueDocumentPipelines(activeUrl, token, id, true)
+      toast(
+        result.queued > 0
+          ? `Queued ${result.queued} pipeline job${result.queued === 1 ? '' : 's'} (paused)${result.skipped > 0 ? `, ${result.skipped} skipped` : ''}`
+          : `No new pipeline jobs (${result.skipped} already active)`,
+        result.queued > 0 ? 'success' : 'info',
+      )
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to queue pipelines', 'error')
+    } finally {
+      setQueueingPipelines(false)
+    }
+  }, [activeUrl, token, id, queueingPipelines, toast])
+
   const openInWeb = useCallback(() => {
     if (doc?.canonical_url) Linking.openURL(doc.canonical_url)
   }, [doc])
@@ -512,6 +535,17 @@ export default function DocumentViewer() {
             </Pressable>
             <Pressable onPress={handleOpenDocTags} style={s.headerTagBtn} hitSlop={8}>
               <Text style={s.headerTagBtnText}># Tags</Text>
+            </Pressable>
+            <Pressable
+              onPress={handleQueuePipelines}
+              style={[s.headerPipelineBtn, queueingPipelines && s.headerBtnDisabled]}
+              hitSlop={8}
+              disabled={queueingPipelines}
+            >
+              {queueingPipelines
+                ? <ActivityIndicator size="small" color="#a78bfa" />
+                : <Text style={s.headerPipelineBtnText}>▶ Pipeline</Text>
+              }
             </Pressable>
             <Pressable onPress={() => setDeleteConfirm(true)} style={s.headerDeleteBtn} hitSlop={8}>
               <Text style={s.headerDeleteBtnText}>🗑</Text>
@@ -774,6 +808,19 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.border,
     },
     headerDeleteBtnText: { fontSize: 14, color: t.colors.muted },
+    headerPipelineBtn: {
+      paddingHorizontal: t.spacing.sm,
+      paddingVertical: 4,
+      borderRadius: 6,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: '#a78bfa',
+      minWidth: 28,
+      minHeight: 28,
+    },
+    headerPipelineBtnText: { color: '#a78bfa', fontSize: 12, fontWeight: '700' },
+    headerBtnDisabled: { opacity: 0.5 },
     openWebBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuText: { color: t.colors.text, fontSize: 22, fontWeight: '400', lineHeight: 24 },

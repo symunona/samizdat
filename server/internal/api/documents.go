@@ -2,10 +2,12 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -134,4 +136,79 @@ func (h *documentsHandler) listMedia(w http.ResponseWriter, r *http.Request) {
 		assets = []store.MediaAsset{}
 	}
 	writeJSON(w, http.StatusOK, assets)
+}
+
+// POST /api/v1/documents/{id}/queue-pipelines?hold=true
+// Enqueues run_pipeline jobs (paused if hold=true) for all enabled pipelines × this document,
+// skipping any pipeline that already has an active job for this document.
+func (h *documentsHandler) queuePipelines(w http.ResponseWriter, r *http.Request) {
+	docID := r.PathValue("id")
+	if docID == "" {
+		writeErr(w, http.StatusBadRequest, "missing id")
+		return
+	}
+	hold := r.URL.Query().Get("hold") == "true"
+
+	doc, err := h.q.GetDocumentByID(r.Context(), docID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "document not found")
+		return
+	}
+
+	pipelines, err := h.q.ListPipelines(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	var queued, skipped int
+	for _, pl := range pipelines {
+		count, err := h.q.CountActiveRunPipelineJobsForDoc(r.Context(), store.CountActiveRunPipelineJobsForDocParams{
+			Payload:   docID,
+			Payload_2: pl.ID,
+		})
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if count > 0 {
+			skipped++
+			continue
+		}
+
+		payload, _ := json.Marshal(map[string]string{
+			"pipeline_id":    pl.ID,
+			"document_id":    docID,
+			"pipeline_name":  pl.Name,
+			"document_title": doc.Title,
+		})
+		jobID := uuid.NewString()
+		if hold {
+			_, err = h.q.InsertJobPaused(r.Context(), store.InsertJobPausedParams{
+				ID:        jobID,
+				Kind:      "run_pipeline",
+				Payload:   string(payload),
+				RunAfter:  now,
+				CreatedAt: now,
+				UpdatedAt: now,
+			})
+		} else {
+			_, err = h.q.InsertJob(r.Context(), store.InsertJobParams{
+				ID:        jobID,
+				Kind:      "run_pipeline",
+				Payload:   string(payload),
+				RunAfter:  now,
+				CreatedAt: now,
+				UpdatedAt: now,
+			})
+		}
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		queued++
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int{"queued": queued, "skipped": skipped})
 }

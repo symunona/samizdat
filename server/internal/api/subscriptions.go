@@ -267,3 +267,80 @@ func (h *subscriptionsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// POST /api/v1/feeds/{id}/queue-pipelines?hold=true
+// Enqueues run_pipeline jobs (paused if hold=true) for all enabled pipelines × all documents
+// from this feed, skipping pairs that already have an active job.
+func (h *subscriptionsHandler) queuePipelines(w http.ResponseWriter, r *http.Request) {
+	feedID := r.PathValue("id")
+	if feedID == "" {
+		writeErr(w, http.StatusBadRequest, "feed id required")
+		return
+	}
+	hold := r.URL.Query().Get("hold") == "true"
+
+	docs, err := h.q.ListDocumentsByFeed(r.Context(), &feedID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	pipelines, err := h.q.ListPipelines(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	var queued, skipped int
+	for _, doc := range docs {
+		for _, pl := range pipelines {
+			count, err := h.q.CountActiveRunPipelineJobsForDoc(r.Context(), store.CountActiveRunPipelineJobsForDocParams{
+				Payload:   doc.ID,
+				Payload_2: pl.ID,
+			})
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "db error")
+				return
+			}
+			if count > 0 {
+				skipped++
+				continue
+			}
+
+			payload, _ := json.Marshal(map[string]string{
+				"pipeline_id":    pl.ID,
+				"document_id":    doc.ID,
+				"pipeline_name":  pl.Name,
+				"document_title": doc.Title,
+			})
+			jobID := uuid.NewString()
+			if hold {
+				_, err = h.q.InsertJobPaused(r.Context(), store.InsertJobPausedParams{
+					ID:        jobID,
+					Kind:      "run_pipeline",
+					Payload:   string(payload),
+					RunAfter:  now,
+					CreatedAt: now,
+					UpdatedAt: now,
+				})
+			} else {
+				_, err = h.q.InsertJob(r.Context(), store.InsertJobParams{
+					ID:        jobID,
+					Kind:      "run_pipeline",
+					Payload:   string(payload),
+					RunAfter:  now,
+					CreatedAt: now,
+					UpdatedAt: now,
+				})
+			}
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "db error")
+				return
+			}
+			queued++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int{"queued": queued, "skipped": skipped})
+}

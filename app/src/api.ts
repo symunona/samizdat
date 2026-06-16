@@ -614,6 +614,7 @@ export type Highlight = {
   body: string
   metadata: string  // JSON string
   pinned: number    // 0 | 1
+  archived_at: string | null
   created_at: string
   updated_at: string
   rev: number
@@ -689,11 +690,22 @@ export type HighlightWithDoc = Highlight & {
   linked_documents?: Record<string, string>
 }
 
-export async function fetchHighlights(serverUrl: string, token: string, limit = 100): Promise<HighlightWithDoc[]> {
-  const res = await fetch(`${base(serverUrl)}/api/v1/highlights?limit=${limit}`, {
+export async function fetchHighlights(serverUrl: string, token: string, limit = 100, archived = false): Promise<HighlightWithDoc[]> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (archived) params.set('archived', '1')
+  const res = await fetch(`${base(serverUrl)}/api/v1/highlights?${params}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   return json<HighlightWithDoc[]>(res, '/api/v1/highlights')
+}
+
+export async function archiveHighlight(serverUrl: string, token: string, id: string, archivedAt: string | null = new Date().toISOString()): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/highlights/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archived_at: archivedAt }),
+  })
+  if (!res.ok) throw new ApiError(res.status, `archiveHighlight failed: HTTP ${res.status}`)
 }
 
 export async function fetchDocumentHighlights(serverUrl: string, token: string, docId: string): Promise<HighlightWithDoc[]> {
@@ -838,6 +850,38 @@ export async function fetchSync(serverUrl: string, token: string, since: string)
     { headers: { Authorization: `Bearer ${token}` } },
   )
   return json<SyncPayload>(res, '/api/v1/sync')
+}
+
+// ── Queue pipelines ───────────────────────────────────────────────────────────
+
+export type QueuePipelinesResult = { queued: number; skipped: number }
+
+export async function queueFeedPipelines(
+  serverUrl: string,
+  token: string,
+  feedId: string,
+  hold = true,
+): Promise<QueuePipelinesResult> {
+  const qs = hold ? '?hold=true' : ''
+  const res = await fetch(
+    `${base(serverUrl)}/api/v1/feeds/${encodeURIComponent(feedId)}/queue-pipelines${qs}`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+  )
+  return json<QueuePipelinesResult>(res, `feeds/${feedId}/queue-pipelines`)
+}
+
+export async function queueDocumentPipelines(
+  serverUrl: string,
+  token: string,
+  docId: string,
+  hold = true,
+): Promise<QueuePipelinesResult> {
+  const qs = hold ? '?hold=true' : ''
+  const res = await fetch(
+    `${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/queue-pipelines${qs}`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+  )
+  return json<QueuePipelinesResult>(res, `documents/${docId}/queue-pipelines`)
 }
 
 // ── Jobs paging ───────────────────────────────────────────────────────────────

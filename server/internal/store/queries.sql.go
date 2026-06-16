@@ -10,6 +10,21 @@ import (
 	"database/sql"
 )
 
+const archiveHighlight = `-- name: ArchiveHighlight :exec
+UPDATE highlights SET archived_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type ArchiveHighlightParams struct {
+	ArchivedAt *string `json:"archived_at"`
+	UpdatedAt  string  `json:"updated_at"`
+	ID         string  `json:"id"`
+}
+
+func (q *Queries) ArchiveHighlight(ctx context.Context, arg ArchiveHighlightParams) error {
+	_, err := q.db.ExecContext(ctx, archiveHighlight, arg.ArchivedAt, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const bumpSubscriptionNextRun = `-- name: BumpSubscriptionNextRun :exec
 UPDATE subscriptions SET next_run_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
 `
@@ -101,6 +116,27 @@ WHERE kind = 'poll_feed'
 
 func (q *Queries) CountActivePollFeedJobsForFeed(ctx context.Context, payload string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countActivePollFeedJobsForFeed, payload)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countActiveRunPipelineJobsForDoc = `-- name: CountActiveRunPipelineJobsForDoc :one
+SELECT COUNT(*) FROM jobs
+WHERE kind = 'run_pipeline'
+  AND json_extract(payload, '$.document_id') = ?
+  AND json_extract(payload, '$.pipeline_id') = ?
+  AND status IN ('queued', 'running', 'paused')
+  AND deleted_at IS NULL
+`
+
+type CountActiveRunPipelineJobsForDocParams struct {
+	Payload   string `json:"payload"`
+	Payload_2 string `json:"payload_2"`
+}
+
+func (q *Queries) CountActiveRunPipelineJobsForDoc(ctx context.Context, arg CountActiveRunPipelineJobsForDocParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countActiveRunPipelineJobsForDoc, arg.Payload, arg.Payload_2)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1025,7 +1061,7 @@ const insertHighlight = `-- name: InsertHighlight :one
 
 INSERT INTO highlights (id, document_id, pipeline_run_id, kind, title, body, metadata, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-RETURNING id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at
+RETURNING id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, archived_at, created_at, updated_at, rev, deleted_at
 `
 
 type InsertHighlightParams struct {
@@ -1063,6 +1099,7 @@ func (q *Queries) InsertHighlight(ctx context.Context, arg InsertHighlightParams
 		&i.Body,
 		&i.Metadata,
 		&i.Pinned,
+		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -1548,6 +1585,47 @@ func (q *Queries) ListAnnotationsSince(ctx context.Context, updatedAt string) ([
 			&i.PosEnd,
 			&i.Color,
 			&i.Note,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listArchivedHighlights = `-- name: ListArchivedHighlights :many
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, archived_at, created_at, updated_at, rev, deleted_at FROM highlights WHERE deleted_at IS NULL AND archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT ?
+`
+
+func (q *Queries) ListArchivedHighlights(ctx context.Context, limit int64) ([]Highlight, error) {
+	rows, err := q.db.QueryContext(ctx, listArchivedHighlights, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Highlight
+	for rows.Next() {
+		var i Highlight
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.PipelineRunID,
+			&i.Kind,
+			&i.Title,
+			&i.Body,
+			&i.Metadata,
+			&i.Pinned,
+			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -2116,7 +2194,7 @@ func (q *Queries) ListHighlightTagsSince(ctx context.Context, updatedAt string) 
 }
 
 const listHighlights = `-- name: ListHighlights :many
-SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at FROM highlights WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, archived_at, created_at, updated_at, rev, deleted_at FROM highlights WHERE deleted_at IS NULL AND archived_at IS NULL ORDER BY created_at DESC LIMIT ?
 `
 
 func (q *Queries) ListHighlights(ctx context.Context, limit int64) ([]Highlight, error) {
@@ -2137,6 +2215,7 @@ func (q *Queries) ListHighlights(ctx context.Context, limit int64) ([]Highlight,
 			&i.Body,
 			&i.Metadata,
 			&i.Pinned,
+			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -2156,7 +2235,7 @@ func (q *Queries) ListHighlights(ctx context.Context, limit int64) ([]Highlight,
 }
 
 const listHighlightsByDocument = `-- name: ListHighlightsByDocument :many
-SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, archived_at, created_at, updated_at, rev, deleted_at FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
 `
 
 func (q *Queries) ListHighlightsByDocument(ctx context.Context, documentID string) ([]Highlight, error) {
@@ -2177,6 +2256,7 @@ func (q *Queries) ListHighlightsByDocument(ctx context.Context, documentID strin
 			&i.Body,
 			&i.Metadata,
 			&i.Pinned,
+			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -2196,7 +2276,7 @@ func (q *Queries) ListHighlightsByDocument(ctx context.Context, documentID strin
 }
 
 const listHighlightsByPipelineRun = `-- name: ListHighlightsByPipelineRun :many
-SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at FROM highlights WHERE pipeline_run_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, archived_at, created_at, updated_at, rev, deleted_at FROM highlights WHERE pipeline_run_id = ? AND deleted_at IS NULL ORDER BY created_at ASC
 `
 
 func (q *Queries) ListHighlightsByPipelineRun(ctx context.Context, pipelineRunID string) ([]Highlight, error) {
@@ -2217,6 +2297,7 @@ func (q *Queries) ListHighlightsByPipelineRun(ctx context.Context, pipelineRunID
 			&i.Body,
 			&i.Metadata,
 			&i.Pinned,
+			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -2236,7 +2317,7 @@ func (q *Queries) ListHighlightsByPipelineRun(ctx context.Context, pipelineRunID
 }
 
 const listHighlightsByTag = `-- name: ListHighlightsByTag :many
-SELECT h.id, h.document_id, h.pipeline_run_id, h.kind, h.title, h.body, h.metadata, h.pinned, h.created_at, h.updated_at, h.rev, h.deleted_at FROM highlights h
+SELECT h.id, h.document_id, h.pipeline_run_id, h.kind, h.title, h.body, h.metadata, h.pinned, h.archived_at, h.created_at, h.updated_at, h.rev, h.deleted_at FROM highlights h
 JOIN highlight_tags ht ON ht.highlight_id = h.id
 WHERE ht.tag_id = ? AND ht.deleted_at IS NULL AND h.deleted_at IS NULL
 ORDER BY h.created_at DESC
@@ -2260,6 +2341,7 @@ func (q *Queries) ListHighlightsByTag(ctx context.Context, tagID string) ([]High
 			&i.Body,
 			&i.Metadata,
 			&i.Pinned,
+			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -2279,7 +2361,7 @@ func (q *Queries) ListHighlightsByTag(ctx context.Context, tagID string) ([]High
 }
 
 const listHighlightsSince = `-- name: ListHighlightsSince :many
-SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, created_at, updated_at, rev, deleted_at FROM highlights WHERE updated_at > ? ORDER BY updated_at ASC
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, archived_at, created_at, updated_at, rev, deleted_at FROM highlights WHERE updated_at > ? ORDER BY updated_at ASC
 `
 
 func (q *Queries) ListHighlightsSince(ctx context.Context, updatedAt string) ([]Highlight, error) {
@@ -2300,6 +2382,7 @@ func (q *Queries) ListHighlightsSince(ctx context.Context, updatedAt string) ([]
 			&i.Body,
 			&i.Metadata,
 			&i.Pinned,
+			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,

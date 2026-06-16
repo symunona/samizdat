@@ -17,6 +17,7 @@ import { v5 as uuidv5 } from 'uuid'
 import {
   fetchJobsPage, fetchDocuments, retryJob, clearCompletedJobs,
   resumeJob, resumeAllJobs, deleteJob, clearQueuedJobs,
+  queueFeedPipelines, queueDocumentPipelines,
 } from '../../src/api'
 import type { Job, Document } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
@@ -126,6 +127,7 @@ export default function JobsScreen() {
   const [clearingQueue, setClearingQueue] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [queueingPipelinesId, setQueueingPipelinesId] = useState<string | null>(null)
 
   const enabled = status === 'connected' && !!activeUrl && !!token
 
@@ -253,6 +255,40 @@ export default function JobsScreen() {
       setClearingQueue(false)
       await refetch()
     }
+  }
+
+  async function handleQueueFeedPipelines(job: Job, feedId: string) {
+    if (!activeUrl || !token || queueingPipelinesId) return
+    setQueueingPipelinesId(job.id)
+    try {
+      const result = await queueFeedPipelines(activeUrl, token, feedId, true)
+      toast(
+        result.queued > 0
+          ? `Queued ${result.queued} pipeline job${result.queued === 1 ? '' : 's'} (paused)${result.skipped > 0 ? `, ${result.skipped} skipped` : ''}`
+          : `No new pipeline jobs (${result.skipped} already active)`,
+        result.queued > 0 ? 'success' : 'info',
+      )
+      await refetch()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to queue pipelines', 'error')
+    } finally { setQueueingPipelinesId(null) }
+  }
+
+  async function handleQueueDocPipelines(job: Job, docId: string) {
+    if (!activeUrl || !token || queueingPipelinesId) return
+    setQueueingPipelinesId(job.id)
+    try {
+      const result = await queueDocumentPipelines(activeUrl, token, docId, true)
+      toast(
+        result.queued > 0
+          ? `Queued ${result.queued} pipeline job${result.queued === 1 ? '' : 's'} (paused)${result.skipped > 0 ? `, ${result.skipped} skipped` : ''}`
+          : `No new pipeline jobs (${result.skipped} already active)`,
+        result.queued > 0 ? 'success' : 'info',
+      )
+      await refetch()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to queue pipelines', 'error')
+    } finally { setQueueingPipelinesId(null) }
   }
 
   function toggleCollapse(id: string) {
@@ -397,6 +433,18 @@ export default function JobsScreen() {
             {deviceName ? `Manual — ${deviceName}` : 'Manual'}
           </Text>
         )}
+        {job.kind === 'scrape_url' && job.status === 'done' && !!docId && (
+          <Pressable
+            style={({ pressed }) => [s.queuePipelinesBtn, (queueingPipelinesId === job.id || pressed) && s.queuePipelinesBtnPressed]}
+            onPress={() => handleQueueDocPipelines(job, docId)}
+            disabled={!!queueingPipelinesId}
+          >
+            {queueingPipelinesId === job.id
+              ? <ActivityIndicator size="small" color="#a78bfa" />
+              : <Text style={s.queuePipelinesBtnText}>▶ Queue Pipelines</Text>
+            }
+          </Pressable>
+        )}
 
         {/* other job kinds: external URL */}
         {job.kind !== 'scrape_url' && !!payloadUrl && (
@@ -419,6 +467,18 @@ export default function JobsScreen() {
               : <Text style={[s.resultText, { color: '#4ade80' }]}>{newItems} new</Text>
             }
           </View>
+        )}
+        {job.kind === 'poll_feed' && job.status === 'done' && discovered > 0 && !!feedId && (
+          <Pressable
+            style={({ pressed }) => [s.queuePipelinesBtn, (queueingPipelinesId === job.id || pressed) && s.queuePipelinesBtnPressed]}
+            onPress={() => handleQueueFeedPipelines(job, feedId)}
+            disabled={!!queueingPipelinesId}
+          >
+            {queueingPipelinesId === job.id
+              ? <ActivityIndicator size="small" color="#a78bfa" />
+              : <Text style={s.queuePipelinesBtnText}>▶ Queue Pipelines</Text>
+            }
+          </Pressable>
         )}
 
         {/* run_pipeline */}
@@ -646,6 +706,9 @@ function buildStyles(t: Theme) {
     retryBtn: { alignSelf: 'flex-start', marginTop: t.spacing.sm, backgroundColor: t.colors.accent, borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 5, minWidth: 64, alignItems: 'center' },
     retryBtnPressed: { opacity: 0.75 },
     retryBtnText: { color: t.colors.background, fontSize: 12, fontWeight: '700' },
+    queuePipelinesBtn: { alignSelf: 'flex-start', marginTop: t.spacing.sm, borderWidth: 1, borderColor: '#a78bfa', borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 5, minWidth: 120, alignItems: 'center' },
+    queuePipelinesBtnPressed: { opacity: 0.6 },
+    queuePipelinesBtnText: { color: '#a78bfa', fontSize: 12, fontWeight: '600', fontFamily: 'monospace' },
     pausedActions: { flexDirection: 'row', gap: t.spacing.sm, marginTop: t.spacing.sm },
     resumeBtn: { backgroundColor: '#a78bfa', borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 5, minWidth: 72, alignItems: 'center' },
     resumeBtnPressed: { opacity: 0.75 },
