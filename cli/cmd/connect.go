@@ -98,8 +98,8 @@ func runConnect(_ *cobra.Command, _ []string) error {
 	fmt.Printf("  %s\n", connectStr)
 	fmt.Println()
 
-	// Terminal QR (ASCII art)
-	qrterminal.GenerateWithConfig(string(payload), qrterminal.Config{
+	// Terminal QR (ASCII art) — encode connectStr (base64) so app parseConnectString works
+	qrterminal.GenerateWithConfig(connectStr, qrterminal.Config{
 		Level:     qrterminal.L,
 		Writer:    os.Stdout,
 		BlackChar: qrterminal.BLACK,
