@@ -189,6 +189,7 @@ export default function DocumentViewer() {
   // Tag selector modal state
   const [tagModalVisible, setTagModalVisible] = useState(false)
   const [tagTargetId, setTagTargetId] = useState<string>('')
+  const [tagTargetType, setTagTargetType] = useState<'document' | 'annotation' | 'highlight'>('annotation')
 
   // Link action modal state
   const [linkUrl, setLinkUrl] = useState<string | null>(null)
@@ -197,8 +198,23 @@ export default function DocumentViewer() {
 
   const handleOpenTagModal = useCallback((annotationId: string) => {
     setTagTargetId(annotationId)
+    setTagTargetType('annotation')
     setAnnVisible(false)
     setTagModalVisible(true)
+  }, [])
+
+  const handleOpenDocTags = useCallback(() => {
+    if (!id) return
+    setTagTargetId(id)
+    setTagTargetType('document')
+    setTagModalVisible(true)
+  }, [id])
+
+  const handleAddDocNote = useCallback(() => {
+    setPendingSelection({ exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 })
+    setAnnMode('create')
+    setExistingAnnotation(undefined)
+    setAnnVisible(true)
   }, [])
 
   const load = useCallback(async () => {
@@ -388,10 +404,11 @@ export default function DocumentViewer() {
     if (!activeUrl || !token) return
     setAnnVisible(false)
     try {
-      if (annMode === 'create' && pendingSelection) {
-        const ann = await createAnnotation(activeUrl, token, id, { ...pendingSelection, ...data })
+      if (annMode === 'create') {
+        const sel = pendingSelection ?? { exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 }
+        const ann = await createAnnotation(activeUrl, token, id, { ...sel, ...data })
         setAnnotations(prev => [...prev, ann])
-        injectAddMark(ann)
+        if (sel.exact) injectAddMark(ann)
       } else if (annMode === 'edit' && existingAnnotation) {
         const ann = await updateAnnotation(activeUrl, token, existingAnnotation.id, data)
         setAnnotations(prev => prev.map(a => a.id === ann.id ? ann : a))
@@ -489,6 +506,19 @@ export default function DocumentViewer() {
           <Text style={s.headerTitle} numberOfLines={1}>{doc.title || doc.canonical_url}</Text>
         )}
         {doc && (
+          <View style={s.headerActions}>
+            <Pressable onPress={handleAddDocNote} style={s.headerNoteBtn} hitSlop={8}>
+              <Text style={s.headerNoteBtnText}>✏ Note</Text>
+            </Pressable>
+            <Pressable onPress={handleOpenDocTags} style={s.headerTagBtn} hitSlop={8}>
+              <Text style={s.headerTagBtnText}># Tags</Text>
+            </Pressable>
+            <Pressable onPress={() => setDeleteConfirm(true)} style={s.headerDeleteBtn} hitSlop={8}>
+              <Text style={s.headerDeleteBtnText}>🗑</Text>
+            </Pressable>
+          </View>
+        )}
+        {doc && (
           <Pressable onPress={openInWeb} style={s.openWebBtn} hitSlop={12}>
             <Ionicons name="open-outline" size={22} color={theme.colors.accent} />
           </Pressable>
@@ -553,9 +583,29 @@ export default function DocumentViewer() {
       <TagSelectorModal
         visible={tagModalVisible}
         objectId={tagTargetId}
-        objectType="annotation"
+        objectType={tagTargetType}
         onClose={() => setTagModalVisible(false)}
       />
+
+      {deleteConfirm && !metaVisible && (
+        <Pressable style={s.linkOverlay} onPress={() => { if (!deleting) setDeleteConfirm(false) }}>
+          <Pressable style={s.linkSheet} onPress={e => e.stopPropagation()}>
+            <Text style={s.linkHost}>Delete document?</Text>
+            <Text style={s.linkHref}>This document won't be scraped again.</Text>
+            <Pressable
+              style={[s.linkBtn, s.deleteConfirmBtn, deleting && s.btnDisabled]}
+              onPress={handleDeleteDocument}
+              disabled={deleting}
+            >
+              {deleting ? <ActivityIndicator size="small" color="#fff" /> : null}
+              <Text style={s.deleteConfirmBtnText}>{deleting ? 'Deleting…' : 'Confirm delete'}</Text>
+            </Pressable>
+            <Pressable style={s.linkBtnCancel} onPress={() => setDeleteConfirm(false)} disabled={deleting}>
+              <Text style={s.linkBtnCancelText}>Cancel</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      )}
 
       {linkUrl && (
         <Pressable style={s.linkOverlay} onPress={() => { if (!linkScraping) setLinkUrl(null) }}>
@@ -696,9 +746,39 @@ function buildStyles(t: Theme) {
     backBtn: { flexShrink: 0, padding: t.spacing.sm },
     backText: { color: t.colors.accent, fontSize: 20, fontWeight: '400' },
     headerTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '600' },
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
+    headerNoteBtn: {
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 6,
+      backgroundColor: t.colors.accent,
+    },
+    headerNoteBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+    headerTagBtn: {
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 6,
+      backgroundColor: t.colors.background,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+    },
+    headerTagBtnText: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
+    headerDeleteBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: 6,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: t.colors.background,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+    },
+    headerDeleteBtnText: { fontSize: 14, color: t.colors.muted },
     openWebBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuText: { color: t.colors.text, fontSize: 22, fontWeight: '400', lineHeight: 24 },
+    deleteConfirmBtn: { backgroundColor: '#b91c1c' },
+    deleteConfirmBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
     centered: { flex: 1, marginTop: 56, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
     errorText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
