@@ -2,7 +2,7 @@
 created: 2026-06-16
 topic: Paused jobs for manual poll — preview before scraping
 excerpt: Manual "Poll Now" creates child scrape_url jobs in `paused` state so the user can review/resume/delete before execution. Scheduled auto-poll continues to create normal (queued) jobs. Duplicate prevention: if a paused job already exists for a URL, the automated poll skips it.
-status: draft
+status: done
 ---
 
 # Paused Jobs — Manual Poll Preview
