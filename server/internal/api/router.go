@@ -48,6 +48,10 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("GET /api/v1/jobs", bearerAuth(q, jobsH.list))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", bearerAuth(q, jobsH.get))
 	mux.HandleFunc("DELETE /api/v1/jobs", bearerAuth(q, jobsH.clearCompleted))
+	mux.HandleFunc("DELETE /api/v1/jobs/queued", bearerAuth(q, jobsH.clearQueued))
+	// resume-all must be registered before {id}/resume so the literal path takes priority
+	mux.HandleFunc("POST /api/v1/jobs/resume-all", bearerAuth(q, jobsH.resumeAll))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/resume", bearerAuth(q, jobsH.resume))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", bearerAuth(q, jobsH.retry))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", bearerAuth(q, jobsH.softDelete))
 

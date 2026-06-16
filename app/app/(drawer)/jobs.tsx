@@ -14,16 +14,20 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { useUnistyles } from 'react-native-unistyles'
 import { v5 as uuidv5 } from 'uuid'
-import { fetchJobsPage, fetchDocuments, retryJob, clearCompletedJobs } from '../../src/api'
+import {
+  fetchJobsPage, fetchDocuments, retryJob, clearCompletedJobs,
+  resumeJob, resumeAllJobs, deleteJob, clearQueuedJobs,
+} from '../../src/api'
 import type { Job, Document } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
 import { useToast } from '../../src/ToastContext'
 
-const STATUS_FILTERS = ['all', 'queued', 'running', 'dead', 'done'] as const
+const STATUS_FILTERS = ['all', 'queued', 'paused', 'running', 'dead', 'done'] as const
 type Filter = (typeof STATUS_FILTERS)[number]
 
 const STATUS_COLOR: Record<string, string> = {
   queued:  '#facc15',
+  paused:  '#a78bfa',
   running: '#60a5fa',
   done:    '#4ade80',
   dead:    '#f87171',
@@ -116,6 +120,10 @@ export default function JobsScreen() {
   const [docMap, setDocMap] = useState<Map<string, Document>>(new Map())
   const [filter, setFilter] = useState<Filter>('all')
   const [retryingId, setRetryingId] = useState<string | null>(null)
+  const [resumingId, setResumingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [resumingAll, setResumingAll] = useState(false)
+  const [clearingQueue, setClearingQueue] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
@@ -195,6 +203,56 @@ export default function JobsScreen() {
       await refetch()
     } catch { /* ignore */ }
     finally { setRetryingId(null) }
+  }
+
+  async function handleResume(job: Job) {
+    if (!activeUrl || !token || resumingId) return
+    setResumingId(job.id)
+    try {
+      await resumeJob(activeUrl, token, job.id)
+      await refetch()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to resume', 'error')
+    } finally { setResumingId(null) }
+  }
+
+  async function handleDelete(job: Job) {
+    if (!activeUrl || !token || deletingId) return
+    setDeletingId(job.id)
+    try {
+      await deleteJob(activeUrl, token, job.id)
+      await refetch()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to delete', 'error')
+    } finally { setDeletingId(null) }
+  }
+
+  async function handleResumeAll() {
+    if (!activeUrl || !token || resumingAll) return
+    setResumingAll(true)
+    try {
+      await resumeAllJobs(activeUrl, token)
+      toast('All paused jobs resumed', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to resume all', 'error')
+    } finally {
+      setResumingAll(false)
+      await refetch()
+    }
+  }
+
+  async function handleClearQueue() {
+    if (!activeUrl || !token || clearingQueue) return
+    setClearingQueue(true)
+    try {
+      const n = await clearQueuedJobs(activeUrl, token)
+      toast(n > 0 ? `Cleared ${n} queued job${n === 1 ? '' : 's'}` : 'Queue already empty', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to clear queue', 'error')
+    } finally {
+      setClearingQueue(false)
+      await refetch()
+    }
   }
 
   function toggleCollapse(id: string) {
@@ -422,6 +480,30 @@ export default function JobsScreen() {
             }
           </Pressable>
         )}
+        {job.status === 'paused' && (
+          <View style={s.pausedActions}>
+            <Pressable
+              style={({ pressed }) => [s.resumeBtn, (resumingId === job.id || pressed) && s.resumeBtnPressed]}
+              onPress={() => handleResume(job)}
+              disabled={!!resumingId || !!deletingId}
+            >
+              {resumingId === job.id
+                ? <ActivityIndicator size="small" color="#0b0b0c" />
+                : <Text style={s.resumeBtnText}>Resume</Text>
+              }
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [s.deletePausedBtn, (deletingId === job.id || pressed) && s.deletePausedBtnPressed]}
+              onPress={() => handleDelete(job)}
+              disabled={!!resumingId || !!deletingId}
+            >
+              {deletingId === job.id
+                ? <ActivityIndicator size="small" color="#f87171" />
+                : <Text style={s.deletePausedBtnText}>Delete</Text>
+              }
+            </Pressable>
+          </View>
+        )}
       </View>
     )
   }
@@ -445,16 +527,38 @@ export default function JobsScreen() {
             </Pressable>
           ))}
         </View>
-        <Pressable
-          style={({ pressed }) => [s.clearBtn, (clearing || pressed) && s.clearBtnPressed]}
-          onPress={handleClear}
-          disabled={clearing}
-        >
-          {clearing
-            ? <ActivityIndicator size="small" color="#f87171" />
-            : <Text style={s.clearBtnText}>clear</Text>
-          }
-        </Pressable>
+        <View style={s.bulkActions}>
+          <Pressable
+            style={({ pressed }) => [s.clearBtn, (resumingAll || pressed) && s.clearBtnPressed]}
+            onPress={handleResumeAll}
+            disabled={resumingAll}
+          >
+            {resumingAll
+              ? <ActivityIndicator size="small" color="#a78bfa" />
+              : <Text style={s.resumeAllBtnText}>resume all</Text>
+            }
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [s.clearBtn, (clearingQueue || pressed) && s.clearBtnPressed]}
+            onPress={handleClearQueue}
+            disabled={clearingQueue}
+          >
+            {clearingQueue
+              ? <ActivityIndicator size="small" color="#facc15" />
+              : <Text style={s.clearQueueBtnText}>clr queue</Text>
+            }
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [s.clearBtn, (clearing || pressed) && s.clearBtnPressed]}
+            onPress={handleClear}
+            disabled={clearing}
+          >
+            {clearing
+              ? <ActivityIndicator size="small" color="#f87171" />
+              : <Text style={s.clearBtnText}>clear done</Text>
+            }
+          </Pressable>
+        </View>
       </View>
 
       {isLoading && !isRefetching
@@ -542,6 +646,16 @@ function buildStyles(t: Theme) {
     retryBtn: { alignSelf: 'flex-start', marginTop: t.spacing.sm, backgroundColor: t.colors.accent, borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 5, minWidth: 64, alignItems: 'center' },
     retryBtnPressed: { opacity: 0.75 },
     retryBtnText: { color: t.colors.background, fontSize: 12, fontWeight: '700' },
+    pausedActions: { flexDirection: 'row', gap: t.spacing.sm, marginTop: t.spacing.sm },
+    resumeBtn: { backgroundColor: '#a78bfa', borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 5, minWidth: 72, alignItems: 'center' },
+    resumeBtnPressed: { opacity: 0.75 },
+    resumeBtnText: { color: '#0b0b0c', fontSize: 12, fontWeight: '700' },
+    deletePausedBtn: { borderWidth: 1, borderColor: t.colors.error, borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 5, minWidth: 64, alignItems: 'center' },
+    deletePausedBtnPressed: { opacity: 0.75 },
+    deletePausedBtnText: { color: t.colors.error, fontSize: 12, fontWeight: '600' },
+    bulkActions: { flexDirection: 'row', alignItems: 'center' },
+    resumeAllBtnText: { color: '#a78bfa', fontSize: 12, fontFamily: 'monospace', fontWeight: '600' },
+    clearQueueBtnText: { color: '#facc15', fontSize: 12, fontFamily: 'monospace', fontWeight: '600' },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
     errText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     reloadBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },

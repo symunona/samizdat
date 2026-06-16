@@ -199,9 +199,40 @@ SELECT * FROM feed_items WHERE id = ? AND deleted_at IS NULL LIMIT 1;
 -- name: UpdateFeedItemStatus :exec
 UPDATE feed_items SET status = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
+-- name: InsertJobPaused :one
+INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, parent_job_id)
+VALUES (?, ?, ?, 'paused', 0, ?, ?, ?, 0, ?)
+RETURNING *;
+
+-- name: ResumeJob :exec
+UPDATE jobs SET status = 'queued', run_after = ?, updated_at = ?, rev = rev + 1
+WHERE id = ? AND status = 'paused';
+
+-- name: ResumeAllPausedJobs :exec
+UPDATE jobs SET status = 'queued', run_after = ?, updated_at = ?, rev = rev + 1
+WHERE status = 'paused' AND deleted_at IS NULL;
+
+-- name: CountActiveScrapeJobsForURL :one
+SELECT COUNT(*) FROM jobs
+WHERE kind = 'scrape_url'
+  AND json_extract(payload, '$.url') = ?
+  AND status IN ('queued', 'running', 'paused')
+  AND deleted_at IS NULL;
+
+-- name: CountActivePollFeedJobsForFeed :one
+SELECT COUNT(*) FROM jobs
+WHERE kind = 'poll_feed'
+  AND json_extract(payload, '$.feed_id') = ?
+  AND status IN ('queued', 'running')
+  AND deleted_at IS NULL;
+
 -- name: ClearCompletedJobs :execresult
 UPDATE jobs SET deleted_at = ?, updated_at = ?
-WHERE status IN ('done', 'dead', 'queued') AND deleted_at IS NULL;
+WHERE status IN ('done', 'dead', 'paused') AND deleted_at IS NULL;
+
+-- name: ClearQueuedJobs :execresult
+UPDATE jobs SET deleted_at = ?, updated_at = ?
+WHERE status = 'queued' AND deleted_at IS NULL;
 
 -- name: ListJobs :many
 SELECT * FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100;

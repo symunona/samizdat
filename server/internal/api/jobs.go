@@ -286,6 +286,53 @@ func (h *jobsHandler) clearCompleted(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int64{"cleared": n})
 }
 
+// POST /api/v1/jobs/{id}/resume — set paused job back to queued.
+func (h *jobsHandler) resume(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := h.q.ResumeJob(r.Context(), store.ResumeJobParams{
+		RunAfter:  now,
+		UpdatedAt: now,
+		ID:        id,
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
+}
+
+// POST /api/v1/jobs/resume-all — set all paused jobs back to queued.
+func (h *jobsHandler) resumeAll(w http.ResponseWriter, r *http.Request) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := h.q.ResumeAllPausedJobs(r.Context(), store.ResumeAllPausedJobsParams{
+		RunAfter:  now,
+		UpdatedAt: now,
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// DELETE /api/v1/jobs/queued — soft-delete all queued jobs.
+func (h *jobsHandler) clearQueued(w http.ResponseWriter, r *http.Request) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := h.q.ClearQueuedJobs(r.Context(), store.ClearQueuedJobsParams{
+		DeletedAt: &now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	n, _ := res.RowsAffected()
+	writeJSON(w, http.StatusOK, map[string]int64{"cleared": n})
+}
+
 // DELETE /api/v1/jobs/{id} — soft delete.
 func (h *jobsHandler) softDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

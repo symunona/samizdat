@@ -65,7 +65,7 @@ func (q *Queries) ClaimNextJob(ctx context.Context, arg ClaimNextJobParams) (Job
 
 const clearCompletedJobs = `-- name: ClearCompletedJobs :execresult
 UPDATE jobs SET deleted_at = ?, updated_at = ?
-WHERE status IN ('done', 'dead', 'queued') AND deleted_at IS NULL
+WHERE status IN ('done', 'dead', 'paused') AND deleted_at IS NULL
 `
 
 type ClearCompletedJobsParams struct {
@@ -75,6 +75,50 @@ type ClearCompletedJobsParams struct {
 
 func (q *Queries) ClearCompletedJobs(ctx context.Context, arg ClearCompletedJobsParams) (sql.Result, error) {
 	return q.db.ExecContext(ctx, clearCompletedJobs, arg.DeletedAt, arg.UpdatedAt)
+}
+
+const clearQueuedJobs = `-- name: ClearQueuedJobs :execresult
+UPDATE jobs SET deleted_at = ?, updated_at = ?
+WHERE status = 'queued' AND deleted_at IS NULL
+`
+
+type ClearQueuedJobsParams struct {
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
+func (q *Queries) ClearQueuedJobs(ctx context.Context, arg ClearQueuedJobsParams) (sql.Result, error) {
+	return q.db.ExecContext(ctx, clearQueuedJobs, arg.DeletedAt, arg.UpdatedAt)
+}
+
+const countActivePollFeedJobsForFeed = `-- name: CountActivePollFeedJobsForFeed :one
+SELECT COUNT(*) FROM jobs
+WHERE kind = 'poll_feed'
+  AND json_extract(payload, '$.feed_id') = ?
+  AND status IN ('queued', 'running')
+  AND deleted_at IS NULL
+`
+
+func (q *Queries) CountActivePollFeedJobsForFeed(ctx context.Context, payload string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countActivePollFeedJobsForFeed, payload)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countActiveScrapeJobsForURL = `-- name: CountActiveScrapeJobsForURL :one
+SELECT COUNT(*) FROM jobs
+WHERE kind = 'scrape_url'
+  AND json_extract(payload, '$.url') = ?
+  AND status IN ('queued', 'running', 'paused')
+  AND deleted_at IS NULL
+`
+
+func (q *Queries) CountActiveScrapeJobsForURL(ctx context.Context, payload string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countActiveScrapeJobsForURL, payload)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countJobs = `-- name: CountJobs :one
@@ -1080,6 +1124,51 @@ type InsertJobParams struct {
 
 func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, error) {
 	row := q.db.QueryRowContext(ctx, insertJob,
+		arg.ID,
+		arg.Kind,
+		arg.Payload,
+		arg.RunAfter,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.ParentJobID,
+	)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Payload,
+		&i.Status,
+		&i.Attempts,
+		&i.RunAfter,
+		&i.LastError,
+		&i.Result,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+		&i.ParentJobID,
+	)
+	return i, err
+}
+
+const insertJobPaused = `-- name: InsertJobPaused :one
+INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, parent_job_id)
+VALUES (?, ?, ?, 'paused', 0, ?, ?, ?, 0, ?)
+RETURNING id, kind, payload, status, attempts, run_after, last_error, result, created_at, updated_at, rev, deleted_at, parent_job_id
+`
+
+type InsertJobPausedParams struct {
+	ID          string  `json:"id"`
+	Kind        string  `json:"kind"`
+	Payload     string  `json:"payload"`
+	RunAfter    string  `json:"run_after"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
+	ParentJobID *string `json:"parent_job_id"`
+}
+
+func (q *Queries) InsertJobPaused(ctx context.Context, arg InsertJobPausedParams) (Job, error) {
+	row := q.db.QueryRowContext(ctx, insertJobPaused,
 		arg.ID,
 		arg.Kind,
 		arg.Payload,
@@ -3302,6 +3391,37 @@ type ResetStuckJobsParams struct {
 // older than that are considered stuck (crashed worker, lost context, hung HTTP call).
 func (q *Queries) ResetStuckJobs(ctx context.Context, arg ResetStuckJobsParams) error {
 	_, err := q.db.ExecContext(ctx, resetStuckJobs, arg.RunAfter, arg.UpdatedAt, arg.UpdatedAt_2)
+	return err
+}
+
+const resumeAllPausedJobs = `-- name: ResumeAllPausedJobs :exec
+UPDATE jobs SET status = 'queued', run_after = ?, updated_at = ?, rev = rev + 1
+WHERE status = 'paused' AND deleted_at IS NULL
+`
+
+type ResumeAllPausedJobsParams struct {
+	RunAfter  string `json:"run_after"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func (q *Queries) ResumeAllPausedJobs(ctx context.Context, arg ResumeAllPausedJobsParams) error {
+	_, err := q.db.ExecContext(ctx, resumeAllPausedJobs, arg.RunAfter, arg.UpdatedAt)
+	return err
+}
+
+const resumeJob = `-- name: ResumeJob :exec
+UPDATE jobs SET status = 'queued', run_after = ?, updated_at = ?, rev = rev + 1
+WHERE id = ? AND status = 'paused'
+`
+
+type ResumeJobParams struct {
+	RunAfter  string `json:"run_after"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) ResumeJob(ctx context.Context, arg ResumeJobParams) error {
+	_, err := q.db.ExecContext(ctx, resumeJob, arg.RunAfter, arg.UpdatedAt, arg.ID)
 	return err
 }
 

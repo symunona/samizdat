@@ -278,8 +278,12 @@ export async function deleteSubscription(serverUrl: string, token: string, id: s
   if (!res.ok) throw new ApiError(res.status, `delete subscription failed: HTTP ${res.status}`)
 }
 
-export async function pollSubscriptionNow(serverUrl: string, token: string, id: string): Promise<{ job_id: string }> {
-  const res = await fetch(`${base(serverUrl)}/api/v1/subscriptions/${encodeURIComponent(id)}/poll`, {
+export async function pollSubscriptionNow(
+  serverUrl: string, token: string, id: string,
+  opts: { hold?: boolean } = {},
+): Promise<{ job_id: string }> {
+  const qs = opts.hold ? '?hold=true' : ''
+  const res = await fetch(`${base(serverUrl)}/api/v1/subscriptions/${encodeURIComponent(id)}/poll${qs}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   })
@@ -292,7 +296,7 @@ export type Job = {
   id: string
   kind: string
   payload: string
-  status: 'queued' | 'running' | 'done' | 'dead'
+  status: 'queued' | 'running' | 'done' | 'dead' | 'paused'
   attempts: number
   run_after: string
   last_error: string
@@ -343,6 +347,40 @@ export async function retryJob(serverUrl: string, token: string, id: string): Pr
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) throw new ApiError(res.status, `retry job failed: HTTP ${res.status}`)
+}
+
+export async function resumeJob(serverUrl: string, token: string, id: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs/${encodeURIComponent(id)}/resume`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `resume job failed: HTTP ${res.status}`)
+}
+
+export async function resumeAllJobs(serverUrl: string, token: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs/resume-all`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `resume-all failed: HTTP ${res.status}`)
+}
+
+export async function deleteJob(serverUrl: string, token: string, id: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `delete job failed: HTTP ${res.status}`)
+}
+
+export async function clearQueuedJobs(serverUrl: string, token: string): Promise<number> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs/queued`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `clear queued jobs failed: HTTP ${res.status}`)
+  const data = await res.json() as { cleared: number }
+  return data.cleared
 }
 
 export async function clearCompletedJobs(serverUrl: string, token: string): Promise<number> {

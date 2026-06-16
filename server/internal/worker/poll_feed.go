@@ -14,6 +14,7 @@ import (
 type pollFeedPayload struct {
 	FeedID  string `json:"feed_id"`
 	FeedURL string `json:"feed_url,omitempty"`
+	Manual  bool   `json:"manual,omitempty"`
 }
 
 func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, reg extractor.Registry) (string, error) {
@@ -78,6 +79,15 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 		// Only enqueue scrape for newly inserted items (rev == 0 means first insert,
 		// status == "pending" means not yet scraped).
 		if item.Status == "pending" && item.Rev == 0 {
+			// Dedup: skip if an active (queued/running/paused) scrape_url job already exists for this URL.
+			activeCount, countErr := q.CountActiveScrapeJobsForURL(ctx, u)
+			if countErr != nil {
+				logPollFeed.Errorf("count active scrape jobs for %s: %v", u, countErr)
+			} else if activeCount > 0 {
+				logPollFeed.Printf("skipping scrape_url for %s: active job already exists", u)
+				continue
+			}
+
 			feedID := feed.ID
 			itemPayload, _ := json.Marshal(struct {
 				URL     string  `json:"url"`
@@ -85,20 +95,39 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 				FeedURL string  `json:"feed_url,omitempty"`
 			}{URL: u, FeedID: &feedID, FeedURL: feed.Url})
 			parentID := job.ID
-			_, err = q.InsertJob(ctx, store.InsertJobParams{
-				ID:          uuid.NewString(),
-				Kind:        "scrape_url",
-				Payload:     string(itemPayload),
-				RunAfter:    now,
-				CreatedAt:   now,
-				UpdatedAt:   now,
-				ParentJobID: &parentID,
-			})
-			if err != nil {
-				logPollFeed.Errorf("enqueue scrape_url for %s: %v", u, err)
+
+			if p.Manual {
+				_, err = q.InsertJobPaused(ctx, store.InsertJobPausedParams{
+					ID:          uuid.NewString(),
+					Kind:        "scrape_url",
+					Payload:     string(itemPayload),
+					RunAfter:    now,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+					ParentJobID: &parentID,
+				})
+				if err != nil {
+					logPollFeed.Errorf("enqueue paused scrape_url for %s: %v", u, err)
+				} else {
+					logPollFeed.Printf("enqueued paused scrape_url (hold): %s", u)
+					newCount++
+				}
 			} else {
-				logPollFeed.Printf("enqueued scrape_url: %s", u)
-				newCount++
+				_, err = q.InsertJob(ctx, store.InsertJobParams{
+					ID:          uuid.NewString(),
+					Kind:        "scrape_url",
+					Payload:     string(itemPayload),
+					RunAfter:    now,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+					ParentJobID: &parentID,
+				})
+				if err != nil {
+					logPollFeed.Errorf("enqueue scrape_url for %s: %v", u, err)
+				} else {
+					logPollFeed.Printf("enqueued scrape_url: %s", u)
+					newCount++
+				}
 			}
 		}
 	}

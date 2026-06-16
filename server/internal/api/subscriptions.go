@@ -151,6 +151,7 @@ func (h *subscriptionsHandler) listFeeds(w http.ResponseWriter, r *http.Request)
 }
 
 // POST /api/v1/subscriptions/{id}/poll — enqueue immediate poll_feed job.
+// Query param ?hold=true creates child scrape_url jobs in paused state.
 func (h *subscriptionsHandler) poll(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -162,12 +163,26 @@ func (h *subscriptionsHandler) poll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "subscription not found")
 		return
 	}
+
+	// Dedup: reject if an active poll_feed job already exists for this feed.
+	activeCount, err := h.q.CountActivePollFeedJobsForFeed(r.Context(), sub.FeedID)
+	if err == nil && activeCount > 0 {
+		writeErr(w, http.StatusConflict, "poll already pending")
+		return
+	}
+
+	hold := r.URL.Query().Get("hold") == "true"
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	feedURL := ""
 	if feed, err := h.q.GetFeed(r.Context(), sub.FeedID); err == nil {
 		feedURL = feed.Url
 	}
-	payload, _ := json.Marshal(map[string]string{"feed_id": sub.FeedID, "feed_url": feedURL})
+	payload, _ := json.Marshal(map[string]interface{}{
+		"feed_id":  sub.FeedID,
+		"feed_url": feedURL,
+		"manual":   hold,
+	})
 	job, err := h.q.InsertJob(r.Context(), store.InsertJobParams{
 		ID:        uuid.NewString(),
 		Kind:      "poll_feed",

@@ -62,6 +62,7 @@ export default function SubscriptionsScreen() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [pollingId, setPollingId] = useState<string | null>(null)
+  const [holdPollingId, setHoldPollingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
 
@@ -109,13 +110,23 @@ export default function SubscriptionsScreen() {
   }
 
   async function handlePoll(sub: SubWithFeed) {
-    if (!activeUrl || !token || pollingId) return
+    if (!activeUrl || !token || pollingId || holdPollingId) return
     setPollingId(sub.id)
     try {
       await pollSubscriptionNow(activeUrl, token, sub.id)
       setTimeout(() => load(), 1500)
     } catch { /* ignore */ }
     finally { setTimeout(() => setPollingId(null), 2000) }
+  }
+
+  async function handlePollHold(sub: SubWithFeed) {
+    if (!activeUrl || !token || pollingId || holdPollingId) return
+    setHoldPollingId(sub.id)
+    try {
+      await pollSubscriptionNow(activeUrl, token, sub.id, { hold: true })
+      setTimeout(() => load(), 1500)
+    } catch { /* ignore */ }
+    finally { setTimeout(() => setHoldPollingId(null), 2000) }
   }
 
   async function handleTogglePaused(sub: SubWithFeed) {
@@ -142,9 +153,11 @@ export default function SubscriptionsScreen() {
     const url = item.feed?.url ?? item.feed_id
     const domain = (() => { try { return new URL(url).hostname } catch { return url } })()
     const isPollBusy = pollingId === item.id
+    const isHoldPollBusy = holdPollingId === item.id
     const isDeleteBusy = deletingId === item.id
     const isToggleBusy = togglingId === item.id
     const isPaused = item.paused !== 0
+    const anyPollBusy = !!pollingId || !!holdPollingId
 
     return (
       <View style={[s.card, isPaused && s.cardPaused]}>
@@ -181,11 +194,21 @@ export default function SubscriptionsScreen() {
           <Pressable
             style={({ pressed }) => [s.actionBtn, s.pollBtn, (isPollBusy || pressed) && s.actionBtnPressed]}
             onPress={() => handlePoll(item)}
-            disabled={!!pollingId}
+            disabled={anyPollBusy}
           >
             {isPollBusy
               ? <ActivityIndicator size="small" color="#0b0b0c" />
-              : <Text style={s.pollBtnText}>Poll Now</Text>
+              : <Text style={s.pollBtnText}>Poll & Process</Text>
+            }
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [s.actionBtn, s.holdBtn, (isHoldPollBusy || pressed) && s.actionBtnPressed]}
+            onPress={() => handlePollHold(item)}
+            disabled={anyPollBusy}
+          >
+            {isHoldPollBusy
+              ? <ActivityIndicator size="small" color="#0b0b0c" />
+              : <Text style={s.holdBtnText}>Poll & Hold</Text>
             }
           </Pressable>
           <Pressable
@@ -300,6 +323,8 @@ function buildStyles(t: Theme) {
     actionBtnPressed: { opacity: 0.7 },
     pollBtn: { backgroundColor: t.colors.accent },
     pollBtnText: { color: t.colors.background, fontSize: 13, fontWeight: '600' },
+    holdBtn: { backgroundColor: '#a78bfa' },
+    holdBtnText: { color: '#0b0b0c', fontSize: 13, fontWeight: '600' },
     deleteBtn: { borderWidth: 1, borderColor: t.colors.error },
     deleteBtnText: { color: t.colors.error, fontSize: 13 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
