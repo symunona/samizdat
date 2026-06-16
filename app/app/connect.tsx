@@ -141,13 +141,20 @@ export default function ConnectScreen() {
             setStatus({ kind: "error", message: parsed.reason || "Invalid QR code" });
             return;
         }
-        const primaryUrl = parsed.urls[0] ?? defaultServerUrl();
+        // Keep existing URLs (e.g. sam.tmpx.space) as primary; append scanned IPs
+        const existing = splitUrls(url);
+        const merged = [...existing];
+        for (const u of parsed.urls) {
+            const full = /^https?:\/\//.test(u) ? u : `http://${u}`;
+            if (!merged.includes(full)) merged.push(full);
+        }
+        const primaryUrl = merged[0] ?? defaultServerUrl();
         setCode(parsed.code);
-        setUrl(primaryUrl);
+        setUrl(merged.join("\n"));
         setStatus({ kind: "connecting" });
         pair(primaryUrl, parsed.code, deviceName())
             .then(async (paired) => {
-                const serverUrls = mergeUrls(primaryUrl, paired.server_urls ?? []);
+                const serverUrls = mergeUrls(primaryUrl, [...merged.slice(1), ...(paired.server_urls ?? [])]);
                 await saveConnection({
                     token: paired.device_token,
                     deviceId: paired.device_id,
@@ -286,16 +293,29 @@ export default function ConnectScreen() {
 
                 <View style={s.divider} />
 
-                <Text style={s.label}>Server URL</Text>
+                <Text style={s.label}>Server URLs (one per line)</Text>
                 <TextInput
-                    style={s.input}
+                    style={[s.input, s.inputMulti]}
                     autoCapitalize="none"
                     autoCorrect={false}
-                    placeholder="https://samizdat.example.com"
+                    multiline
+                    numberOfLines={3}
+                    placeholder={"https://samizdat.example.com\nhttp://100.x.x.x:8765"}
                     placeholderTextColor={theme.colors.placeholder}
                     value={url}
                     onChangeText={setUrl}
                 />
+                {splitUrls(url).length > 1 && (
+                    <View style={s.chips}>
+                        {splitUrls(url).map((u, i) => (
+                            <View key={u} style={[s.chip, i === 0 && s.chipPrimary]}>
+                                <Text style={[s.chipText, i === 0 && s.chipTextPrimary]}>
+                                    {i === 0 ? "★ " : ""}{u}
+                                </Text>
+                            </View>
+                        ))}
+                    </View>
+                )}
 
                 <Text style={s.label}>Pairing code</Text>
                 <TextInput
@@ -388,6 +408,36 @@ function buildStyles(t: Theme) {
             paddingHorizontal: t.spacing.md,
             paddingVertical: 12,
             fontSize: 16,
+        },
+        inputMulti: {
+            minHeight: 72,
+            textAlignVertical: "top",
+        },
+        chips: {
+            flexDirection: "row",
+            flexWrap: "wrap",
+            gap: 6,
+            marginTop: 4,
+        },
+        chip: {
+            backgroundColor: t.colors.surface,
+            borderWidth: 1,
+            borderColor: t.colors.border,
+            borderRadius: 20,
+            paddingHorizontal: 10,
+            paddingVertical: 4,
+        },
+        chipPrimary: {
+            borderColor: t.colors.accent,
+            backgroundColor: t.colors.accent + "22",
+        },
+        chipText: {
+            color: t.colors.muted,
+            fontSize: 12,
+        },
+        chipTextPrimary: {
+            color: t.colors.accent,
+            fontWeight: "600",
         },
         button: {
             backgroundColor: t.colors.accent,
