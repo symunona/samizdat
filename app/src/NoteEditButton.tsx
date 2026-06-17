@@ -14,7 +14,7 @@ export default function NoteEditButton({ onPress, hitSlop = 8, size = 14 }: Prop
   const s = useMemo(() => buildStyles(theme), [theme])
   return (
     <Pressable onPress={onPress} style={s.btn} hitSlop={hitSlop}>
-      <Ionicons name="create-outline" size={size} color="#fff" />
+      <Ionicons name="create-outline" size={size} color={theme.colors.muted} />
     </Pressable>
   )
 }
@@ -26,7 +26,7 @@ function buildStyles(t: Theme) {
       paddingHorizontal: 8,
       paddingVertical: 5,
       borderRadius: 6,
-      backgroundColor: t.colors.accent,
+      backgroundColor: 'transparent',
     },
   })
 }
