@@ -118,7 +118,7 @@ export default function AnnotationPanel({ visible, mode, existing, onSave, onDel
               onPress={() => existing?.id && onTag?.(existing.id)}
               hitSlop={8}
             >
-              <Text style={s.iconBtnText}># Tags</Text>
+              <Text style={s.iconBtnText}>#</Text>
             </Pressable>
 
             <View style={s.spacer} />

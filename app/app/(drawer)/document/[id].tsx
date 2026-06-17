@@ -19,6 +19,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useUnistyles, UnistylesRuntime } from 'react-native-unistyles'
 import WebView from 'react-native-webview'
 import type { WebViewMessageEvent } from 'react-native-webview'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   fetchDocument,
   fetchReadingProgress,
@@ -31,16 +32,13 @@ import {
   lookupDocumentByURL,
   submitScrapeJob,
   fetchJob,
-  fetchPipelines,
   fetchDocumentHighlights,
-  fetchDocumentPipelineRuns,
-  deleteDocumentHighlights,
   deleteHighlight,
-  runPipelineOnDocument,
+  pinHighlight,
   fetchFeed,
   queueDocumentPipelines,
 } from '../../../src/api'
-import type { Document, Annotation, Pipeline, HighlightWithDoc, PipelineRun, Feed } from '../../../src/api'
+import type { Document, Annotation, HighlightWithDoc, Feed } from '../../../src/api'
 import { useConnection } from '../../../src/ConnectionContext'
 import { useToast } from '../../../src/ToastContext'
 import { saveTheme } from '../../../src/storage'
@@ -48,7 +46,7 @@ import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
 import TagSelectorModal from '../../../src/TagSelectorModal'
 import HighlightCard from '../../../src/HighlightCard'
-import { mdToHtml, buildDocumentHtml } from '../../../src/markdownToHtml'
+import { buildDocumentHtml } from '../../../src/markdownToHtml'
 import { useSyncStore } from '../../../src/store/syncStore'
 
 const DEBOUNCE_MS = 1000
@@ -87,26 +85,15 @@ export default function DocumentViewer() {
   const lastScrollFracRef = useRef(0)
   const isDocLoadedRef = useRef(false)
 
-  // Pipeline / Highlights state
-  const [pipelines, setPipelines] = useState<Pipeline[]>([])
+  // Highlights state
   const [highlights, setHighlights] = useState<HighlightWithDoc[]>([])
-  const [pipelineRuns, setPipelineRuns] = useState<PipelineRun[]>([])
-  const [hlLoading, setHlLoading] = useState(false)
-  const hlPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [hlExpanded, setHlExpanded] = useState(true)
 
-  const loadHighlights = useCallback(async () => {
-    if (!activeUrl || !token) return
-    try {
-      const [hl, runs, pls] = await Promise.all([
-        fetchDocumentHighlights(activeUrl, token, id),
-        fetchDocumentPipelineRuns(activeUrl, token, id),
-        fetchPipelines(activeUrl, token),
-      ])
-      setHighlights(hl)
-      setPipelineRuns(runs)
-      setPipelines(pls)
-    } catch { /* ignore */ }
-  }, [activeUrl, token, id])
+  useEffect(() => {
+    AsyncStorage.getItem(`doc_hl_exp_${id}`).then(val => {
+      if (val !== null) setHlExpanded(val === '1')
+    }).catch(() => {})
+  }, [id])
 
   const [sourceFeed, setSourceFeed] = useState<Feed | null>(null)
 
@@ -157,14 +144,9 @@ export default function DocumentViewer() {
     setDeleteConfirm(false)
     metaAnim.setValue(320)
     Animated.timing(metaAnim, { toValue: 0, duration: 220, useNativeDriver: true }).start()
-    loadHighlights()
-    // Poll every 3s while panel is open (for in-progress runs)
-    if (hlPollRef.current) clearInterval(hlPollRef.current)
-    hlPollRef.current = setInterval(loadHighlights, 3000)
-  }, [metaAnim, loadHighlights])
+  }, [metaAnim])
 
   const closeMetaPanel = useCallback(() => {
-    if (hlPollRef.current) { clearInterval(hlPollRef.current); hlPollRef.current = null }
     Animated.timing(metaAnim, { toValue: 320, duration: 180, useNativeDriver: true }).start(() => {
       setMetaVisible(false)
       setDeleteConfirm(false)
@@ -263,7 +245,6 @@ export default function DocumentViewer() {
     else if (status === 'disconnected') { setError('Not connected'); setLoading(false) }
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-      if (hlPollRef.current) clearInterval(hlPollRef.current)
     }
   }, [id, status, load])
 
@@ -498,26 +479,36 @@ export default function DocumentViewer() {
     }
   }, [linkUrl, activeUrl, token, router])
 
-  const progressPct = Math.round(scrollProgress * 100)
+  const toggleHlSection = useCallback(() => {
+    setHlExpanded(prev => {
+      const next = !prev
+      AsyncStorage.setItem(`doc_hl_exp_${id}`, next ? '1' : '0').catch(() => {})
+      return next
+    })
+  }, [id])
 
-  const displayHtml = useMemo(() => {
-    if (!htmlContent) return htmlContent
-    if (highlights.length === 0) return htmlContent
-    const kindColors: Record<string, string> = {
-      summary: theme.colors.accent,
-      link: '#6b8cff',
-      note: '#b8a0ff',
+  const handleHlPin = useCallback(async (hl: HighlightWithDoc) => {
+    if (!activeUrl || !token) return
+    const next = hl.pinned !== 1
+    try {
+      await pinHighlight(activeUrl, token, hl.id, next)
+      setHighlights(prev => prev.map(h => h.id === hl.id ? { ...h, pinned: next ? 1 : 0 } : h))
+    } catch {
+      toast('Failed to update pin', 'error')
     }
-    const cards = highlights.map(hl => {
-      const kc = kindColors[hl.kind] ?? '#888'
-      const titleHtml = hl.title
-        ? `<div style="font-size:13px;font-weight:600;color:${theme.colors.text};flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(hl.title)}</div>`
-        : ''
-      return `<div style="background:${theme.colors.surface};border:1px solid ${theme.colors.border};border-radius:10px;padding:14px;margin-bottom:10px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="background:${kc};color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;text-transform:uppercase">${escHtml(hl.kind)}</span>${titleHtml}</div><div style="margin:0;font-size:14px;line-height:1.6;color:${theme.colors.text}">${mdToHtml(hl.body)}</div></div>`
-    }).join('')
-    const section = `<div style="padding:12px;background:${theme.colors.background}">${cards}</div>`
-    return htmlContent.replace(/<body([^>]*)>/i, `<body$1>${section}`)
-  }, [htmlContent, highlights, theme])
+  }, [activeUrl, token, toast])
+
+  const handleHlDeleteInPane = useCallback(async (hlId: string) => {
+    if (!activeUrl || !token) return
+    try {
+      await deleteHighlight(activeUrl, token, hlId)
+      setHighlights(prev => prev.filter(h => h.id !== hlId))
+    } catch {
+      toast('Failed to delete highlight', 'error')
+    }
+  }, [activeUrl, token, toast])
+
+  const progressPct = Math.round(scrollProgress * 100)
 
   return (
     <SafeAreaView style={s.screen}>
@@ -527,30 +518,6 @@ export default function DocumentViewer() {
         </Pressable>
         {doc && (
           <Text style={s.headerTitle} numberOfLines={1}>{doc.title || doc.canonical_url}</Text>
-        )}
-        {doc && (
-          <View style={s.headerActions}>
-            <Pressable onPress={handleAddDocNote} style={s.headerNoteBtn} hitSlop={8}>
-              <Text style={s.headerNoteBtnText}>✏ Note</Text>
-            </Pressable>
-            <Pressable onPress={handleOpenDocTags} style={s.headerTagBtn} hitSlop={8}>
-              <Text style={s.headerTagBtnText}># Tags</Text>
-            </Pressable>
-            <Pressable
-              onPress={handleQueuePipelines}
-              style={[s.headerPipelineBtn, queueingPipelines && s.headerBtnDisabled]}
-              hitSlop={8}
-              disabled={queueingPipelines}
-            >
-              {queueingPipelines
-                ? <ActivityIndicator size="small" color="#a78bfa" />
-                : <Text style={s.headerPipelineBtnText}>▶ Pipeline</Text>
-              }
-            </Pressable>
-            <Pressable onPress={() => setDeleteConfirm(true)} style={s.headerDeleteBtn} hitSlop={8}>
-              <Text style={s.headerDeleteBtnText}>🗑</Text>
-            </Pressable>
-          </View>
         )}
         {doc && (
           <Pressable onPress={openInWeb} style={s.openWebBtn} hitSlop={12}>
@@ -571,12 +538,23 @@ export default function DocumentViewer() {
         </View>
       ) : htmlContent ? (
         <View style={s.contentArea}>
+          {doc && highlights.length > 0 && (
+            <HighlightsBanner
+              doc={doc}
+              highlights={highlights}
+              expanded={hlExpanded}
+              onToggle={toggleHlSection}
+              onDelete={handleHlDeleteInPane}
+              onPin={handleHlPin}
+              onDocumentPress={(docId) => router.push(`/document/${encodeURIComponent(docId)}?from=/${id}`)}
+            />
+          )}
           {Platform.OS === 'web' ? (
             <View style={s.webView}>
               {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
               <iframe
                 ref={iframeRef}
-                srcDoc={displayHtml ?? ''}
+                srcDoc={htmlContent ?? ''}
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' } as any}
                 onLoad={handleDocumentLoad}
               />
@@ -584,7 +562,7 @@ export default function DocumentViewer() {
           ) : (
             <WebView
               ref={webViewRef}
-              source={{ html: displayHtml ?? '', baseUrl: activeUrl ?? '' }}
+              source={{ html: htmlContent ?? '', baseUrl: activeUrl ?? '' }}
               style={s.webView}
               onMessage={handleMessage}
               onLoad={handleDocumentLoad}
@@ -691,6 +669,42 @@ export default function DocumentViewer() {
                 <Text style={s.metaClose}>×</Text>
               </Pressable>
             </View>
+            <View style={s.metaActions}>
+              <Pressable style={s.metaActionPrimary} onPress={handleAddDocNote}>
+                <Ionicons name="create-outline" size={13} color="#fff" />
+                <Text style={s.metaActionPrimaryText}>Note</Text>
+              </Pressable>
+              <Pressable style={s.metaActionOutline} onPress={handleOpenDocTags}>
+                <Text style={s.metaActionOutlineText}># Tags</Text>
+              </Pressable>
+              <Pressable
+                style={[s.metaActionPipeline, queueingPipelines && s.btnDisabled]}
+                onPress={handleQueuePipelines}
+                disabled={queueingPipelines}
+              >
+                {queueingPipelines
+                  ? <ActivityIndicator size="small" color="#a78bfa" />
+                  : <Text style={s.metaActionPipelineText}>▶ Pipeline</Text>
+                }
+              </Pressable>
+              <Pressable style={s.metaActionDelete} onPress={() => setDeleteConfirm(true)}>
+                <Text style={s.metaActionDeleteText}>🗑</Text>
+              </Pressable>
+            </View>
+            {deleteConfirm && (
+              <View style={[s.confirmRow, { marginBottom: theme.spacing.md }]}>
+                <Text style={s.confirmText}>Delete this document? It won't be scraped again.</Text>
+                <View style={s.confirmBtns}>
+                  <Pressable style={s.cancelBtn} onPress={() => setDeleteConfirm(false)} disabled={deleting}>
+                    <Text style={s.cancelBtnText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable style={[s.deleteBtn, deleting && s.btnDisabled]} onPress={handleDeleteDocument} disabled={deleting}>
+                    <Text style={s.deleteBtnText}>{deleting ? 'Deleting…' : 'Confirm delete'}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
+            <View style={s.metaDivider} />
             <View style={s.metaRow}>
               <Text style={s.metaLabel}>URL</Text>
               <Text style={s.metaValue} numberOfLines={3}>{doc.canonical_url}</Text>
@@ -721,39 +735,6 @@ export default function DocumentViewer() {
               <Ionicons name="open-outline" size={18} color={theme.colors.accent} />
               <Text style={s.viewWebBtnText}>View on web</Text>
             </Pressable>
-            <View style={s.metaDivider} />
-            <HighlightsSection
-              docId={id}
-              doc={doc}
-              feedUrl={sourceFeed?.url ?? ''}
-              serverUrl={activeUrl ?? ''}
-              token={token ?? ''}
-              highlights={highlights}
-              pipelineRuns={pipelineRuns}
-              pipelines={pipelines}
-              hlLoading={hlLoading}
-              setHlLoading={setHlLoading}
-              reload={loadHighlights}
-              onDocumentPress={(docId) => { closeMetaPanel(); router.push(`/document/${encodeURIComponent(docId)}?from=/${id}`) }}
-            />
-            <View style={s.metaDivider} />
-            {!deleteConfirm ? (
-              <Pressable style={s.deleteBtn} onPress={() => setDeleteConfirm(true)}>
-                <Text style={s.deleteBtnText}>Delete document</Text>
-              </Pressable>
-            ) : (
-              <View style={s.confirmRow}>
-                <Text style={s.confirmText}>Delete this document? It won't be scraped again.</Text>
-                <View style={s.confirmBtns}>
-                  <Pressable style={s.cancelBtn} onPress={() => setDeleteConfirm(false)} disabled={deleting}>
-                    <Text style={s.cancelBtnText}>Cancel</Text>
-                  </Pressable>
-                  <Pressable style={[s.deleteBtn, deleting && s.btnDisabled]} onPress={handleDeleteDocument} disabled={deleting}>
-                    <Text style={s.deleteBtnText}>{deleting ? 'Deleting…' : 'Confirm delete'}</Text>
-                  </Pressable>
-                </View>
-              </View>
-            )}
             </ScrollView>
           </Animated.View>
         </Pressable>
@@ -762,9 +743,6 @@ export default function DocumentViewer() {
   )
 }
 
-function escHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
 
 type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
@@ -781,13 +759,6 @@ function buildStyles(t: Theme) {
     backText: { color: t.colors.accent, fontSize: 20, fontWeight: '400' },
     headerTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '600' },
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
-    headerNoteBtn: {
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 6,
-      backgroundColor: t.colors.accent,
-    },
-    headerNoteBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
     headerTagBtn: {
       paddingHorizontal: 8,
       paddingVertical: 4,
@@ -905,192 +876,130 @@ function buildStyles(t: Theme) {
     linkBtnSecondaryText: { color: t.colors.text, fontSize: 15, fontWeight: '500' },
     linkBtnCancel: { alignItems: 'center', paddingVertical: t.spacing.sm },
     linkBtnCancelText: { color: t.colors.muted, fontSize: 14 },
+    metaActions: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginBottom: t.spacing.md,
+    },
+    metaActionPrimary: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 6,
+      backgroundColor: t.colors.accent,
+    },
+    metaActionPrimaryText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+    metaActionOutline: {
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+    },
+    metaActionOutlineText: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
+    metaActionPipeline: {
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: '#a78bfa',
+      minWidth: 28,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    metaActionPipelineText: { color: '#a78bfa', fontSize: 12, fontWeight: '700' },
+    metaActionDelete: {
+      width: 30,
+      height: 30,
+      borderRadius: 6,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: t.colors.border,
+    },
+    metaActionDeleteText: { fontSize: 14, color: t.colors.muted },
   })
 }
 
-// ── Highlights section in meta panel ─────────────────────────────────────────
+// ── Highlights banner (above WebView in central pane) ─────────────────────────
 
-type PipelineFilter = {
-  feed_url_contains?: string
-  source_feed_id?: string
-  exclude_feed_url_contains?: string[]
-  exclude_source_feed_ids?: string[]
-}
-
-function pipelineMatchesDocument(pl: Pipeline, doc: Document, feedUrl: string): boolean {
-  let f: PipelineFilter
-  try { f = JSON.parse(pl.filter) as PipelineFilter } catch { return false }
-  if (f.source_feed_id && doc.source_feed_id !== f.source_feed_id) return false
-  if (f.feed_url_contains && !feedUrl.toLowerCase().includes(f.feed_url_contains.toLowerCase())) return false
-  for (const ex of f.exclude_source_feed_ids ?? []) {
-    if (doc.source_feed_id === ex) return false
-  }
-  const feedUrlLower = feedUrl.toLowerCase()
-  for (const ex of f.exclude_feed_url_contains ?? []) {
-    if (feedUrlLower.includes(ex.toLowerCase())) return false
-  }
-  return true
-}
-
-type HighlightsSectionProps = {
-  docId: string
+type HighlightsBannerProps = {
   doc: Document
-  feedUrl: string
-  serverUrl: string
-  token: string
   highlights: HighlightWithDoc[]
-  pipelineRuns: PipelineRun[]
-  pipelines: Pipeline[]
-  hlLoading: boolean
-  setHlLoading: (v: boolean) => void
-  reload: () => void
+  expanded: boolean
+  onToggle: () => void
+  onDelete: (hlId: string) => void
+  onPin: (hl: HighlightWithDoc) => void
   onDocumentPress: (docId: string) => void
 }
 
-function HighlightsSection({
-  docId, doc, feedUrl, serverUrl, token, highlights, pipelineRuns, pipelines, hlLoading, setHlLoading, reload, onDocumentPress,
-}: HighlightsSectionProps) {
+function HighlightsBanner({ doc, highlights, expanded, onToggle, onDelete, onPin, onDocumentPress }: HighlightsBannerProps) {
   const { theme } = useUnistyles()
-  const s = useMemo(() => buildHlStyles(theme), [theme])
-
-  const handleDeleteAll = useCallback(async () => {
-    setHlLoading(true)
-    try { await deleteDocumentHighlights(serverUrl, token, docId) } catch { /* */ }
-    reload()
-    setHlLoading(false)
-  }, [serverUrl, token, docId, reload, setHlLoading])
-
-  const handleRerun = useCallback(async (pipelineId: string) => {
-    setHlLoading(true)
-    try {
-      await deleteDocumentHighlights(serverUrl, token, docId)
-      await runPipelineOnDocument(serverUrl, token, pipelineId, docId)
-    } catch { /* */ }
-    reload()
-    setHlLoading(false)
-  }, [serverUrl, token, docId, reload, setHlLoading])
-
-  const anyRunning = pipelineRuns.some(r => r.status === 'queued' || r.status === 'running')
-
-  if (pipelines.length === 0 && highlights.length === 0) {
-    return (
-      <Text style={s.empty}>No pipelines configured.</Text>
-    )
-  }
-
+  const s = useMemo(() => buildBannerStyles(theme), [theme])
   return (
-    <View>
-      <View style={s.header}>
-        <Text style={s.sectionTitle}>Pipelines</Text>
-        {anyRunning && <ActivityIndicator size="small" color={theme.colors.accent} />}
-      </View>
-
-      {pipelineRuns.map(run => {
-        const pl = pipelines.find(p => p.id === run.pipeline_id)
-        const runHighlights = highlights.filter(h => h.pipeline_run_id === run.id)
-        const matches = pl ? pipelineMatchesDocument(pl, doc, feedUrl) : true
-        return (
-          <View key={run.id} style={s.runBlock}>
-            <View style={s.runHeader}>
-              <Text style={s.runName}>{pl?.name ?? 'Pipeline'}</Text>
-              <View style={[s.statusBadge, run.status === 'done' ? s.statusDone : run.status === 'failed' ? s.statusFailed : s.statusRunning]}>
-                <Text style={s.statusText}>{run.status}</Text>
-              </View>
-            </View>
-            {runHighlights.length === 0 && run.status !== 'done' && (
-              <Text style={s.waiting}>
-                {run.status === 'running' || run.status === 'queued' ? 'Running…' : 'No highlights'}
-              </Text>
-            )}
-            {runHighlights.map(hl => (
-              <HighlightCard
-                key={hl.id}
-                item={hl}
-                linkedDocuments={hl.linked_documents}
-                onDocumentPress={onDocumentPress}
-                onDelete={() => {
-                  deleteHighlight(serverUrl, token, hl.id).then(reload).catch(() => {})
-                }}
-              />
-            ))}
-            {pl && (
-              <Pressable
-                style={[s.rerunBtn, hlLoading && s.rerunDisabled]}
-                onPress={() => handleRerun(pl.id)}
-                disabled={hlLoading}
-              >
-                <Text style={s.rerunText}>Delete all & rerun</Text>
-                <Text style={[s.matchHint, matches ? s.matchYes : s.matchNo]}>
-                  {matches ? '● filter matches' : '● filter won\'t match'}
-                </Text>
-              </Pressable>
-            )}
-          </View>
-        )
-      })}
-
-      {pipelineRuns.length === 0 && pipelines.length > 0 && (
-        <View>
-          <Text style={s.empty}>No runs yet. Runs trigger on new documents.</Text>
-          {pipelines.map(pl => {
-            const matches = pipelineMatchesDocument(pl, doc, feedUrl)
-            return (
-              <Pressable
-                key={pl.id}
-                style={[s.rerunBtn, hlLoading && s.rerunDisabled]}
-                onPress={() => handleRerun(pl.id)}
-                disabled={hlLoading}
-              >
-                <Text style={s.rerunText}>Run "{pl.name}"</Text>
-                <Text style={[s.matchHint, matches ? s.matchYes : s.matchNo]}>
-                  {matches ? '● filter matches' : '● filter won\'t match'}
-                </Text>
-              </Pressable>
-            )
-          })}
-        </View>
-      )}
-
-      {highlights.length > 0 && (
-        <Pressable
-          style={[s.deleteAllBtn, hlLoading && s.rerunDisabled]}
-          onPress={handleDeleteAll}
-          disabled={hlLoading}
-        >
-          <Text style={s.deleteAllText}>Delete all highlights</Text>
-        </Pressable>
+    <View style={s.container}>
+      <Text style={s.docTitle} numberOfLines={2}>{doc.title || doc.canonical_url}</Text>
+      <Pressable style={s.sectionHeader} onPress={onToggle}>
+        <Text style={s.sectionTitle}>Highlights ({highlights.length})</Text>
+        <Text style={s.collapseIcon}>{expanded ? '▲' : '▼'}</Text>
+      </Pressable>
+      {expanded && (
+        <ScrollView style={s.hlList} contentContainerStyle={s.hlListContent} nestedScrollEnabled>
+          {highlights.map(hl => (
+            <HighlightCard
+              key={hl.id}
+              item={hl}
+              linkedDocuments={hl.linked_documents}
+              pinned={hl.pinned === 1}
+              onDelete={() => onDelete(hl.id)}
+              onPin={() => onPin(hl)}
+              onDocumentPress={onDocumentPress}
+            />
+          ))}
+        </ScrollView>
       )}
     </View>
   )
 }
 
-function buildHlStyles(t: ReturnType<typeof useUnistyles>['theme']) {
+function buildBannerStyles(t: Theme) {
   return StyleSheet.create({
-    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: t.spacing.sm },
-    sectionTitle: { color: t.colors.text, fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
-    empty: { color: t.colors.muted, fontSize: 13, marginBottom: t.spacing.sm },
-    runBlock: { marginBottom: t.spacing.md },
-    runHeader: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm, marginBottom: t.spacing.sm },
-    runName: { color: t.colors.text, fontSize: 13, fontWeight: '600', flex: 1 },
-    statusBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-    statusDone: { backgroundColor: '#166534' },
-    statusFailed: { backgroundColor: '#7f1d1d' },
-    statusRunning: { backgroundColor: '#1e3a5f' },
-    statusText: { color: '#fff', fontSize: 10, fontWeight: '600' },
-    waiting: { color: t.colors.muted, fontSize: 12, marginBottom: t.spacing.sm },
-    rerunBtn: {
-      borderWidth: 1, borderColor: t.colors.accent, borderRadius: 6,
-      paddingVertical: t.spacing.sm, alignItems: 'center', marginTop: t.spacing.sm,
+    container: {
+      backgroundColor: t.colors.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.border,
     },
-    rerunText: { color: t.colors.accent, fontSize: 12, fontWeight: '600' },
-    rerunDisabled: { opacity: 0.4 },
-    matchHint: { fontSize: 10, marginTop: 2 },
-    matchYes: { color: '#4ade80' },
-    matchNo: { color: '#f87171' },
-    deleteAllBtn: {
-      borderWidth: 1, borderColor: '#b91c1c', borderRadius: 6,
-      paddingVertical: t.spacing.sm, alignItems: 'center', marginTop: t.spacing.sm,
+    docTitle: {
+      color: t.colors.text,
+      fontSize: 15,
+      fontWeight: '700',
+      paddingHorizontal: 14,
+      paddingTop: 12,
+      paddingBottom: 6,
     },
-    deleteAllText: { color: '#b91c1c', fontSize: 12, fontWeight: '600' },
+    sectionHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderTopWidth: 1,
+      borderTopColor: t.colors.border,
+    },
+    sectionTitle: {
+      color: t.colors.muted,
+      fontSize: 12,
+      fontWeight: '700',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    collapseIcon: { color: t.colors.muted, fontSize: 11 },
+    hlList: { maxHeight: 320 },
+    hlListContent: { padding: 10, gap: 8 },
   })
 }
+
+

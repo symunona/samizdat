@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert, Platform } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useRouter } from 'expo-router'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
@@ -165,6 +165,25 @@ export default function FeedScreen() {
       }
     }
 
+    const card = (
+      <HighlightCard
+        item={item}
+        linkedDocuments={item.linked_documents}
+        pinned={isPinned}
+        busy={busy}
+        onPress={() => router.push(`/document/${item.document_id}?from=/`)}
+        onPin={() => handlePin(item)}
+        onDelete={() => initiateDelete(item)}
+        onAnnotate={() => setAnnotateItem(item)}
+        onTags={() => setTagModalId(item.id)}
+        onDocumentPress={(docId) => router.push(`/document/${encodeURIComponent(docId)}?from=/`)}
+      />
+    )
+
+    if (Platform.OS === 'web') {
+      return card
+    }
+
     return (
       <ReanimatedSwipeable
         ref={(r) => {
@@ -188,18 +207,7 @@ export default function FeedScreen() {
         overshootRight={false}
         onSwipeableOpen={handleSwipeOpen}
       >
-        <HighlightCard
-          item={item}
-          linkedDocuments={item.linked_documents}
-          pinned={isPinned}
-          busy={busy}
-          onPress={() => router.push(`/document/${item.document_id}?from=/`)}
-          onPin={() => handlePin(item)}
-          onDelete={() => initiateDelete(item)}
-          onAnnotate={() => setAnnotateItem(item)}
-          onTags={() => setTagModalId(item.id)}
-          onDocumentPress={(docId) => router.push(`/document/${encodeURIComponent(docId)}?from=/`)}
-        />
+        {card}
       </ReanimatedSwipeable>
     )
   }, [actionLoading, archivedIds, deletingIds, handlePin, initiateDelete, undoDelete, router, s])

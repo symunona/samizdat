@@ -7,6 +7,26 @@
     <title>%WEB_TITLE%</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="scrollbar-style">
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(128, 128, 128, 0.35) transparent;
+      }
+      *::-webkit-scrollbar {
+        width: 4px;
+        height: 4px;
+      }
+      *::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      *::-webkit-scrollbar-thumb {
+        background-color: rgba(128, 128, 128, 0.35);
+        border-radius: 4px;
+      }
+      *::-webkit-scrollbar-thumb:hover {
+        background-color: rgba(128, 128, 128, 0.6);
+      }
+    </style>
     <style id="expo-reset">
       /* These styles make the body full-height */
       html,

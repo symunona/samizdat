@@ -5,6 +5,7 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View
 import { useUnistyles } from 'react-native-unistyles'
 import type { Highlight } from './api'
 import MarkdownBody from './MarkdownBody'
+import NoteEditButton from './NoteEditButton'
 
 const MAX_BODY_HEIGHT = 400
 
@@ -97,14 +98,10 @@ export default function HighlightCard({
         <View style={s.footerSpacer} />
         {onTags
           ? <Pressable style={s.footerBtn} onPress={onTags} hitSlop={6}>
-              <Text style={s.footerBtnText}># Tags</Text>
+              <Text style={s.footerBtnText}>#</Text>
             </Pressable>
           : null}
-        {onAnnotate
-          ? <Pressable style={s.noteBtn} onPress={onAnnotate} hitSlop={6}>
-              <Text style={s.noteBtnText}>✏ Note</Text>
-            </Pressable>
-          : null}
+        {onAnnotate ? <NoteEditButton onPress={onAnnotate} hitSlop={6} /> : null}
       </View>
     </Pressable>
   )
@@ -159,14 +156,7 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.border,
     },
     footerBtnText: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
-    noteBtn: {
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: 6,
-      backgroundColor: t.colors.accent,
-    },
-    noteBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-    bodyClipMax: { maxHeight: MAX_BODY_HEIGHT, overflow: 'hidden' },
+bodyClipMax: { maxHeight: MAX_BODY_HEIGHT, overflow: 'hidden' },
     expandOverlay: {
       position: 'absolute',
       bottom: 0,
