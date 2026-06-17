@@ -110,10 +110,11 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 .hl-body p:last-child{margin-bottom:0}
 .hl-body a{color:var(--ac)}
 .hl-footer{display:flex;align-items:center;gap:6px;padding:6px 10px;border-top:1px solid var(--bo);background:var(--su)}
-.hl-btn{background:none;border:1px solid var(--bo);border-radius:5px;cursor:pointer;font-size:11px;padding:3px 8px;color:var(--mu);font-weight:600}
+.hl-btn{background:none;border:1px solid var(--bo);border-radius:5px;cursor:pointer;font-size:12px;padding:4px 10px;color:var(--mu);font-weight:600;line-height:1}
 .hl-btn:hover{border-color:var(--ac);color:var(--ac)}
-.hl-delete-btn{color:#9ca3af}
-.hl-delete-btn:hover{border-color:#b91c1c;color:#b91c1c}
+.hl-btn.hl-icon{width:28px;height:28px;padding:0;display:flex;align-items:center;justify-content:center}
+.hl-delete-btn{border:none;background:none;width:28px;height:28px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:15px;padding:0;color:var(--mu);cursor:pointer}
+.hl-delete-btn:hover{color:#b91c1c}
 .hl-spacer{flex:1}
 `
 
@@ -172,26 +173,28 @@ function renderHighlightCard(hl: HlData): HTMLElement {
   footer.className = 'hl-footer'
 
   const deleteBtn = document.createElement('button')
-  deleteBtn.className = 'hl-btn hl-delete-btn'
+  deleteBtn.className = 'hl-delete-btn'
   deleteBtn.dataset.id = hl.id
   deleteBtn.dataset.action = 'delete'
-  deleteBtn.textContent = '🗑 Delete'
+  deleteBtn.textContent = '🗑'
   deleteBtn.title = 'Delete highlight'
 
   const spacer = document.createElement('div')
   spacer.className = 'hl-spacer'
 
   const tagsBtn = document.createElement('button')
-  tagsBtn.className = 'hl-btn'
+  tagsBtn.className = 'hl-btn hl-icon'
   tagsBtn.dataset.id = hl.id
   tagsBtn.dataset.action = 'tags'
-  tagsBtn.textContent = '# Tags'
+  tagsBtn.textContent = '#'
+  tagsBtn.title = 'Tags'
 
   const annotateBtn = document.createElement('button')
-  annotateBtn.className = 'hl-btn'
+  annotateBtn.className = 'hl-btn hl-icon'
   annotateBtn.dataset.id = hl.id
   annotateBtn.dataset.action = 'annotate'
-  annotateBtn.textContent = '✏ Note'
+  annotateBtn.title = 'Add note'
+  annotateBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 512 512" aria-hidden="true"><path d="M384 224v184a40 40 0 01-40 40H104a40 40 0 01-40-40V168a40 40 0 0140-40h167.48" fill="none" stroke="currentColor" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M459.94 53.25a16.06 16.06 0 00-23.22-.56L424 65l89 89 12.74-12.68a16.06 16.06 0 00-.56-23.22zM399.34 90L218.82 270.2a9 9 0 00-2.31 4.38l-8.4 45.23a5.13 5.13 0 006 6l45.23-8.4a9 9 0 004.38-2.31L483 134.66z" fill="currentColor"/></svg>'
 
   footer.appendChild(deleteBtn)
   footer.appendChild(spacer)
