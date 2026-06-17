@@ -31,7 +31,13 @@ func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	rows, err := h.q.ListHighlights(r.Context(), limit)
+	var rows []store.Highlight
+	var err error
+	if r.URL.Query().Get("archived") == "1" {
+		rows, err = h.q.ListArchivedHighlights(r.Context(), limit)
+	} else {
+		rows, err = h.q.ListHighlights(r.Context(), limit)
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "list highlights failed")
 		return
@@ -120,21 +126,39 @@ func (h *highlightsHandler) deleteOne(w http.ResponseWriter, r *http.Request) {
 
 func (h *highlightsHandler) patchOne(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var inp struct {
-		Pinned *int64 `json:"pinned"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&inp); err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	if inp.Pinned != nil {
+	if v, ok := raw["pinned"]; ok {
+		var pinned int64
+		if err := json.Unmarshal(v, &pinned); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid pinned")
+			return
+		}
 		if err := h.q.UpdateHighlightPinned(r.Context(), store.UpdateHighlightPinnedParams{
-			Pinned:    *inp.Pinned,
+			Pinned:    pinned,
 			UpdatedAt: now,
 			ID:        id,
 		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, "update highlight failed")
+			return
+		}
+	}
+	if v, ok := raw["archived_at"]; ok {
+		var archivedAt *string
+		if err := json.Unmarshal(v, &archivedAt); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid archived_at")
+			return
+		}
+		if err := h.q.ArchiveHighlight(r.Context(), store.ArchiveHighlightParams{
+			ArchivedAt: archivedAt,
+			UpdatedAt:  now,
+			ID:         id,
+		}); err != nil {
+			writeErr(w, http.StatusInternalServerError, "archive highlight failed")
 			return
 		}
 	}

@@ -7,6 +7,7 @@ import { useConnection } from '../../src/ConnectionContext'
 
 const SCREENS = [
   { name: 'index', label: 'Feed', href: '/' as const },
+  { name: 'archived', label: 'Archived', href: '/archived' as const },
   { name: 'documents', label: 'Documents', href: '/documents' as const },
   { name: 'tags', label: 'Tags', href: '/tags' as const },
   { name: 'subscriptions', label: 'Subscriptions', href: '/subscriptions' as const },
@@ -107,6 +108,7 @@ export default function DrawerLayout() {
       }}
     >
       <Drawer.Screen name="index" options={{ title: 'Feed' }} />
+      <Drawer.Screen name="archived" options={{ title: 'Archived' }} />
       <Drawer.Screen name="documents" options={{ title: 'Documents' }} />
       <Drawer.Screen name="tags" options={{ title: 'Tags' }} />
       <Drawer.Screen name="subscriptions" options={{ title: 'Subscriptions' }} />

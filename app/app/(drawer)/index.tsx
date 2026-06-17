@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
 import type { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import { useConnection } from '../../src/ConnectionContext'
-import { fetchHighlights, deleteHighlight, pinHighlight, createAnnotation, HighlightWithDoc } from '../../src/api'
+import { fetchHighlights, deleteHighlight, pinHighlight, archiveHighlight, createAnnotation, HighlightWithDoc } from '../../src/api'
 import HighlightCard from '../../src/HighlightCard'
 import TagSelectorModal from '../../src/TagSelectorModal'
 import AnnotationPanel from '../../src/AnnotationPanel'
@@ -24,8 +24,36 @@ export default function FeedScreen() {
   const [annotateItem, setAnnotateItem] = useState<HighlightWithDoc | null>(null)
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
 
+  const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set())
+
   const swipeRefs = useRef<Map<string, SwipeableMethods | null>>(new Map())
   const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  // scroll-to-archive tracking
+  const scrollYRef = useRef(0)
+  const itemFirstSeenYRef = useRef<Map<string, number>>(new Map())
+  const pendingArchiveRef = useRef<Map<string, number>>(new Map())
+  const activeUrlRef = useRef(activeUrl)
+  const tokenRef = useRef(token)
+  useEffect(() => { activeUrlRef.current = activeUrl }, [activeUrl])
+  useEffect(() => { tokenRef.current = token }, [token])
+
+  const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 30 }), [])
+  const onViewableItemsChanged = useCallback(({ changed }: { changed: Array<{ item: HighlightWithDoc; isViewable: boolean }> }) => {
+    const currentY = scrollYRef.current
+    changed.forEach(({ item, isViewable }) => {
+      if (isViewable) {
+        itemFirstSeenYRef.current.set(item.id, currentY)
+        pendingArchiveRef.current.delete(item.id)
+      } else {
+        const seenY = itemFirstSeenYRef.current.get(item.id)
+        itemFirstSeenYRef.current.delete(item.id)
+        // scrolled down past it (not pinned) — queue for 300px-later archive
+        if (seenY !== undefined && currentY > seenY && !item.pinned) {
+          pendingArchiveRef.current.set(item.id, currentY)
+        }
+      }
+    })
+  }, [])
 
   useEffect(() => {
     const timers = deleteTimers.current
@@ -109,6 +137,7 @@ export default function FeedScreen() {
   }, [activeUrl, token, annotateItem])
 
   const renderItem = useCallback(({ item }: { item: HighlightWithDoc }) => {
+    const isArchived = archivedIds.has(item.id)
     if (deletingIds.has(item.id)) {
       return (
         <View style={s.deletedCard}>
@@ -142,7 +171,7 @@ export default function FeedScreen() {
           if (r) swipeRefs.current.set(item.id, r)
           else swipeRefs.current.delete(item.id)
         }}
-        containerStyle={s.swipeContainer}
+        containerStyle={[s.swipeContainer, isArchived && s.archivedContainer]}
         renderLeftActions={() => (
           <View style={s.deleteAction}>
             <Text style={s.swipeIcon}>🗑</Text>
@@ -173,7 +202,7 @@ export default function FeedScreen() {
         />
       </ReanimatedSwipeable>
     )
-  }, [actionLoading, deletingIds, handlePin, initiateDelete, undoDelete, router, s])
+  }, [actionLoading, archivedIds, deletingIds, handlePin, initiateDelete, undoDelete, router, s])
 
   if (loading && highlights.length === 0) {
     return (
@@ -213,6 +242,22 @@ export default function FeedScreen() {
         renderItem={renderItem}
         onRefresh={load}
         refreshing={loading}
+        onScroll={(e) => {
+          const y = e.nativeEvent.contentOffset.y
+          scrollYRef.current = y
+          pendingArchiveRef.current.forEach((exitY, id) => {
+            if (y - exitY > 300) {
+              pendingArchiveRef.current.delete(id)
+              setArchivedIds(prev => new Set(prev).add(id))
+              const url = activeUrlRef.current
+              const tok = tokenRef.current
+              if (url && tok) archiveHighlight(url, tok, id).catch(() => {})
+            }
+          })
+        }}
+        scrollEventThrottle={16}
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={viewabilityConfig}
       />
       <TagSelectorModal
         visible={tagModalId !== null}
@@ -240,6 +285,9 @@ function buildStyles(t: Theme) {
     swipeContainer: {
       borderRadius: 10,
       overflow: 'hidden',
+    },
+    archivedContainer: {
+      opacity: 0.6,
     },
     deleteAction: {
       width: 80,

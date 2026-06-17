@@ -102,6 +102,7 @@ type Highlight struct {
 	Body          string  `json:"body"`
 	Metadata      string  `json:"metadata"`
 	Pinned        int64   `json:"pinned"`
+	ArchivedAt    *string `json:"archived_at"`
 	CreatedAt     string  `json:"created_at"`
 	UpdatedAt     string  `json:"updated_at"`
 	Rev           int64   `json:"rev"`

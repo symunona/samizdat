@@ -220,6 +220,7 @@ CREATE TABLE IF NOT EXISTS highlights (
     body            TEXT    NOT NULL DEFAULT '',
     metadata        TEXT    NOT NULL DEFAULT '{}',
     pinned          INTEGER NOT NULL DEFAULT 0,
+    archived_at     TEXT,
     created_at      TEXT    NOT NULL,
     updated_at      TEXT    NOT NULL,
     rev             INTEGER NOT NULL DEFAULT 0,

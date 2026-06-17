@@ -339,6 +339,8 @@ func migrate(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS llm_usages (id TEXT PRIMARY KEY, job_id TEXT, pipeline_run_id TEXT, provider TEXT NOT NULL DEFAULT '', model TEXT NOT NULL, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS llm_usages_job_id     ON llm_usages(job_id)`,
 		`CREATE INDEX IF NOT EXISTS llm_usages_created_at ON llm_usages(created_at)`,
+		// archived_at on highlights: user-driven "seen" state (scroll-to-archive)
+		`ALTER TABLE highlights ADD COLUMN archived_at TEXT`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {
