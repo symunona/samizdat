@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -8,9 +9,20 @@ import (
 	"time"
 
 	"github.com/symunona/samizdat/server/internal/store"
+	"github.com/yuin/goldmark"
 )
 
 var urlRe = regexp.MustCompile(`https?://[^\s)\]"<>]+`)
+
+var mdRenderer = goldmark.New()
+
+func renderMarkdown(src string) string {
+	var buf bytes.Buffer
+	if err := mdRenderer.Convert([]byte(src), &buf); err != nil {
+		return "<p>" + src + "</p>"
+	}
+	return buf.String()
+}
 
 type highlightsHandler struct {
 	q *store.Queries
@@ -20,6 +32,7 @@ type highlightWithDoc struct {
 	store.Highlight
 	DocumentTitle   string            `json:"document_title"`
 	DocumentURL     string            `json:"document_url"`
+	BodyHTML        string            `json:"body_html"`
 	LinkedDocuments map[string]string `json:"linked_documents,omitempty"`
 }
 
@@ -78,6 +91,7 @@ func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
 			Highlight:       hl,
 			DocumentTitle:   doc.Title,
 			DocumentURL:     doc.CanonicalUrl,
+			BodyHTML:        renderMarkdown(hl.Body),
 			LinkedDocuments: linked,
 		})
 	}
@@ -91,10 +105,14 @@ func (h *highlightsHandler) listByDocument(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, "list highlights failed")
 		return
 	}
-	if rows == nil {
-		rows = []store.Highlight{}
+	out := make([]highlightWithDoc, 0, len(rows))
+	for _, hl := range rows {
+		out = append(out, highlightWithDoc{
+			Highlight: hl,
+			BodyHTML:  renderMarkdown(hl.Body),
+		})
 	}
-	writeJSON(w, http.StatusOK, rows)
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *highlightsHandler) listRunsByDocument(w http.ResponseWriter, r *http.Request) {

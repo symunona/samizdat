@@ -45,7 +45,6 @@ import { saveTheme } from '../../../src/storage'
 import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
 import TagSelectorModal from '../../../src/TagSelectorModal'
-import HighlightCard from '../../../src/HighlightCard'
 import { buildDocumentHtml } from '../../../src/markdownToHtml'
 import { useSyncStore } from '../../../src/store/syncStore'
 
@@ -53,7 +52,14 @@ const DEBOUNCE_MS = 1000
 const POLL_INTERVAL_MS = 2000
 const POLL_MAX_TRIES = 60
 
-type ParsedMsg = { type: string; fraction?: number; data?: PendingSelection; id?: string; href?: string; doc_id?: string }
+type ParsedMsg = {
+  type: string
+  fraction?: number
+  data?: PendingSelection
+  id?: string
+  href?: string
+  doc_id?: string
+}
 
 export default function DocumentViewer() {
   const { id, from, highlight } = useLocalSearchParams<{ id: string; from?: string; highlight?: string }>()
@@ -112,26 +118,21 @@ export default function DocumentViewer() {
     mu: theme.colors.muted,
   }), [theme.colors.background, theme.colors.text, theme.colors.surface, theme.colors.border, theme.colors.accent, theme.colors.muted])
 
-  const injectThemeCss = useCallback(() => {
-    const css = `body{background:${bg}!important;color:${fg}!important}h1,h2,h3,h4{color:${fg}!important}a{color:${ac}!important}code{background:${su}!important;color:${ac}!important}pre{background:${su}!important}pre code{color:${fg}!important}blockquote{border-left-color:${ac}!important;color:${mu}!important}hr{border-top-color:${bo}!important}#ann-btn{background:${ac}!important;color:${bg}!important}`
+  // Send typed message to WebView/iframe
+  const sendToWebView = useCallback((msg: object) => {
+    const json = JSON.stringify(msg)
     if (Platform.OS === 'web') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const doc = (iframeRef.current as any)?.contentDocument
-      if (!doc) return
-      let s = doc.getElementById('sam-theme-override') as HTMLStyleElement | null
-      if (!s) {
-        s = doc.createElement('style') as HTMLStyleElement
-        s.id = 'sam-theme-override'
-        doc.head.appendChild(s)
-      }
-      s.textContent = css
+      iframeRef.current?.contentWindow?.postMessage(json, '*')
     } else {
-      const escaped = css.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
-      webViewRef.current?.injectJavaScript(
-        `(function(){var s=document.getElementById('sth');if(!s){s=document.createElement('style');s.id='sth';document.head.appendChild(s);}s.textContent='${escaped}';})();true;`,
-      )
+      webViewRef.current?.injectJavaScript(`window.__handleMsg && window.__handleMsg(${json}); true;`)
     }
-  }, [bg, fg, su, bo, ac, mu])
+  }, [])
+
+  // Re-send theme when colors change (only after doc is loaded)
+  useEffect(() => {
+    if (!isDocLoadedRef.current) return
+    sendToWebView({ type: 'setTheme', theme: { background: bg, text: fg, surface: su, border: bo, accent: ac, muted: mu } })
+  }, [sendToWebView, bg, fg, su, bo, ac, mu])
 
   // Meta panel state
   const [metaVisible, setMetaVisible] = useState(false)
@@ -222,7 +223,7 @@ export default function DocumentViewer() {
         fetchDocumentHighlights(activeUrl, token, id),
       ])
       setDoc(d)
-      setHtmlContent(buildDocumentHtml(d.markdown, d.title || d.canonical_url, anns, docsByUrl))
+      setHtmlContent(buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
       setAnnotations(anns)
       setHighlights(hl)
       if (d.source_feed_id) {
@@ -248,71 +249,17 @@ export default function DocumentViewer() {
     }
   }, [id, status, load])
 
-  useEffect(() => {
-    if (!isDocLoadedRef.current) return
-    injectThemeCss()
-  }, [injectThemeCss])
-
   const handleHeaderLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
     headerHeightRef.current = e.nativeEvent.layout.height
   }, [])
 
-  // Inject JS or send postMessage to iframe (platform-aware)
-  const injectScrollTo = useCallback((frac: number) => {
-    if (Platform.OS === 'web') {
-      iframeRef.current?.contentWindow?.postMessage(
-        JSON.stringify({ type: 'scrollTo', fraction: frac }), '*',
-      )
-    } else {
-      webViewRef.current?.injectJavaScript(`window.__scrollTo && window.__scrollTo(${frac}); true;`)
-    }
-  }, [])
-
   const injectAddMark = useCallback((ann: Annotation) => {
-    if (Platform.OS === 'web') {
-      iframeRef.current?.contentWindow?.postMessage(
-        JSON.stringify({ type: 'addMark', annotation: ann }), '*',
-      )
-    } else {
-      webViewRef.current?.injectJavaScript(`window.addMark && window.addMark(${JSON.stringify(ann)}); true;`)
-    }
-  }, [])
+    sendToWebView({ type: 'addMark', annotation: ann })
+  }, [sendToWebView])
 
   const injectRemoveMark = useCallback((annId: string) => {
-    if (Platform.OS === 'web') {
-      iframeRef.current?.contentWindow?.postMessage(
-        JSON.stringify({ type: 'removeMark', id: annId }), '*',
-      )
-    } else {
-      webViewRef.current?.injectJavaScript(`window.removeMark && window.removeMark(${JSON.stringify(annId)}); true;`)
-    }
-  }, [])
-
-  const injectHighlightAnnotation = useCallback((annId: string) => {
-    if (Platform.OS === 'web') {
-      iframeRef.current?.contentWindow?.postMessage(
-        JSON.stringify({ type: 'highlightAnnotation', id: annId }), '*',
-      )
-    } else {
-      webViewRef.current?.injectJavaScript(
-        `(function(){var m=document.querySelector('mark[data-ann-id="${annId}"]');if(m){m.classList.add('focused');m.scrollIntoView({behavior:'smooth',block:'center'});}})(); true;`,
-      )
-    }
-  }, [])
-
-  const handleDocumentLoad = useCallback(() => {
-    isDocLoadedRef.current = true
-    injectThemeCss()
-    if (highlight) {
-      setTimeout(() => injectHighlightAnnotation(highlight), 400)
-    } else if (savedProgressRef.current > 0) {
-      const frac = savedProgressRef.current
-      setTimeout(() => {
-        injectScrollTo(frac)
-        savedProgressRef.current = 0
-      }, 300)
-    }
-  }, [injectScrollTo, injectHighlightAnnotation, highlight, injectThemeCss])
+    sendToWebView({ type: 'removeMark', id: annId })
+  }, [sendToWebView])
 
   const handleLinkPress = useCallback(async (href: string) => {
     if (!activeUrl || !token) return
@@ -323,10 +270,34 @@ export default function DocumentViewer() {
     }
     setLinkUrl(href)
     setLinkError(null)
-  }, [activeUrl, token, router])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeUrl, token])
+
+  // Build HlData array for WebView
+  const toHlData = useCallback((hls: HighlightWithDoc[]) =>
+    hls.map(h => ({
+      id: h.id,
+      kind: h.kind,
+      title: h.title,
+      bodyHtml: h.body_html ?? h.body,
+      pinned: h.pinned as 0 | 1,
+    })), [])
 
   const handleParsedMessage = useCallback((msg: ParsedMsg) => {
-    if (msg.type === 'scroll') {
+    if (msg.type === 'ready') {
+      isDocLoadedRef.current = true
+      sendToWebView({
+        type: 'init',
+        doc: { title: doc?.title ?? '' },
+        highlights: toHlData(highlights),
+        annotations,
+        theme: { background: bg, text: fg, surface: su, border: bo, accent: ac, muted: mu },
+        hlExpanded,
+        scrollFraction: savedProgressRef.current,
+        focusAnnotationId: highlight,
+      })
+      savedProgressRef.current = 0
+    } else if (msg.type === 'scroll') {
       const frac = msg.fraction ?? 0
       setScrollProgress(frac)
       const dy = frac - lastScrollFracRef.current
@@ -361,8 +332,45 @@ export default function DocumentViewer() {
       } else {
         handleLinkPress(msg.href)
       }
+    } else if (msg.type === 'hl_pin' && msg.id) {
+      const hlItem = highlights.find(h => h.id === msg.id)
+      if (!hlItem || !activeUrl || !token) return
+      const next = hlItem.pinned !== 1
+      pinHighlight(activeUrl, token, msg.id, next)
+        .then(() => setHighlights(prev => {
+          const updated = prev.map(h => h.id === msg.id ? { ...h, pinned: (next ? 1 : 0) as 0 | 1 } : h)
+          sendToWebView({ type: 'setHighlights', highlights: toHlData(updated), expanded: hlExpanded })
+          return updated
+        }))
+        .catch(() => toast('Failed to pin', 'error'))
+    } else if (msg.type === 'hl_delete' && msg.id) {
+      if (!activeUrl || !token) return
+      deleteHighlight(activeUrl, token, msg.id)
+        .then(() => setHighlights(prev => {
+          const updated = prev.filter(h => h.id !== msg.id)
+          sendToWebView({ type: 'setHighlights', highlights: toHlData(updated), expanded: hlExpanded })
+          return updated
+        }))
+        .catch(() => toast('Failed to delete', 'error'))
+    } else if (msg.type === 'hl_annotate') {
+      setPendingSelection({ exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 })
+      setAnnMode('create')
+      setExistingAnnotation(undefined)
+      setAnnVisible(true)
+    } else if (msg.type === 'hl_tags' && msg.id) {
+      setTagTargetId(msg.id)
+      setTagTargetType('highlight')
+      setTagModalVisible(true)
+    } else if (msg.type === 'hl_toggle_section') {
+      setHlExpanded(prev => {
+        const next = !prev
+        AsyncStorage.setItem(`doc_hl_exp_${id}`, next ? '1' : '0').catch(() => {})
+        sendToWebView({ type: 'setHighlights', highlights: toHlData(highlights), expanded: next })
+        return next
+      })
     }
-  }, [id, activeUrl, token, headerAnim, annotations, handleLinkPress])
+  }, [id, activeUrl, token, headerAnim, annotations, highlights, hlExpanded, highlight,
+    doc, bg, fg, su, bo, ac, mu, sendToWebView, toHlData, handleLinkPress, toast])
 
   // Native WebView message handler
   const handleMessage = useCallback((e: WebViewMessageEvent) => {
@@ -479,35 +487,6 @@ export default function DocumentViewer() {
     }
   }, [linkUrl, activeUrl, token, router])
 
-  const toggleHlSection = useCallback(() => {
-    setHlExpanded(prev => {
-      const next = !prev
-      AsyncStorage.setItem(`doc_hl_exp_${id}`, next ? '1' : '0').catch(() => {})
-      return next
-    })
-  }, [id])
-
-  const handleHlPin = useCallback(async (hl: HighlightWithDoc) => {
-    if (!activeUrl || !token) return
-    const next = hl.pinned !== 1
-    try {
-      await pinHighlight(activeUrl, token, hl.id, next)
-      setHighlights(prev => prev.map(h => h.id === hl.id ? { ...h, pinned: next ? 1 : 0 } : h))
-    } catch {
-      toast('Failed to update pin', 'error')
-    }
-  }, [activeUrl, token, toast])
-
-  const handleHlDeleteInPane = useCallback(async (hlId: string) => {
-    if (!activeUrl || !token) return
-    try {
-      await deleteHighlight(activeUrl, token, hlId)
-      setHighlights(prev => prev.filter(h => h.id !== hlId))
-    } catch {
-      toast('Failed to delete highlight', 'error')
-    }
-  }, [activeUrl, token, toast])
-
   const progressPct = Math.round(scrollProgress * 100)
 
   return (
@@ -538,25 +517,13 @@ export default function DocumentViewer() {
         </View>
       ) : htmlContent ? (
         <View style={s.contentArea}>
-          {doc && highlights.length > 0 && (
-            <HighlightsBanner
-              doc={doc}
-              highlights={highlights}
-              expanded={hlExpanded}
-              onToggle={toggleHlSection}
-              onDelete={handleHlDeleteInPane}
-              onPin={handleHlPin}
-              onDocumentPress={(docId) => router.push(`/document/${encodeURIComponent(docId)}?from=/${id}`)}
-            />
-          )}
           {Platform.OS === 'web' ? (
             <View style={s.webView}>
-              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
               <iframe
                 ref={iframeRef}
                 srcDoc={htmlContent ?? ''}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' } as any}
-                onLoad={handleDocumentLoad}
               />
             </View>
           ) : (
@@ -565,7 +532,6 @@ export default function DocumentViewer() {
               source={{ html: htmlContent ?? '', baseUrl: activeUrl ?? '' }}
               style={s.webView}
               onMessage={handleMessage}
-              onLoad={handleDocumentLoad}
               originWhitelist={['*']}
               allowsInlineMediaPlayback
               scrollEnabled
@@ -758,40 +724,6 @@ function buildStyles(t: Theme) {
     backBtn: { flexShrink: 0, padding: t.spacing.sm },
     backText: { color: t.colors.accent, fontSize: 20, fontWeight: '400' },
     headerTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '600' },
-    headerActions: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
-    headerTagBtn: {
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 6,
-      backgroundColor: t.colors.background,
-      borderWidth: 1,
-      borderColor: t.colors.border,
-    },
-    headerTagBtnText: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
-    headerDeleteBtn: {
-      width: 28,
-      height: 28,
-      borderRadius: 6,
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: t.colors.background,
-      borderWidth: 1,
-      borderColor: t.colors.border,
-    },
-    headerDeleteBtnText: { fontSize: 14, color: t.colors.muted },
-    headerPipelineBtn: {
-      paddingHorizontal: t.spacing.sm,
-      paddingVertical: 4,
-      borderRadius: 6,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: '#a78bfa',
-      minWidth: 28,
-      minHeight: 28,
-    },
-    headerPipelineBtnText: { color: '#a78bfa', fontSize: 12, fontWeight: '700' },
-    headerBtnDisabled: { opacity: 0.5 },
     openWebBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuText: { color: t.colors.text, fontSize: 22, fontWeight: '400', lineHeight: 24 },
@@ -802,7 +734,6 @@ function buildStyles(t: Theme) {
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
     retryText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
     contentArea: { flex: 1, marginTop: 56 },
-
     webView: { flex: 1, backgroundColor: t.colors.background },
     progressBar: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, overflow: 'hidden' },
     progressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: t.colors.accent, opacity: 0.6 },
@@ -923,83 +854,3 @@ function buildStyles(t: Theme) {
     metaActionDeleteText: { fontSize: 14, color: t.colors.muted },
   })
 }
-
-// ── Highlights banner (above WebView in central pane) ─────────────────────────
-
-type HighlightsBannerProps = {
-  doc: Document
-  highlights: HighlightWithDoc[]
-  expanded: boolean
-  onToggle: () => void
-  onDelete: (hlId: string) => void
-  onPin: (hl: HighlightWithDoc) => void
-  onDocumentPress: (docId: string) => void
-}
-
-function HighlightsBanner({ doc, highlights, expanded, onToggle, onDelete, onPin, onDocumentPress }: HighlightsBannerProps) {
-  const { theme } = useUnistyles()
-  const s = useMemo(() => buildBannerStyles(theme), [theme])
-  return (
-    <View style={s.container}>
-      <Text style={s.docTitle} numberOfLines={2}>{doc.title || doc.canonical_url}</Text>
-      <Pressable style={s.sectionHeader} onPress={onToggle}>
-        <Text style={s.sectionTitle}>Highlights ({highlights.length})</Text>
-        <Text style={s.collapseIcon}>{expanded ? '▲' : '▼'}</Text>
-      </Pressable>
-      {expanded && (
-        <ScrollView style={s.hlList} contentContainerStyle={s.hlListContent} nestedScrollEnabled>
-          {highlights.map(hl => (
-            <HighlightCard
-              key={hl.id}
-              item={hl}
-              linkedDocuments={hl.linked_documents}
-              pinned={hl.pinned === 1}
-              onDelete={() => onDelete(hl.id)}
-              onPin={() => onPin(hl)}
-              onDocumentPress={onDocumentPress}
-            />
-          ))}
-        </ScrollView>
-      )}
-    </View>
-  )
-}
-
-function buildBannerStyles(t: Theme) {
-  return StyleSheet.create({
-    container: {
-      backgroundColor: t.colors.surface,
-      borderBottomWidth: 1,
-      borderBottomColor: t.colors.border,
-    },
-    docTitle: {
-      color: t.colors.text,
-      fontSize: 15,
-      fontWeight: '700',
-      paddingHorizontal: 14,
-      paddingTop: 12,
-      paddingBottom: 6,
-    },
-    sectionHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 14,
-      paddingVertical: 8,
-      borderTopWidth: 1,
-      borderTopColor: t.colors.border,
-    },
-    sectionTitle: {
-      color: t.colors.muted,
-      fontSize: 12,
-      fontWeight: '700',
-      textTransform: 'uppercase',
-      letterSpacing: 0.5,
-    },
-    collapseIcon: { color: t.colors.muted, fontSize: 11 },
-    hlList: { maxHeight: 320 },
-    hlListContent: { padding: 10, gap: 8 },
-  })
-}
-
-

@@ -612,6 +612,7 @@ export type Highlight = {
   kind: string    // 'summary' | 'item' | 'link' | 'note'
   title: string
   body: string
+  body_html?: string  // pre-rendered markdown→HTML from server
   metadata: string  // JSON string
   pinned: number    // 0 | 1
   archived_at: string | null

@@ -89,11 +89,20 @@ _check-no-dev:
         exit 1; \
     fi
 
+# ── WebView bundle ────────────────────────────────────────────────────────────
+
+[group('build')]
+[doc('Compile document-viewer.ts → document-viewer-bundle.ts via esbuild')]
+webview-build:
+    @echo "Building document-viewer bundle..."
+    cd app && node_modules/.bin/esbuild src/webview/document-viewer.ts --bundle --platform=browser --format=iife --outfile=/tmp/dvbuild.js --minify
+    node scripts/wrap-webview-bundle.mjs
+
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
 [group('dev')]
 [doc('Build app + server, restart background server (dev mode, HTTP)')]
-dev: _check-no-service build-server build-cli build-app-web
+dev: _check-no-service webview-build build-server build-cli build-app-web
     @rm -rf /tmp/playwright_chromiumdev_profile-* /tmp/playwright-artifacts-* 2>/dev/null || true
     nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist > /tmp/samizdat-{{_dev_port}}.log 2>&1 &
     @PORT={{_dev_port}}; for i in $(seq 1 20); do ss -tlnp | grep -q ":$PORT" && break; sleep 0.5; done && echo "server started on :{{_dev_port}}, log: /tmp/samizdat-{{_dev_port}}.log"
