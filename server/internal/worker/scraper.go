@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,6 +25,8 @@ type scrapePayload struct {
 	URL    string  `json:"url"`
 	FeedID *string `json:"feed_id,omitempty"`
 }
+
+var mdLinkRe = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
 
 var utmParams = []string{
 	"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
@@ -260,7 +263,11 @@ func extractLeadLists(rawHTML []byte, extractedMD string) string {
 		firstLine := strings.SplitN(list, "\n", 2)[0]
 		firstLine = strings.TrimLeft(firstLine, "-* 0123456789.")
 		firstLine = strings.TrimSpace(firstLine)
-		if firstLine != "" && !strings.Contains(extractedMD, firstLine[:min(40, len(firstLine))]) {
+		// Use text before the first markdown link for dedup — trafilatura
+		// sometimes line-breaks between intro text and link, so the full
+		// inline `text [link](url)` string won't appear verbatim.
+		checkStr := leadListCheckStr(firstLine)
+		if checkStr != "" && !strings.Contains(extractedMD, checkStr) {
 			kept = append(kept, list)
 		}
 	}
@@ -354,6 +361,29 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// leadListCheckStr extracts a plain-text snippet from a markdown list-item line
+// for deduplication against trafilatura output. Trafilatura sometimes breaks the
+// intro text and its link onto separate lines, so checking the full inline string
+// would miss a match. Strategy: use text before the first "[" if that prefix is
+// ≥10 chars; otherwise strip link syntax and check the link text.
+func leadListCheckStr(line string) string {
+	const maxLen = 40
+	if idx := strings.Index(line, "["); idx >= 10 {
+		s := strings.TrimSpace(line[:idx])
+		if len(s) > maxLen {
+			s = s[:maxLen]
+		}
+		return s
+	}
+	// Link is at start — strip [text](url) → text for comparison.
+	stripped := mdLinkRe.ReplaceAllString(line, "$1")
+	stripped = strings.TrimSpace(stripped)
+	if len(stripped) > maxLen {
+		stripped = stripped[:maxLen]
+	}
+	return stripped
 }
 
 // extractFigureImages scans raw HTML for <figure> elements containing <img src="...">
