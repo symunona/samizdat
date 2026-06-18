@@ -261,7 +261,7 @@ export default function JobsScreen() {
     if (!activeUrl || !token || queueingPipelinesId) return
     setQueueingPipelinesId(job.id)
     try {
-      const result = await queueFeedPipelines(activeUrl, token, feedId, true)
+      const result = await queueFeedPipelines(activeUrl, token, feedId, true, job.id)
       toast(
         result.queued > 0
           ? `Queued ${result.queued} pipeline job${result.queued === 1 ? '' : 's'} (paused)${result.skipped > 0 ? `, ${result.skipped} skipped` : ''}`
@@ -278,7 +278,7 @@ export default function JobsScreen() {
     if (!activeUrl || !token || queueingPipelinesId) return
     setQueueingPipelinesId(job.id)
     try {
-      const result = await queueDocumentPipelines(activeUrl, token, docId, true)
+      const result = await queueDocumentPipelines(activeUrl, token, docId, true, job.id)
       toast(
         result.queued > 0
           ? `Queued ${result.queued} pipeline job${result.queued === 1 ? '' : 's'} (paused)${result.skipped > 0 ? `, ${result.skipped} skipped` : ''}`

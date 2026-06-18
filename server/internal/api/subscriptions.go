@@ -278,6 +278,10 @@ func (h *subscriptionsHandler) queuePipelines(w http.ResponseWriter, r *http.Req
 		return
 	}
 	hold := r.URL.Query().Get("hold") == "true"
+	var parentJobID *string
+	if p := r.URL.Query().Get("parent_job_id"); p != "" {
+		parentJobID = &p
+	}
 
 	docs, err := h.q.ListDocumentsByFeed(r.Context(), &feedID)
 	if err != nil {
@@ -317,21 +321,23 @@ func (h *subscriptionsHandler) queuePipelines(w http.ResponseWriter, r *http.Req
 			jobID := uuid.NewString()
 			if hold {
 				_, err = h.q.InsertJobPaused(r.Context(), store.InsertJobPausedParams{
-					ID:        jobID,
-					Kind:      "run_pipeline",
-					Payload:   string(payload),
-					RunAfter:  now,
-					CreatedAt: now,
-					UpdatedAt: now,
+					ID:          jobID,
+					Kind:        "run_pipeline",
+					Payload:     string(payload),
+					RunAfter:    now,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+					ParentJobID: parentJobID,
 				})
 			} else {
 				_, err = h.q.InsertJob(r.Context(), store.InsertJobParams{
-					ID:        jobID,
-					Kind:      "run_pipeline",
-					Payload:   string(payload),
-					RunAfter:  now,
-					CreatedAt: now,
-					UpdatedAt: now,
+					ID:          jobID,
+					Kind:        "run_pipeline",
+					Payload:     string(payload),
+					RunAfter:    now,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+					ParentJobID: parentJobID,
 				})
 			}
 			if err != nil {

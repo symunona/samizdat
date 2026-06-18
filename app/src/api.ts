@@ -862,8 +862,12 @@ export async function queueFeedPipelines(
   token: string,
   feedId: string,
   hold = true,
+  parentJobId?: string,
 ): Promise<QueuePipelinesResult> {
-  const qs = hold ? '?hold=true' : ''
+  const params = new URLSearchParams()
+  if (hold) params.set('hold', 'true')
+  if (parentJobId) params.set('parent_job_id', parentJobId)
+  const qs = params.size ? `?${params}` : ''
   const res = await fetch(
     `${base(serverUrl)}/api/v1/feeds/${encodeURIComponent(feedId)}/queue-pipelines${qs}`,
     { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
@@ -876,8 +880,12 @@ export async function queueDocumentPipelines(
   token: string,
   docId: string,
   hold = true,
+  parentJobId?: string,
 ): Promise<QueuePipelinesResult> {
-  const qs = hold ? '?hold=true' : ''
+  const params = new URLSearchParams()
+  if (hold) params.set('hold', 'true')
+  if (parentJobId) params.set('parent_job_id', parentJobId)
+  const qs = params.size ? `?${params}` : ''
   const res = await fetch(
     `${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/queue-pipelines${qs}`,
     { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
