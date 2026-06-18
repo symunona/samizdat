@@ -93,7 +93,8 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 				URL     string  `json:"url"`
 				FeedID  *string `json:"feed_id,omitempty"`
 				FeedURL string  `json:"feed_url,omitempty"`
-			}{URL: u, FeedID: &feedID, FeedURL: feed.Url})
+				Manual  bool    `json:"manual,omitempty"`
+			}{URL: u, FeedID: &feedID, FeedURL: feed.Url, Manual: p.Manual})
 			parentID := job.ID
 
 			if p.Manual {

@@ -24,6 +24,7 @@ import (
 type scrapePayload struct {
 	URL    string  `json:"url"`
 	FeedID *string `json:"feed_id,omitempty"`
+	Manual bool    `json:"manual,omitempty"`
 }
 
 var mdLinkRe = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
@@ -155,15 +156,17 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		return "", fmt.Errorf("enqueue fetch_assets: %w", err)
 	}
 
-	// Trigger matching pipelines.
-	triggerPipelines(ctx, q, doc, now, &parentID)
+	// Trigger matching pipelines. Hold if the scrape was from a manual poll —
+	// the user controls when pipeline jobs run in that case.
+	triggerPipelines(ctx, q, doc, now, &parentID, p.Manual)
 
 	jobResult, _ := json.Marshal(map[string]string{"document_id": doc.ID, "title": title})
 	return string(jobResult), nil
 }
 
 // triggerPipelines checks all enabled on_new_document pipelines and enqueues runs for matches.
-func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document, now string, parentJobID *string) {
+// When hold is true the jobs are inserted as paused so the user can review before resuming.
+func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document, now string, parentJobID *string, hold bool) {
 	pipelines, err := q.ListEnabledPipelines(ctx)
 	if err != nil {
 		logScraper.Errorf("pipeline trigger: list pipelines: %v", err)
@@ -195,19 +198,32 @@ func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document,
 			"pipeline_name":  pl.Name,
 			"document_title": doc.Title,
 		})
-		_, err := q.InsertJob(ctx, store.InsertJobParams{
-			ID:          uuid.NewString(),
-			Kind:        "run_pipeline",
-			Payload:     string(payload),
-			RunAfter:    now,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-			ParentJobID: parentJobID,
-		})
+		jobID := uuid.NewString()
+		if hold {
+			_, err = q.InsertJobPaused(ctx, store.InsertJobPausedParams{
+				ID:          jobID,
+				Kind:        "run_pipeline",
+				Payload:     string(payload),
+				RunAfter:    now,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+				ParentJobID: parentJobID,
+			})
+		} else {
+			_, err = q.InsertJob(ctx, store.InsertJobParams{
+				ID:          jobID,
+				Kind:        "run_pipeline",
+				Payload:     string(payload),
+				RunAfter:    now,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+				ParentJobID: parentJobID,
+			})
+		}
 		if err != nil {
 			logScraper.Errorf("pipeline trigger: enqueue run for pipeline %s: %v", pl.ID, err)
 		} else {
-			logScraper.Printf("pipeline trigger: enqueued run_pipeline for pipeline %s (%s)", pl.ID[:8], pl.Name)
+			logScraper.Printf("pipeline trigger: enqueued run_pipeline (hold=%v) for pipeline %s (%s)", hold, pl.ID[:8], pl.Name)
 		}
 	}
 }
