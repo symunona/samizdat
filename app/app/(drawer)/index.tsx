@@ -26,6 +26,12 @@ export default function FeedScreen() {
 
   const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set())
 
+  const handleUnarchive = useCallback(async (id: string) => {
+    if (!activeUrl || !token) return
+    setArchivedIds(prev => { const s = new Set(prev); s.delete(id); return s })
+    archiveHighlight(activeUrl, token, id, null).catch(() => {})
+  }, [activeUrl, token])
+
   const swipeRefs = useRef<Map<string, SwipeableMethods | null>>(new Map())
   const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   // scroll-to-archive tracking
@@ -158,7 +164,7 @@ export default function FeedScreen() {
     const handleSwipeOpen = (direction: string) => {
       const ref = swipeRefs.current.get(item.id)
       ref?.close()
-      if (direction === 'right') {
+      if (direction === 'left') {
         initiateDelete(item)
       } else {
         handlePin(item)
@@ -180,37 +186,51 @@ export default function FeedScreen() {
       />
     )
 
+    const unarchiveBtn = isArchived ? (
+      <Pressable style={s.unarchiveBtn} onPress={() => handleUnarchive(item.id)} hitSlop={8}>
+        <Text style={s.unarchiveBtnText}>Unread</Text>
+      </Pressable>
+    ) : null
+
     if (Platform.OS === 'web') {
-      return card
+      return (
+        <View style={isArchived ? s.archivedWrapper : undefined}>
+          {card}
+          {unarchiveBtn}
+        </View>
+      )
     }
 
     return (
-      <ReanimatedSwipeable
-        ref={(r) => {
-          if (r) swipeRefs.current.set(item.id, r)
-          else swipeRefs.current.delete(item.id)
-        }}
-        containerStyle={[s.swipeContainer, isArchived && s.archivedContainer]}
-        renderLeftActions={() => (
-          <View style={s.deleteAction}>
-            <Text style={s.swipeIcon}>🗑</Text>
-            <Text style={s.swipeLabel}>Delete</Text>
-          </View>
-        )}
-        renderRightActions={() => (
-          <View style={[s.starAction, isPinned && s.starActionActive]}>
-            <Text style={s.swipeIcon}>{isPinned ? '★' : '☆'}</Text>
-            <Text style={s.swipeLabel}>{isPinned ? 'Unpin' : 'Star'}</Text>
-          </View>
-        )}
-        overshootLeft={false}
-        overshootRight={false}
-        onSwipeableOpen={handleSwipeOpen}
-      >
-        {card}
-      </ReanimatedSwipeable>
+      <View style={s.cardWrapper}>
+        <ReanimatedSwipeable
+          ref={(r) => {
+            if (r) swipeRefs.current.set(item.id, r)
+            else swipeRefs.current.delete(item.id)
+          }}
+          containerStyle={[s.swipeContainer, isArchived && s.archivedContainer]}
+          renderLeftActions={() => (
+            <View style={s.deleteAction}>
+              <Text style={s.swipeIcon}>🗑</Text>
+              <Text style={s.swipeLabel}>Delete</Text>
+            </View>
+          )}
+          renderRightActions={() => (
+            <View style={[s.starAction, isPinned && s.starActionActive]}>
+              <Text style={s.swipeIcon}>{isPinned ? '★' : '☆'}</Text>
+              <Text style={s.swipeLabel}>{isPinned ? 'Unpin' : 'Star'}</Text>
+            </View>
+          )}
+          overshootLeft={false}
+          overshootRight={false}
+          onSwipeableOpen={handleSwipeOpen}
+        >
+          {card}
+        </ReanimatedSwipeable>
+        {unarchiveBtn}
+      </View>
     )
-  }, [actionLoading, archivedIds, deletingIds, handlePin, initiateDelete, undoDelete, router, s])
+  }, [actionLoading, archivedIds, deletingIds, handlePin, handleUnarchive, initiateDelete, undoDelete, router, s])
 
   if (loading && highlights.length === 0) {
     return (
@@ -290,13 +310,37 @@ function buildStyles(t: Theme) {
     list: { flex: 1, backgroundColor: t.colors.background },
     listContent: { padding: 12, gap: 12, maxWidth: 800, alignSelf: 'center', width: '100%' },
     center: { flex: 1, backgroundColor: t.colors.background, justifyContent: 'center', alignItems: 'center', gap: 12 },
+    cardWrapper: { position: 'relative' },
     swipeContainer: {
       borderRadius: 10,
       overflow: 'hidden',
     },
-    archivedContainer: {
-      opacity: 0.6,
+    archivedWrapper: {
+      position: 'relative',
+      opacity: 0.45,
+      borderWidth: 1,
+      borderStyle: 'dashed',
+      borderColor: t.colors.border,
+      borderRadius: 10,
     },
+    archivedContainer: {
+      opacity: 0.45,
+      borderWidth: 1,
+      borderStyle: 'dashed',
+      borderColor: t.colors.border,
+      borderRadius: 10,
+    },
+    unarchiveBtn: {
+      position: 'absolute',
+      top: 8,
+      right: 8,
+      backgroundColor: t.colors.accent,
+      borderRadius: 6,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      zIndex: 10,
+    },
+    unarchiveBtnText: { color: '#fff', fontSize: 11, fontWeight: '700' },
     deleteAction: {
       width: 80,
       backgroundColor: '#ef4444',

@@ -70,7 +70,7 @@ export default function DocumentsScreen() {
 
   const startDelete = useCallback(
     (doc: Document) => {
-      setPendingDeleteIds((prev) => new Set([...prev, doc.id]))
+      // item stays visible as placeholder — pendingDeleteIds untouched until real delete fires
       setPendingDeletes((prev) => ({ ...prev, [doc.id]: { doc, countdown: 5 } }))
 
       const tick = setInterval(() => {
@@ -90,10 +90,9 @@ export default function DocumentsScreen() {
           delete next[doc.id]
           return next
         })
-        if (!activeUrl || !token) {
-          setPendingDeleteIds((prev) => { const s = new Set(prev); s.delete(doc.id); return s })
-          return
-        }
+        if (!activeUrl || !token) return
+        // hide immediately as real delete fires
+        setPendingDeleteIds((prev) => new Set([...prev, doc.id]))
         try {
           await deleteDocument(activeUrl, token, doc.id)
           // trigger sync so store gets the tombstone
@@ -152,6 +151,27 @@ export default function DocumentsScreen() {
 
   function renderItem({ item }: { item: Document }) {
     const displayTitle = item.title?.trim() ? item.title : item.canonical_url
+    const pending = pendingDeletes[item.id]
+
+    if (pending) {
+      return (
+        <View style={[s.itemRow, s.itemRowDeleted]}>
+          <View style={[s.item, s.itemDeletedContent]}>
+            <Text style={[s.itemTitle, s.itemTitleDeleted]} numberOfLines={2}>{displayTitle}</Text>
+            <Text style={[s.itemUrl, s.itemDeletedMuted]} numberOfLines={1}>{item.canonical_url}</Text>
+            <Text style={[s.itemDate, s.itemDeletedMuted]}>Fetched {formatDate(item.fetched_at)}</Text>
+          </View>
+          <Pressable
+            style={({ pressed }) => [s.undoBtnInline, pressed && s.undoBtnInlinePressed]}
+            onPress={() => undoDelete(item.id)}
+            hitSlop={8}
+          >
+            <Text style={s.undoBtnInlineText}>Undo ({pending.countdown}s)</Text>
+          </Pressable>
+        </View>
+      )
+    }
+
     return (
       <View style={s.itemRow}>
         <Link href={`/document/${item.id}?from=/documents`} style={s.item}>
@@ -246,22 +266,6 @@ export default function DocumentsScreen() {
           <Text style={s.feedbackError}>{submitError}</Text>
         </View>
       )}
-
-      {/* Undo delete toasts */}
-      {Object.entries(pendingDeletes).map(([id, { doc, countdown }]) => {
-        const title = doc.title?.trim() ? doc.title : doc.canonical_url
-        return (
-          <View key={id} style={s.undoRow}>
-            <Text style={s.undoText} numberOfLines={1}>Deleted: {title}</Text>
-            <Pressable
-              style={({ pressed }) => [s.undoBtn, pressed && s.undoBtnPressed]}
-              onPress={() => undoDelete(id)}
-            >
-              <Text style={s.undoBtnText}>Undo ({countdown}s)</Text>
-            </Pressable>
-          </View>
-        )
-      })}
 
       {/* Filter indicator */}
       {(feedIdParam || pipelineIdParam) && (
@@ -398,24 +402,30 @@ function buildStyles(t: Theme) {
     },
     deleteBtnPressed: { opacity: 0.5 },
     deleteBtnText: { color: t.colors.muted, fontSize: 16, fontWeight: '400' },
-    undoRow: {
-      flexDirection: 'row',
+    itemRowDeleted: { backgroundColor: t.colors.surface, opacity: 0.7 },
+    itemDeletedContent: {
+      flex: 1,
+      flexShrink: 1,
+      minWidth: 0,
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.md,
+      display: 'flex',
+      flexDirection: 'column',
+    },
+    itemTitleDeleted: { color: t.colors.muted, fontSize: 15, fontWeight: '600', lineHeight: 20, marginBottom: 2, textDecorationLine: 'line-through' },
+    itemDeletedMuted: { color: t.colors.placeholder },
+    undoBtnInline: {
+      paddingHorizontal: t.spacing.sm,
+      paddingVertical: t.spacing.md,
+      justifyContent: 'center',
       alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: t.spacing.md,
-      paddingVertical: t.spacing.sm,
-      backgroundColor: '#2a1a0e',
-      borderBottomWidth: 1,
-      borderBottomColor: t.colors.border,
-    },
-    undoText: { color: '#f5c28a', fontSize: 13, flex: 1, marginRight: t.spacing.sm },
-    undoBtn: {
+      flexShrink: 0,
       backgroundColor: '#e8743b',
+      marginRight: t.spacing.sm,
       borderRadius: t.radius.sm,
-      paddingHorizontal: t.spacing.md,
-      paddingVertical: 4,
+      minWidth: 72,
     },
-    undoBtnPressed: { opacity: 0.75 },
-    undoBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+    undoBtnInlinePressed: { opacity: 0.75 },
+    undoBtnInlineText: { color: '#fff', fontSize: 12, fontWeight: '700', textAlign: 'center' },
   })
 }
