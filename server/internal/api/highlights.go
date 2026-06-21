@@ -34,6 +34,7 @@ type highlightWithDoc struct {
 	DocumentURL     string            `json:"document_url"`
 	BodyHTML        string            `json:"body_html"`
 	LinkedDocuments map[string]string `json:"linked_documents,omitempty"`
+	Tags            []store.Tag       `json:"tags,omitempty"`
 }
 
 func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
@@ -87,12 +88,14 @@ func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
 				urlCache[u] = ""
 			}
 		}
+		tags, _ := h.q.ListTagsByHighlight(r.Context(), hl.ID)
 		out = append(out, highlightWithDoc{
 			Highlight:       hl,
 			DocumentTitle:   doc.Title,
 			DocumentURL:     doc.CanonicalUrl,
 			BodyHTML:        renderMarkdown(hl.Body),
 			LinkedDocuments: linked,
+			Tags:            tags,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

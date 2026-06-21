@@ -2,7 +2,7 @@
 created: 2026-06-21
 topic: Main feed — inline link actions, status icons, touch polish
 excerpt: Click link in feed → same LinkActionSheet as doc viewer; non-blocking scrape with inline link/document/spinner icon; hide on-card buttons on touch; show tags; standardize annotate icon; fix markdown link spacing.
-status: decided — ready to branch
+status: implemented on feat/feed-link-actions — awaiting user review before squash-merge
 ---
 
 ## Resolved decisions (2026-06-21)

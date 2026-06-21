@@ -3,14 +3,15 @@ import { useMemo, useState } from 'react'
 const CLIP_CHAR_THRESHOLD = 800
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
-import type { Highlight } from './api'
+import type { HighlightWithDoc } from './api'
 import MarkdownBody from './MarkdownBody'
 import NoteEditButton from './NoteEditButton'
+import { isTouchDevice } from './touch'
 
 const MAX_BODY_HEIGHT = 400
 
 type Props = {
-  item: Highlight
+  item: HighlightWithDoc
   linkedDocuments?: Record<string, string>
   onPress?: () => void
   onPin?: () => void
@@ -18,15 +19,17 @@ type Props = {
   onAnnotate?: () => void
   onTags?: () => void
   onDocumentPress?: (docId: string) => void
+  onLinkAction?: (url: string) => void
   busy?: boolean
   pinned?: boolean
 }
 
 export default function HighlightCard({
-  item, linkedDocuments, onPress, onPin, onDelete, onAnnotate, onTags, onDocumentPress, busy, pinned,
+  item, linkedDocuments, onPress, onPin, onDelete, onAnnotate, onTags, onDocumentPress, onLinkAction, busy, pinned,
 }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
+  const touch = isTouchDevice()
   const kindColor = useMemo(() => ({
     summary: theme.colors.accent,
     link: '#6b8cff',
@@ -49,7 +52,7 @@ export default function HighlightCard({
         <Text style={s.hlTitle} numberOfLines={1}>{item.title}</Text>
         {busy
           ? <ActivityIndicator size="small" color={theme.colors.accent} />
-          : onPin
+          : onPin && !touch
             ? <Pressable style={s.starBtn} onPress={onPin} hitSlop={8}>
                 <Text style={[s.starIcon, pinned && s.starIconActive]}>
                   {pinned ? '★' : '☆'}
@@ -60,7 +63,7 @@ export default function HighlightCard({
 
       <View style={s.bodyClipMax}>
         <View>
-          <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={onDocumentPress}>
+          <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={onDocumentPress} onLinkAction={onLinkAction}>
             {item.body}
           </MarkdownBody>
         </View>
@@ -82,7 +85,7 @@ export default function HighlightCard({
                 </Pressable>
               </View>
               <ScrollView style={s.modalScroll} contentContainerStyle={s.modalScrollContent}>
-                <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={(id) => { setModalOpen(false); onDocumentPress?.(id) }}>
+                <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={(id) => { setModalOpen(false); onDocumentPress?.(id) }} onLinkAction={onLinkAction}>
                   {item.body}
                 </MarkdownBody>
               </ScrollView>
@@ -91,10 +94,22 @@ export default function HighlightCard({
         </Modal>
       )}
 
+      {item.tags && item.tags.length > 0 && (
+        <View style={s.tagRow}>
+          {item.tags.map(tag => (
+            <View key={tag.id} style={[s.tagChip, { borderColor: tag.color || theme.colors.border }]}>
+              <Text style={[s.tagText, { color: tag.color || theme.colors.muted }]}>#{tag.name}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
       <View style={s.cardFooter}>
-        <Pressable style={s.deleteBtn} onPress={onDelete} hitSlop={6}>
-          <Text style={s.deleteBtnText}>🗑</Text>
-        </Pressable>
+        {!touch && onDelete ? (
+          <Pressable style={s.deleteBtn} onPress={onDelete} hitSlop={6}>
+            <Text style={s.deleteBtnText}>🗑</Text>
+          </Pressable>
+        ) : null}
         <View style={s.footerSpacer} />
         {onTags
           ? <Pressable style={s.footerBtn} onPress={onTags} hitSlop={6}>
@@ -156,6 +171,14 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.border,
     },
     footerBtnText: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
+    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    tagChip: {
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+      borderRadius: 10,
+      borderWidth: 1,
+    },
+    tagText: { fontSize: 11, fontWeight: '600' },
 bodyClipMax: { maxHeight: MAX_BODY_HEIGHT, overflow: 'hidden' },
     expandOverlay: {
       position: 'absolute',

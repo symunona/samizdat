@@ -9,6 +9,8 @@ import { fetchHighlights, deleteHighlight, pinHighlight, archiveHighlight, creat
 import HighlightCard from '../../src/HighlightCard'
 import TagSelectorModal from '../../src/TagSelectorModal'
 import AnnotationPanel from '../../src/AnnotationPanel'
+import LinkActionSheet from '../../src/LinkActionSheet'
+import { useScrapeQueue } from '../../src/ScrapeQueueContext'
 
 export default function FeedScreen() {
   const { theme } = useUnistyles()
@@ -16,6 +18,9 @@ export default function FeedScreen() {
   const router = useRouter()
   const { activeUrl, token, status } = useConnection()
   const { height: windowHeight } = useWindowDimensions()
+  const { startScrape } = useScrapeQueue()
+
+  const [linkUrl, setLinkUrl] = useState<string | null>(null)
 
   const [highlights, setHighlights] = useState<HighlightWithDoc[]>([])
   const [loading, setLoading] = useState(false)
@@ -184,6 +189,7 @@ export default function FeedScreen() {
         onAnnotate={() => setAnnotateItem(item)}
         onTags={() => setTagModalId(item.id)}
         onDocumentPress={(docId) => router.push(`/document/${encodeURIComponent(docId)}?from=/`)}
+        onLinkAction={(url) => setLinkUrl(url)}
       />
     )
 
@@ -295,6 +301,15 @@ export default function FeedScreen() {
         mode="create"
         onSave={handleAnnotateSave}
         onCancel={() => setAnnotateItem(null)}
+      />
+      <LinkActionSheet
+        url={linkUrl}
+        onReadAsDocument={(url) => {
+          let title = url
+          try { title = new URL(url).hostname } catch { /* keep url */ }
+          startScrape(url, title)
+        }}
+        onClose={() => setLinkUrl(null)}
       />
     </>
   )

@@ -711,6 +711,7 @@ export type HighlightWithDoc = Highlight & {
   document_title: string
   document_url: string
   linked_documents?: Record<string, string>
+  tags?: Tag[]
 }
 
 export async function fetchHighlights(serverUrl: string, token: string, limit = 100, archived = false): Promise<HighlightWithDoc[]> {

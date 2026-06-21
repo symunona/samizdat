@@ -30,8 +30,6 @@ import {
   deleteAnnotation,
   deleteDocument,
   lookupDocumentByURL,
-  submitScrapeJob,
-  fetchJob,
   fetchDocumentHighlights,
   deleteHighlight,
   pinHighlight,
@@ -45,12 +43,12 @@ import { saveTheme } from '../../../src/storage'
 import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
 import TagSelectorModal from '../../../src/TagSelectorModal'
+import LinkActionSheet from '../../../src/LinkActionSheet'
+import { useScrapeQueue } from '../../../src/ScrapeQueueContext'
 import { buildDocumentHtml } from '../../../src/markdownToHtml'
 import { useSyncStore } from '../../../src/store/syncStore'
 
 const DEBOUNCE_MS = 1000
-const POLL_INTERVAL_MS = 2000
-const POLL_MAX_TRIES = 60
 
 type ParsedMsg = {
   type: string
@@ -181,8 +179,7 @@ export default function DocumentViewer() {
 
   // Link action modal state
   const [linkUrl, setLinkUrl] = useState<string | null>(null)
-  const [linkScraping, setLinkScraping] = useState(false)
-  const [linkError, setLinkError] = useState<string | null>(null)
+  const { startScrape } = useScrapeQueue()
 
   const handleOpenTagModal = useCallback((annotationId: string) => {
     setTagTargetId(annotationId)
@@ -269,7 +266,6 @@ export default function DocumentViewer() {
       return
     }
     setLinkUrl(href)
-    setLinkError(null)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeUrl, token])
 
@@ -448,44 +444,11 @@ export default function DocumentViewer() {
     if (doc?.canonical_url) Linking.openURL(doc.canonical_url)
   }, [doc])
 
-  const openLinkInBrowser = useCallback(() => {
-    if (!linkUrl) return
-    if (Platform.OS === 'web') {
-      window.open(linkUrl, '_blank', 'noopener,noreferrer')
-    } else {
-      Linking.openURL(linkUrl)
-    }
-    setLinkUrl(null)
-  }, [linkUrl])
-
-  const scrapeLink = useCallback(async () => {
-    if (!linkUrl || !activeUrl || !token) return
-    setLinkScraping(true)
-    setLinkError(null)
-    try {
-      const { job_id } = await submitScrapeJob(activeUrl, token, linkUrl)
-      let docId: string | null = null
-      for (let i = 0; i < POLL_MAX_TRIES; i++) {
-        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
-        const job = await fetchJob(activeUrl, token, job_id)
-        if (job.status === 'done') {
-          const result = JSON.parse(job.result || '{}') as { document_id?: string }
-          docId = result.document_id ?? null
-          break
-        }
-        if (job.status === 'dead') {
-          throw new Error(job.last_error || 'scrape failed')
-        }
-      }
-      if (!docId) throw new Error('scrape timed out')
-      setLinkUrl(null)
-      router.push(`/document/${encodeURIComponent(docId)}`)
-    } catch (e) {
-      setLinkError(e instanceof Error ? e.message : 'scrape failed')
-    } finally {
-      setLinkScraping(false)
-    }
-  }, [linkUrl, activeUrl, token, router])
+  const handleReadLinkAsDocument = useCallback((href: string) => {
+    let title = href
+    try { title = new URL(href).hostname } catch { /* keep href */ }
+    startScrape(href, title)
+  }, [startScrape])
 
   const progressPct = Math.round(scrollProgress * 100)
 
@@ -585,41 +548,11 @@ export default function DocumentViewer() {
         </Pressable>
       )}
 
-      {linkUrl && (
-        <Pressable style={s.linkOverlay} onPress={() => { if (!linkScraping) setLinkUrl(null) }}>
-          <Pressable style={s.linkSheet} onPress={e => e.stopPropagation()}>
-            <Text style={s.linkHost} numberOfLines={1}>
-              {(() => { try { return new URL(linkUrl).hostname } catch { return linkUrl } })()}
-            </Text>
-            <Text style={s.linkHref} numberOfLines={2}>{linkUrl}</Text>
-            {linkError ? <Text style={s.linkErr}>{linkError}</Text> : null}
-            <Pressable
-              style={[s.linkBtn, s.linkBtnPrimary, linkScraping && s.btnDisabled]}
-              onPress={scrapeLink}
-              disabled={linkScraping}
-            >
-              {linkScraping ? (
-                <ActivityIndicator size="small" color="#0b0b0c" />
-              ) : null}
-              <Text style={s.linkBtnPrimaryText}>{linkScraping ? 'Scraping…' : 'Read as document'}</Text>
-            </Pressable>
-            <Pressable
-              style={[s.linkBtn, s.linkBtnSecondary, linkScraping && s.btnDisabled]}
-              onPress={openLinkInBrowser}
-              disabled={linkScraping}
-            >
-              <Text style={s.linkBtnSecondaryText}>Open in browser</Text>
-            </Pressable>
-            <Pressable
-              style={s.linkBtnCancel}
-              onPress={() => setLinkUrl(null)}
-              disabled={linkScraping}
-            >
-              <Text style={s.linkBtnCancelText}>Cancel</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      )}
+      <LinkActionSheet
+        url={linkUrl}
+        onReadAsDocument={handleReadLinkAsDocument}
+        onClose={() => setLinkUrl(null)}
+      />
 
       {metaVisible && doc && (
         <Pressable style={s.metaOverlay} onPress={closeMetaPanel}>
@@ -796,15 +729,10 @@ function buildStyles(t: Theme) {
     },
     linkHost: { color: t.colors.text, fontSize: 16, fontWeight: '700' },
     linkHref: { color: t.colors.muted, fontSize: 12, marginBottom: t.spacing.sm },
-    linkErr: { color: t.colors.error, fontSize: 13 },
     linkBtn: {
       borderRadius: 10, paddingVertical: t.spacing.md, paddingHorizontal: t.spacing.lg,
       alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: t.spacing.sm,
     },
-    linkBtnPrimary: { backgroundColor: t.colors.accent },
-    linkBtnPrimaryText: { color: '#0b0b0c', fontSize: 15, fontWeight: '700' },
-    linkBtnSecondary: { borderWidth: 1, borderColor: t.colors.border },
-    linkBtnSecondaryText: { color: t.colors.text, fontSize: 15, fontWeight: '500' },
     linkBtnCancel: { alignItems: 'center', paddingVertical: t.spacing.sm },
     linkBtnCancelText: { color: t.colors.muted, fontSize: 14 },
     metaActions: {

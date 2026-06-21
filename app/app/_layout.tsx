@@ -8,6 +8,7 @@ import { loadTheme } from '../src/storage'
 import { ConnectionProvider, useConnection } from '../src/ConnectionContext'
 import { ToastProvider } from '../src/ToastContext'
 import { ConfirmProvider } from '../src/ConfirmContext'
+import { ScrapeQueueProvider } from '../src/ScrapeQueueContext'
 import { useSyncEffect } from '../src/store/useSyncEffect'
 
 const queryClient = new QueryClient({
@@ -53,7 +54,9 @@ export default function RootLayout() {
           <SyncEffects />
           <ToastProvider>
             <ConfirmProvider>
-              <Slot />
+              <ScrapeQueueProvider>
+                <Slot />
+              </ScrapeQueueProvider>
             </ConfirmProvider>
           </ToastProvider>
         </ConnectionProvider>

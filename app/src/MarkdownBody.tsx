@@ -1,45 +1,59 @@
-import { memo, useCallback, useMemo } from 'react'
-import { StyleSheet } from 'react-native'
+import { memo, useMemo } from 'react'
+import { StyleSheet, Text } from 'react-native'
 import Markdown from 'react-native-markdown-display'
 import { useUnistyles } from 'react-native-unistyles'
 import ImageViewer from './ImageViewer'
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mdRules: Record<string, any> = {
-  image: (node: { key: string; attributes: { src?: string; alt?: string } }) => (
-    <ImageViewer key={node.key} src={node.attributes.src ?? ''} alt={node.attributes.alt} />
-  ),
-}
+import { useScrapeQueue } from './ScrapeQueueContext'
 
 type Props = {
   children: string
   linkedDocuments?: Record<string, string>
   onDocumentPress?: (docId: string) => void
+  onLinkAction?: (url: string) => void
 }
 
-function MarkdownBody({ children, linkedDocuments, onDocumentPress }: Props) {
+function MarkdownBody({ children, linkedDocuments, onDocumentPress, onLinkAction }: Props) {
   const { theme } = useUnistyles()
   const mdStyles = useMemo(() => buildMdStyles(theme), [theme])
+  const { entries, resolvedDocs } = useScrapeQueue()
 
-  const handleLinkPress = useCallback((url: string): boolean => {
-    if (linkedDocuments && onDocumentPress) {
-      const docId = linkedDocuments[url]
-      if (docId) {
-        onDocumentPress(docId)
-        return false
+  const rules = useMemo(() => ({
+    image: (node: { key: string; attributes: { src?: string; alt?: string } }) => (
+      <ImageViewer key={node.key} src={node.attributes.src ?? ''} alt={node.attributes.alt} />
+    ),
+    // Custom link rule: render the link text, then an inline status icon so a
+    // link reads with breathing room (📄 already a Document · 🔗 not yet · ⏳ scraping).
+    link: (node: { key: string; attributes: { href?: string } }, mdChildren: React.ReactNode) => {
+      const href = node.attributes.href ?? ''
+      const entry = entries[href]
+      const docId = entry?.docId ?? resolvedDocs[href] ?? linkedDocuments?.[href]
+      const scraping = entry?.state === 'scraping'
+      const icon = scraping ? '⏳' : docId ? '📄' : '🔗'
+      const onPress = () => {
+        if (docId && onDocumentPress) onDocumentPress(docId)
+        else if (onLinkAction) onLinkAction(href)
       }
-    }
-    return true
-  }, [linkedDocuments, onDocumentPress])
+      return (
+        <Text key={node.key} style={mdStyles.link} onPress={onPress}>
+          {mdChildren}
+          <Text style={iconStyle.icon} onPress={onPress}>{' '}{icon}{' '}</Text>
+        </Text>
+      )
+    },
+  }), [entries, resolvedDocs, linkedDocuments, onDocumentPress, onLinkAction, mdStyles.link])
 
   return (
-    <Markdown style={mdStyles} mergeStyle onLinkPress={handleLinkPress} rules={mdRules}>
+    <Markdown style={mdStyles} mergeStyle rules={rules}>
       {children}
     </Markdown>
   )
 }
 
 export default memo(MarkdownBody)
+
+const iconStyle = StyleSheet.create({
+  icon: { fontSize: 12 },
+})
 
 type Theme = ReturnType<typeof useUnistyles>['theme']
 
