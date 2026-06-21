@@ -19,6 +19,7 @@ import (
 	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 type scrapePayload struct {
@@ -68,7 +69,11 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	bodyBytes := []byte(htmlStr)
 	logScraper.Printf("fetched %d bytes HTML from %s", len(bodyBytes), canonical)
 
-	extracted, err := trafilatura.Extract(bytes.NewReader(bodyBytes), trafilatura.Options{
+	// Lift <figure>-wrapped images into plain <p><img> so trafilatura keeps them
+	// inline at their real position (it discards <figure> but keeps <img> in <p>).
+	extractHTML := unwrapFigureImages(bodyBytes)
+
+	extracted, err := trafilatura.Extract(bytes.NewReader(extractHTML), trafilatura.Options{
 		OriginalURL:     mustParseURL(canonical),
 		ExcludeComments: true,
 		EnableFallback:  true,
@@ -100,11 +105,6 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	// Prepend any lead bullet lists that trafilatura skipped.
 	if leadLists := extractLeadLists(bodyBytes, md); leadLists != "" {
 		md = leadLists + "\n\n" + md
-	}
-
-	// Append content images from <figure> tags that trafilatura skips.
-	if figureImgs := extractFigureImages(bodyBytes, md); figureImgs != "" {
-		md = md + "\n\n" + figureImgs
 	}
 
 	title := strings.TrimSpace(extracted.Metadata.Title)
@@ -402,49 +402,39 @@ func leadListCheckStr(line string) string {
 	return stripped
 }
 
-// extractFigureImages scans raw HTML for <figure> elements containing <img src="...">
-// and returns them as markdown image lines not already present in extractedMD.
-// This recovers content images that trafilatura skips when they're wrapped in figures.
-func extractFigureImages(rawHTML []byte, extractedMD string) string {
+// figureSkipZones are regions whose figures are boilerplate, never article content.
+var figureSkipZones = map[string]struct{}{
+	"nav": {}, "header": {}, "footer": {}, "aside": {},
+	"script": {}, "style": {}, "noscript": {},
+}
+
+// figImg is a content image lifted from a <figure>.
+type figImg struct{ src, alt string }
+
+// unwrapFigureImages rewrites <figure>…<img>…</figure> into a plain <p><img></p> at
+// the figure's original position. go-trafilatura's text-first extractor discards
+// <figure> (an unrecognized container) but keeps <img> children of <p>, so this lets
+// content images survive extraction inline at their real position instead of being
+// recovered and appended at the document end. Figures in nav/header/footer/aside are
+// left untouched (trafilatura drops those regions anyway). Returns rawHTML unchanged
+// when there is nothing to rewrite.
+func unwrapFigureImages(rawHTML []byte) []byte {
 	root, err := html.Parse(bytes.NewReader(rawHTML))
 	if err != nil {
-		return ""
+		return rawHTML
 	}
 
-	seen := map[string]struct{}{}
-	var srcs []string
-
+	// Collect figures first; mutating the tree mid-walk invalidates sibling links.
+	var figures []*html.Node
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		if n.Type == html.ElementNode {
-			tag := n.Data
-			if tag == "nav" || tag == "header" || tag == "footer" ||
-				tag == "aside" || tag == "script" || tag == "style" || tag == "noscript" {
+			if _, skip := figureSkipZones[n.Data]; skip {
 				return
 			}
-			if tag == "figure" {
-				// collect first meaningful <img> inside this figure
-				var figWalk func(*html.Node)
-				figWalk = func(fn *html.Node) {
-					if fn.Type == html.ElementNode && fn.Data == "img" {
-						src := attrVal(fn, "src")
-						if src == "" {
-							src = attrVal(fn, "data-src")
-						}
-						if src != "" && strings.HasPrefix(src, "http") && shouldDownload(src, "") {
-							if _, dup := seen[src]; !dup && !strings.Contains(extractedMD, src) {
-								seen[src] = struct{}{}
-								srcs = append(srcs, src)
-							}
-						}
-						return
-					}
-					for c := fn.FirstChild; c != nil; c = c.NextSibling {
-						figWalk(c)
-					}
-				}
-				figWalk(n)
-				return // don't recurse into figure again
+			if n.Data == "figure" {
+				figures = append(figures, n)
+				return // nested figures are exotic; don't recurse
 			}
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
@@ -453,14 +443,65 @@ func extractFigureImages(rawHTML []byte, extractedMD string) string {
 	}
 	walk(root)
 
-	if len(srcs) == 0 {
-		return ""
+	changed := false
+	for _, fig := range figures {
+		if fig.Parent == nil {
+			continue
+		}
+		imgs := figureContentImages(fig)
+		if len(imgs) == 0 {
+			continue // no usable image: leave figure for trafilatura to drop
+		}
+		p := &html.Node{Type: html.ElementNode, Data: "p", DataAtom: atom.P}
+		for _, im := range imgs {
+			img := &html.Node{Type: html.ElementNode, Data: "img", DataAtom: atom.Img}
+			img.Attr = []html.Attribute{{Key: "src", Val: im.src}}
+			if im.alt != "" {
+				img.Attr = append(img.Attr, html.Attribute{Key: "alt", Val: im.alt})
+			}
+			p.AppendChild(img)
+		}
+		fig.Parent.InsertBefore(p, fig)
+		fig.Parent.RemoveChild(fig)
+		changed = true
 	}
-	var sb strings.Builder
-	for _, src := range srcs {
-		fmt.Fprintf(&sb, "![](%s)\n", src)
+
+	if !changed {
+		return rawHTML
 	}
-	return strings.TrimRight(sb.String(), "\n")
+	var buf bytes.Buffer
+	if err := html.Render(&buf, root); err != nil {
+		return rawHTML
+	}
+	return buf.Bytes()
+}
+
+// figureContentImages returns deduped content images inside a figure that pass the
+// download heuristic, resolving lazy-loaded data-src.
+func figureContentImages(fig *html.Node) []figImg {
+	seen := map[string]struct{}{}
+	var imgs []figImg
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "img" {
+			src := attrVal(n, "src")
+			if src == "" {
+				src = attrVal(n, "data-src")
+			}
+			if strings.HasPrefix(src, "http") && shouldDownload(src, attrVal(n, "alt")) {
+				if _, dup := seen[src]; !dup {
+					seen[src] = struct{}{}
+					imgs = append(imgs, figImg{src: src, alt: attrVal(n, "alt")})
+				}
+			}
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(fig)
+	return imgs
 }
 
 func attrVal(n *html.Node, key string) string {
