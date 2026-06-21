@@ -2,7 +2,7 @@
 created: 2026-06-09
 topic: Newsletter email ingest (kill-the-newsletter style)
 excerpt: Server generates unique email addresses; relay forwards incoming emails as HTTP webhook; server creates Documents directly. No OAuth, no Google Console.
-status: iced — do RSS first; revisit when a newsletter has no RSS feed
+status: done 2026-06-21 — implemented with Cloudflare Email Routing + Worker (sam.tmpx.space). First use case: James Clear 3-2-1.
 ---
 
 # Newsletter Ingest — kill-the-newsletter style

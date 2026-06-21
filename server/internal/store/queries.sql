@@ -152,6 +152,9 @@ SELECT * FROM feeds WHERE id = ? AND deleted_at IS NULL LIMIT 1;
 -- name: GetFeedByURL :one
 SELECT * FROM feeds WHERE url = ? AND deleted_at IS NULL LIMIT 1;
 
+-- name: GetNewsletterFeedByToken :one
+SELECT * FROM feeds WHERE kind = 'newsletter' AND config LIKE '%"token":"' || ? || '"%' AND deleted_at IS NULL LIMIT 1;
+
 -- name: ListFeeds :many
 SELECT * FROM feeds WHERE deleted_at IS NULL ORDER BY created_at DESC;
 

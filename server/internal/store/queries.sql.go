@@ -713,6 +713,28 @@ func (q *Queries) GetMediaAssetByOriginalURL(ctx context.Context, originalUrl st
 	return i, err
 }
 
+const getNewsletterFeedByToken = `-- name: GetNewsletterFeedByToken :one
+SELECT id, url, kind, title, config, last_polled_at, created_at, updated_at, rev, deleted_at FROM feeds WHERE kind = 'newsletter' AND config LIKE '%"token":"' || ? || '"%' AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetNewsletterFeedByToken(ctx context.Context, dollar_1 *string) (Feed, error) {
+	row := q.db.QueryRowContext(ctx, getNewsletterFeedByToken, dollar_1)
+	var i Feed
+	err := row.Scan(
+		&i.ID,
+		&i.Url,
+		&i.Kind,
+		&i.Title,
+		&i.Config,
+		&i.LastPolledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getPairCode = `-- name: GetPairCode :one
 SELECT code, expires_at, used_at FROM pair_codes WHERE code = ?
 `

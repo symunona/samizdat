@@ -69,6 +69,10 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	adminFeedsH := &adminFeedsHandler{reg: w.ExtractorRegistry(), browser: w}
 	mux.HandleFunc("POST /api/v1/admin/feeds/preview", localhostOnly(adminFeedsH.preview))
 
+	nlH := &newsletterHandler{q: q}
+	mux.HandleFunc("POST /api/v1/inbound/email", nlH.inbound)
+	mux.HandleFunc("POST /api/v1/feeds/newsletter", localhostOnly(nlH.create))
+
 	syncH := &syncHandler{q: q}
 	mux.HandleFunc("GET /api/v1/sync", bearerAuth(q, syncH.sync))
 
