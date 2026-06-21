@@ -132,12 +132,15 @@ func (h *newsletterHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tokenBytes [4]byte
-	if _, err := rand.Read(tokenBytes[:]); err != nil {
+	// Token = readable slug from title + random suffix. Slug keeps the address
+	// memorable; the suffix keeps it unguessable and globally unique (which lets
+	// the address alone resolve to one feed/user once multiuser lands).
+	var suffixBytes [2]byte
+	if _, err := rand.Read(suffixBytes[:]); err != nil {
 		writeErr(w, http.StatusInternalServerError, "token generation failed")
 		return
 	}
-	token := hex.EncodeToString(tokenBytes[:])
+	token := slugify(body.Title) + "-" + hex.EncodeToString(suffixBytes[:])
 	email := token + "@" + newsletterEmailDomain
 
 	cfg, _ := json.Marshal(map[string]string{
@@ -284,4 +287,31 @@ func emailExcerpt(md string, n int) string {
 		return text
 	}
 	return text[:n]
+}
+
+// slugify lowercases a title and reduces it to [a-z0-9-], collapsing runs of
+// non-alphanumerics into single hyphens. Empty/exotic titles fall back to "nl".
+func slugify(s string) string {
+	var b strings.Builder
+	lastHyphen := true // skip leading hyphens
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastHyphen = false
+		default:
+			if !lastHyphen {
+				b.WriteByte('-')
+				lastHyphen = true
+			}
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if len(slug) > 40 {
+		slug = strings.Trim(slug[:40], "-")
+	}
+	if slug == "" {
+		return "nl"
+	}
+	return slug
 }
