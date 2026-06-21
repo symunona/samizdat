@@ -141,3 +141,7 @@ AGENT_BROWSER_ARGS="--no-sandbox" agent-browser --state tmp/debug-session/state.
 - After any pairing action in tests, call `just save-debug-session` to persist the new token.
 - Screenshots go to `tmp/screenshots/`, not `tmp/` root.
 - State file is gitignored — recreate from the pairing flow if missing.
+
+## "Web vs mobile" = touch vs non-touch, not Platform.OS
+
+`Platform.OS === 'web'` is true for ALL browsers — desktop Chrome and mobile Safari alike. Never use it to mean "desktop". To branch on touch capability use `window.matchMedia('(pointer: coarse)').matches`. Mobile web and native app must behave identically; `Platform.OS === 'web'` silently breaks one of them.
