@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert, Platform } from 'react-native'
+import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useRouter } from 'expo-router'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
@@ -191,15 +191,6 @@ export default function FeedScreen() {
         <Text style={s.unarchiveBtnText}>Unread</Text>
       </Pressable>
     ) : null
-
-    if (Platform.OS === 'web') {
-      return (
-        <View style={isArchived ? s.archivedWrapper : undefined}>
-          {card}
-          {unarchiveBtn}
-        </View>
-      )
-    }
 
     return (
       <View style={s.cardWrapper}>
