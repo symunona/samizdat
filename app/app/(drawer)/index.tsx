@@ -164,7 +164,7 @@ export default function FeedScreen() {
     const handleSwipeOpen = (direction: string) => {
       const ref = swipeRefs.current.get(item.id)
       ref?.close()
-      if (direction === 'left') {
+      if (direction === 'right') {
         initiateDelete(item)
       } else {
         handlePin(item)
