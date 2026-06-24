@@ -16,12 +16,31 @@ import {
   fetchFeeds,
   fetchSubscriptions,
   createSubscription,
+  createNewsletter,
+  deleteNewsletterFeed,
   deleteSubscription,
   pollSubscriptionNow,
   patchSubscription,
 } from '../../src/api'
 import type { Feed, Subscription } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
+import { useToast } from '../../src/ToastContext'
+
+// Newsletter feeds store their inbound address in config JSON.
+function newsletterEmail(feed: Feed | undefined): string | null {
+  if (!feed?.config) return null
+  try { return (JSON.parse(feed.config) as { email?: string }).email ?? null } catch { return null }
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch { /* fall through */ }
+  return false
+}
 
 function formatRelative(iso: string | null): string {
   if (!iso) return 'never'
@@ -50,6 +69,7 @@ export default function SubscriptionsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const { status, activeUrl, token } = useConnection()
+  const { toast } = useToast()
 
   const [subs, setSubs] = useState<SubWithFeed[]>([])
   const [loading, setLoading] = useState(false)
@@ -60,6 +80,9 @@ export default function SubscriptionsScreen() {
   const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'done' | 'error'>('idle')
   const [submitError, setSubmitError] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const [nlTitle, setNlTitle] = useState('')
+  const [nlState, setNlState] = useState<'idle' | 'submitting'>('idle')
 
   const [pollingId, setPollingId] = useState<string | null>(null)
   const [holdPollingId, setHoldPollingId] = useState<string | null>(null)
@@ -109,6 +132,43 @@ export default function SubscriptionsScreen() {
     }
   }
 
+  async function handleAddNewsletter() {
+    if (!activeUrl || !token) return
+    const trimmed = nlTitle.trim()
+    if (!trimmed || nlState === 'submitting') return
+    setNlState('submitting')
+    try {
+      const { email } = await createNewsletter(activeUrl, token, trimmed)
+      setNlTitle('')
+      const copied = await copyText(email)
+      toast(copied ? `Address copied: ${email}` : `Newsletter address: ${email}`, 'success')
+      await load()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to create newsletter', 'error')
+    } finally {
+      setNlState('idle')
+    }
+  }
+
+  async function handleCopyAddress(email: string) {
+    const copied = await copyText(email)
+    toast(copied ? 'Address copied' : email, copied ? 'success' : 'info')
+  }
+
+  async function handleDeleteNewsletter(item: SubWithFeed) {
+    if (!activeUrl || !token || deletingId || !item.feed) return
+    setDeletingId(item.id)
+    try {
+      const { unsubscribed } = await deleteNewsletterFeed(activeUrl, token, item.feed.id)
+      setSubs(prev => prev.filter(s => s.id !== item.id))
+      toast(unsubscribed ? 'Removed + unsubscribed' : 'Removed', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to remove', 'error')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   async function handlePoll(sub: SubWithFeed) {
     if (!activeUrl || !token || pollingId || holdPollingId) return
     setPollingId(sub.id)
@@ -149,7 +209,51 @@ export default function SubscriptionsScreen() {
     finally { setDeletingId(null) }
   }
 
+  function renderNewsletterItem(item: SubWithFeed) {
+    const email = newsletterEmail(item.feed)
+    const isDeleteBusy = deletingId === item.id
+    return (
+      <View style={s.card}>
+        <View style={s.cardHeader}>
+          <View style={s.cardMeta}>
+            <Text style={s.cardDomain} numberOfLines={1}>{item.feed?.title || 'Newsletter'}</Text>
+            <Text style={s.cardUrl} numberOfLines={1}>{email ?? 'no address'}</Text>
+          </View>
+          <View style={s.cardKind}>
+            <Text style={s.kindBadge}>newsletter</Text>
+          </View>
+        </View>
+        <View style={s.cardStats}>
+          <Text style={s.statText}>
+            Last received: <Text style={s.statValue}>{formatRelative(item.feed?.last_polled_at ?? null)}</Text>
+          </Text>
+        </View>
+        <Text style={s.nlHint}>Subscribe to this newsletter using the address above.</Text>
+        <View style={s.cardActions}>
+          <Pressable
+            style={({ pressed }) => [s.actionBtn, s.pollBtn, pressed && s.actionBtnPressed, !email && s.addBtnDisabled]}
+            onPress={() => email && handleCopyAddress(email)}
+            disabled={!email}
+          >
+            <Text style={s.pollBtnText}>Copy address</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [s.actionBtn, s.deleteBtn, (isDeleteBusy || pressed) && s.actionBtnPressed]}
+            onPress={() => handleDeleteNewsletter(item)}
+            disabled={!!deletingId}
+          >
+            {isDeleteBusy
+              ? <ActivityIndicator size="small" color="#f87171" />
+              : <Text style={s.deleteBtnText}>Remove</Text>
+            }
+          </Pressable>
+        </View>
+      </View>
+    )
+  }
+
   function renderItem({ item }: { item: SubWithFeed }) {
+    if (item.feed?.kind === 'newsletter') return renderNewsletterItem(item)
     const url = item.feed?.url ?? item.feed_id
     const domain = (() => { try { return new URL(url).hostname } catch { return url } })()
     const isPollBusy = pollingId === item.id
@@ -261,6 +365,30 @@ export default function SubscriptionsScreen() {
         <Text style={s.feedbackErr}>{submitError}</Text>
       )}
 
+      {/* Add newsletter row — server mints an email address to subscribe with */}
+      <View style={s.addRow}>
+        <TextInput
+          style={s.input}
+          placeholder="Newsletter name (e.g. James Clear 3-2-1)"
+          placeholderTextColor={theme.colors.placeholder}
+          autoCorrect={false}
+          value={nlTitle}
+          onChangeText={setNlTitle}
+          onSubmitEditing={handleAddNewsletter}
+          returnKeyType="done"
+        />
+        <Pressable
+          style={({ pressed }) => [s.addBtn, nlState === 'submitting' && s.addBtnDisabled, pressed && s.addBtnPressed]}
+          onPress={handleAddNewsletter}
+          disabled={nlState === 'submitting'}
+        >
+          {nlState === 'submitting'
+            ? <ActivityIndicator size="small" color="#0b0b0c" />
+            : <Text style={s.addBtnText}>Newsletter</Text>
+          }
+        </Pressable>
+      </View>
+
       {loading && !refreshing
         ? <View style={s.centered}><ActivityIndicator color={theme.colors.accent} size="large" /></View>
         : error
@@ -315,6 +443,7 @@ function buildStyles(t: Theme) {
     cardRight: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
     cardKind: { paddingHorizontal: 6, paddingVertical: 2, backgroundColor: t.colors.border, borderRadius: t.radius.sm },
     kindBadge: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace' },
+    nlHint: { color: t.colors.muted, fontSize: 12, marginBottom: t.spacing.md },
     cardStats: { flexDirection: 'row', gap: t.spacing.md, marginBottom: t.spacing.md },
     statText: { color: t.colors.muted, fontSize: 12 },
     statValue: { color: t.colors.text, fontWeight: '600' },

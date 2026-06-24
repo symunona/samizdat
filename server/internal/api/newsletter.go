@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -115,10 +116,78 @@ func (h *newsletterHandler) inbound(w http.ResponseWriter, r *http.Request) {
 
 	newsletterTriggerPipelines(r.Context(), h.q, doc, now)
 
+	// Record "last received" + capture unsubscribe info from headers so a later
+	// delete can honor the sender's List-Unsubscribe (RFC 2369 / RFC 8058).
+	_ = h.q.MarkFeedPolled(r.Context(), store.MarkFeedPolledParams{
+		LastPolledAt: &now,
+		UpdatedAt:    now,
+		ID:           feed.ID,
+	})
+	if unsub := parseUnsubscribe(msg.Header); unsub != nil {
+		var cfg map[string]any
+		if json.Unmarshal([]byte(feed.Config), &cfg) != nil || cfg == nil {
+			cfg = map[string]any{}
+		}
+		cfg["unsubscribe"] = unsub.httpURL
+		cfg["unsubscribe_mailto"] = unsub.mailto
+		cfg["unsubscribe_one_click"] = unsub.oneClick
+		if b, err := json.Marshal(cfg); err == nil {
+			_ = h.q.UpdateFeedConfig(r.Context(), store.UpdateFeedConfigParams{
+				Config:    string(b),
+				UpdatedAt: now,
+				ID:        feed.ID,
+			})
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"document_id": doc.ID, "status": "ok"})
 }
 
-// POST /api/v1/feeds/newsletter — localhost-only, creates a newsletter feed.
+// DELETE /api/v1/feeds/{id} — bearer-authed. Honors List-Unsubscribe (best-effort),
+// then soft-deletes the feed + its subscriptions so future mail to its token is
+// rejected (GetNewsletterFeedByToken filters deleted_at IS NULL).
+func (h *newsletterHandler) delete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	feed, err := h.q.GetFeed(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "feed not found")
+		return
+	}
+
+	// Best-effort unsubscribe before deleting. One-click (RFC 8058) only — never
+	// auto-send mailto unsubscribes; surface those to the user instead.
+	var cfg struct {
+		Unsubscribe   string `json:"unsubscribe"`
+		UnsubOneClick bool   `json:"unsubscribe_one_click"`
+	}
+	_ = json.Unmarshal([]byte(feed.Config), &cfg)
+	unsubscribed := false
+	if cfg.Unsubscribe != "" && cfg.UnsubOneClick {
+		unsubscribed = oneClickUnsubscribe(cfg.Unsubscribe)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := h.q.DeleteSubscriptionsByFeed(r.Context(), store.DeleteSubscriptionsByFeedParams{
+		DeletedAt: &now,
+		UpdatedAt: now,
+		FeedID:    feed.ID,
+	}); err != nil {
+		logAPI.Errorf("newsletter delete: subscriptions: %v", err)
+	}
+	if err := h.q.SoftDeleteFeed(r.Context(), store.SoftDeleteFeedParams{
+		DeletedAt: &now,
+		UpdatedAt: now,
+		ID:        feed.ID,
+	}); err != nil {
+		logAPI.Errorf("newsletter delete: feed: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true, "unsubscribed": unsubscribed})
+}
+
+// POST /api/v1/feeds/newsletter — bearer-authed, creates a newsletter feed.
 func (h *newsletterHandler) create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Title string `json:"title"`
@@ -165,9 +234,34 @@ func (h *newsletterHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create a paused subscription so the newsletter shows up in the Subscriptions
+	// list. paused=1 keeps the scheduler from ever polling a non-pollable email feed.
+	sub, err := h.q.InsertSubscription(r.Context(), store.InsertSubscriptionParams{
+		ID:        uuid.NewString(),
+		FeedID:    feed.ID,
+		IntervalH: 24,
+		NextRunAt: now,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		logAPI.Errorf("newsletter create: insert subscription: %v", err)
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if err := h.q.UpdateSubscriptionPaused(r.Context(), store.UpdateSubscriptionPausedParams{
+		Paused:    1,
+		UpdatedAt: now,
+		ID:        sub.ID,
+	}); err != nil {
+		logAPI.Errorf("newsletter create: pause subscription: %v", err)
+	}
+	sub.Paused = 1
+
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"feed":  feed,
-		"email": email,
+		"feed":         feed,
+		"subscription": sub,
+		"email":        email,
 	})
 }
 
@@ -211,26 +305,31 @@ func newsletterTriggerPipelines(ctx context.Context, q *store.Queries, doc store
 	}
 }
 
+func readBody(r io.Reader) (string, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", fmt.Errorf("read email body: %w", err)
+	}
+	return string(b), nil
+}
+
 func extractHTMLBody(msg *mail.Message) (string, error) {
 	ct := msg.Header.Get("Content-Type")
 	if ct == "" {
-		body, err := io.ReadAll(msg.Body)
-		return string(body), err
+		return readBody(msg.Body)
 	}
 	mediaType, params, err := mime.ParseMediaType(ct)
 	if err != nil {
-		body, err2 := io.ReadAll(msg.Body)
-		return string(body), err2
+		return readBody(msg.Body)
 	}
 
 	switch {
 	case strings.HasPrefix(mediaType, "text/html"):
-		body, err := io.ReadAll(msg.Body)
-		return string(body), err
+		return readBody(msg.Body)
 
 	case strings.HasPrefix(mediaType, "text/plain"):
-		body, err := io.ReadAll(msg.Body)
-		return "<pre>" + string(body) + "</pre>", err
+		body, err := readBody(msg.Body)
+		return "<pre>" + body + "</pre>", err
 
 	case strings.HasPrefix(mediaType, "multipart/"):
 		mr := multipart.NewReader(msg.Body, params["boundary"])
@@ -256,8 +355,7 @@ func extractHTMLBody(msg *mail.Message) (string, error) {
 		return "<pre>" + textPart + "</pre>", nil
 
 	default:
-		body, err := io.ReadAll(msg.Body)
-		return string(body), err
+		return readBody(msg.Body)
 	}
 }
 
@@ -314,4 +412,51 @@ func slugify(s string) string {
 		return "nl"
 	}
 	return slug
+}
+
+type unsubInfo struct {
+	httpURL  string // first https unsubscribe URL, if any
+	mailto   string // first mailto: unsubscribe address, if any
+	oneClick bool   // sender supports RFC 8058 one-click POST
+}
+
+// parseUnsubscribe reads RFC 2369 List-Unsubscribe + RFC 8058
+// List-Unsubscribe-Post headers. The header value is a comma-separated list of
+// <…> URIs, e.g. "<https://…>, <mailto:…>".
+func parseUnsubscribe(h mail.Header) *unsubInfo {
+	raw := h.Get("List-Unsubscribe")
+	if raw == "" {
+		return nil
+	}
+	info := &unsubInfo{
+		oneClick: strings.Contains(strings.ToLower(h.Get("List-Unsubscribe-Post")), "one-click"),
+	}
+	for _, part := range strings.Split(raw, ",") {
+		uri := strings.TrimSpace(part)
+		uri = strings.TrimPrefix(uri, "<")
+		uri = strings.TrimSuffix(uri, ">")
+		switch {
+		case strings.HasPrefix(uri, "https://") && info.httpURL == "":
+			info.httpURL = uri
+		case strings.HasPrefix(uri, "mailto:") && info.mailto == "":
+			info.mailto = strings.TrimPrefix(uri, "mailto:")
+		}
+	}
+	if info.httpURL == "" && info.mailto == "" {
+		return nil
+	}
+	return info
+}
+
+// oneClickUnsubscribe performs an RFC 8058 one-click unsubscribe POST. Returns
+// true on a 2xx response. Best-effort: any error means "not unsubscribed".
+func oneClickUnsubscribe(url string) bool {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(url, "application/x-www-form-urlencoded",
+		strings.NewReader("List-Unsubscribe=One-Click"))
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }

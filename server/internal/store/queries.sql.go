@@ -347,6 +347,21 @@ func (q *Queries) DeleteSubscription(ctx context.Context, arg DeleteSubscription
 	return err
 }
 
+const deleteSubscriptionsByFeed = `-- name: DeleteSubscriptionsByFeed :exec
+UPDATE subscriptions SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE feed_id = ? AND deleted_at IS NULL
+`
+
+type DeleteSubscriptionsByFeedParams struct {
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+	FeedID    string  `json:"feed_id"`
+}
+
+func (q *Queries) DeleteSubscriptionsByFeed(ctx context.Context, arg DeleteSubscriptionsByFeedParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSubscriptionsByFeed, arg.DeletedAt, arg.UpdatedAt, arg.FeedID)
+	return err
+}
+
 const getAnnotation = `-- name: GetAnnotation :one
 SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
@@ -3597,6 +3612,21 @@ func (q *Queries) SoftDeleteDocument(ctx context.Context, arg SoftDeleteDocument
 	return err
 }
 
+const softDeleteFeed = `-- name: SoftDeleteFeed :exec
+UPDATE feeds SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type SoftDeleteFeedParams struct {
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+	ID        string  `json:"id"`
+}
+
+func (q *Queries) SoftDeleteFeed(ctx context.Context, arg SoftDeleteFeedParams) error {
+	_, err := q.db.ExecContext(ctx, softDeleteFeed, arg.DeletedAt, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const softDeleteHighlight = `-- name: SoftDeleteHighlight :exec
 UPDATE highlights SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
 `
@@ -3758,6 +3788,21 @@ func (q *Queries) UpdateDocumentExcerptHero(ctx context.Context, arg UpdateDocum
 		arg.UpdatedAt,
 		arg.ID,
 	)
+	return err
+}
+
+const updateFeedConfig = `-- name: UpdateFeedConfig :exec
+UPDATE feeds SET config = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type UpdateFeedConfigParams struct {
+	Config    string `json:"config"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) UpdateFeedConfig(ctx context.Context, arg UpdateFeedConfigParams) error {
+	_, err := q.db.ExecContext(ctx, updateFeedConfig, arg.Config, arg.UpdatedAt, arg.ID)
 	return err
 }
 

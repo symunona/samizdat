@@ -2,7 +2,7 @@
 created: 2026-06-21
 topic: Newsletter in-app UI — add + show/copy address
 excerpt: Surface newsletter feeds in the Subscriptions screen with their @sam.tmpx.space address + copy button, and an "Add Newsletter" flow. Fix the localhostOnly security hole on the create endpoint.
-status: in progress
+status: done 2026-06-21 — backend + UI verified (curl e2e, agent-browser, just e2e green)
 ---
 
 # Newsletter In-App UI

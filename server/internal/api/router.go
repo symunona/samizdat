@@ -71,7 +71,8 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 
 	nlH := &newsletterHandler{q: q}
 	mux.HandleFunc("POST /api/v1/inbound/email", nlH.inbound)
-	mux.HandleFunc("POST /api/v1/feeds/newsletter", localhostOnly(nlH.create))
+	mux.HandleFunc("POST /api/v1/feeds/newsletter", bearerAuth(q, nlH.create))
+	mux.HandleFunc("DELETE /api/v1/feeds/{id}", bearerAuth(q, nlH.delete))
 
 	syncH := &syncHandler{q: q}
 	mux.HandleFunc("GET /api/v1/sync", bearerAuth(q, syncH.sync))

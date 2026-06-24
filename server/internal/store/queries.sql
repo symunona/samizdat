@@ -161,6 +161,15 @@ SELECT * FROM feeds WHERE deleted_at IS NULL ORDER BY created_at DESC;
 -- name: MarkFeedPolled :exec
 UPDATE feeds SET last_polled_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
+-- name: UpdateFeedConfig :exec
+UPDATE feeds SET config = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: SoftDeleteFeed :exec
+UPDATE feeds SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: DeleteSubscriptionsByFeed :exec
+UPDATE subscriptions SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE feed_id = ? AND deleted_at IS NULL;
+
 -- name: InsertSubscription :one
 INSERT INTO subscriptions (id, feed_id, interval_h, next_run_at, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?, 0)

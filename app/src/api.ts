@@ -204,6 +204,7 @@ export type Feed = {
   url: string
   kind: string
   title: string
+  config?: string
   last_polled_at: string | null
   created_at: string
   updated_at: string
@@ -268,6 +269,27 @@ export async function createSubscription(
     body: JSON.stringify({ url, interval_h: intervalH }),
   })
   return json<{ feed: Feed; subscription: Subscription }>(res, '/api/v1/subscriptions')
+}
+
+export async function createNewsletter(
+  serverUrl: string, token: string, title: string,
+): Promise<{ feed: Feed; subscription: Subscription; email: string }> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/feeds/newsletter`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+  return json<{ feed: Feed; subscription: Subscription; email: string }>(res, '/api/v1/feeds/newsletter')
+}
+
+export async function deleteNewsletterFeed(
+  serverUrl: string, token: string, feedId: string,
+): Promise<{ deleted: boolean; unsubscribed: boolean }> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/feeds/${encodeURIComponent(feedId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<{ deleted: boolean; unsubscribed: boolean }>(res, `/api/v1/feeds/${feedId}`)
 }
 
 export async function deleteSubscription(serverUrl: string, token: string, id: string): Promise<void> {
