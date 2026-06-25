@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert, useWindowDimensions } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useRouter } from 'expo-router'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
@@ -15,6 +15,7 @@ export default function FeedScreen() {
   const s = useMemo(() => buildStyles(theme), [theme])
   const router = useRouter()
   const { activeUrl, token, status } = useConnection()
+  const { height: windowHeight } = useWindowDimensions()
 
   const [highlights, setHighlights] = useState<HighlightWithDoc[]>([])
   const [loading, setLoading] = useState(false)
@@ -277,6 +278,11 @@ export default function FeedScreen() {
         scrollEventThrottle={16}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
+        ListFooterComponent={
+          <View style={[s.footerSpacer, { height: windowHeight }]}>
+            <Text style={s.footerHint}>Scroll past to clear the feed</Text>
+          </View>
+        }
       />
       <TagSelectorModal
         visible={tagModalId !== null}
@@ -372,6 +378,8 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.border,
     },
     undoBtnText: { color: t.colors.accent, fontSize: 12, fontWeight: '700' },
+    footerSpacer: { alignItems: 'center', paddingTop: 24 },
+    footerHint: { color: t.colors.muted, fontSize: 13, opacity: 0.5 },
     placeholder: { color: t.colors.muted, fontSize: 16 },
     hint: { color: t.colors.muted, fontSize: 13, opacity: 0.6 },
     errorText: { color: '#ff6b6b', fontSize: 15 },
