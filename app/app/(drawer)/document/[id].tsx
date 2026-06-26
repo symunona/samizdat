@@ -290,7 +290,7 @@ export default function DocumentViewer() {
         theme: { background: bg, text: fg, surface: su, border: bo, accent: ac, muted: mu },
         hlExpanded,
         scrollFraction: savedProgressRef.current,
-        focusAnnotationId: highlight,
+        focusId: highlight,
       })
       savedProgressRef.current = 0
     } else if (msg.type === 'scroll') {
