@@ -96,6 +96,7 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 /* Highlight cards */
 .hl-card{border:1px solid var(--bo);border-radius:6px;margin-bottom:8px;overflow:hidden;background:var(--bg)}
 .hl-card:last-child{margin-bottom:0}
+.hl-card.focused{outline:2px solid var(--ac);box-shadow:0 0 10px rgba(232,116,59,0.45);transition:box-shadow 0.3s}
 .hl-header{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--bo);background:var(--su)}
 .hl-kind{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:2px 6px;border-radius:4px;flex-shrink:0}
 .hl-kind-summary{background:rgba(232,116,59,0.15);color:var(--ac)}
@@ -394,7 +395,7 @@ interface InitMsg {
   theme: ThemeData
   hlExpanded: boolean
   scrollFraction: number
-  focusAnnotationId?: string
+  focusId?: string
 }
 
 function handleInit(msg: InitMsg): void {
@@ -439,13 +440,28 @@ function handleInit(msg: InitMsg): void {
     }, 100)
   }
 
-  // Focus annotation deep-link
-  if (msg.focusAnnotationId) {
+  // Focus deep-link — matches an annotation mark or a highlight card
+  if (msg.focusId) {
+    const id = msg.focusId
     setTimeout(() => {
-      const m = document.querySelector<HTMLElement>(`mark[data-ann-id="${msg.focusAnnotationId}"]`)
+      const m = document.querySelector<HTMLElement>(`mark[data-ann-id="${id}"]`)
       if (m) {
         m.classList.add('focused')
         m.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        return
+      }
+      const card = document.querySelector<HTMLElement>(`.hl-card[data-id="${id}"]`)
+      if (card) {
+        // ensure the highlights section is expanded so the card is visible
+        const list = document.getElementById('hl-list')
+        if (list?.classList.contains('collapsed')) {
+          _hlExpanded = true
+          list.className = 'expanded'
+          const arrow = document.getElementById('hl-toggle-arrow')
+          if (arrow) arrow.textContent = '▲'
+        }
+        card.classList.add('focused')
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' })
       }
     }, 400)
   }

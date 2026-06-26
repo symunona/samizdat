@@ -200,7 +200,7 @@ export default function FeedScreen() {
         linkedDocuments={item.linked_documents}
         pinned={isPinned}
         busy={busy}
-        onPress={() => router.push(`/document/${item.document_id}?from=/`)}
+        onPress={() => router.push(`/document/${item.document_id}?from=/&highlight=${item.id}`)}
         onPin={() => handlePin(item)}
         onDelete={() => initiateDelete(item)}
         onAnnotate={() => setAnnotateItem(item)}
