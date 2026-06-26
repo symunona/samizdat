@@ -31,12 +31,26 @@ export default function FeedScreen() {
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
 
   const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set())
+  const [showUnreadAll, setShowUnreadAll] = useState(false)
 
   const handleUnarchive = useCallback(async (id: string) => {
     if (!activeUrl || !token) return
     setArchivedIds(prev => { const s = new Set(prev); s.delete(id); return s })
     archiveHighlight(activeUrl, token, id, null).catch(() => {})
   }, [activeUrl, token])
+
+  const handleUnreadAll = useCallback(() => {
+    if (!activeUrl || !token) return
+    setShowUnreadAll(false)
+    setArchivedIds(prev => {
+      prev.forEach(id => archiveHighlight(activeUrl, token, id, null).catch(() => {}))
+      return new Set()
+    })
+  }, [activeUrl, token])
+
+  // fast-scroll detection → reveal bulk-unread escape hatch
+  const lastScrollRef = useRef({ y: 0, t: 0 })
+  const unreadHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const swipeRefs = useRef<Map<string, SwipeableMethods | null>>(new Map())
   const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
@@ -69,7 +83,10 @@ export default function FeedScreen() {
 
   useEffect(() => {
     const timers = deleteTimers.current
-    return () => { timers.forEach(t => clearTimeout(t)) }
+    return () => {
+      timers.forEach(t => clearTimeout(t))
+      if (unreadHideTimer.current) clearTimeout(unreadHideTimer.current)
+    }
   }, [])
 
   const load = useCallback(async () => {
@@ -271,6 +288,19 @@ export default function FeedScreen() {
         onScroll={(e) => {
           const y = e.nativeEvent.contentOffset.y
           scrollYRef.current = y
+          // velocity (px/ms); fast downward scroll mass-archives — offer bulk undo
+          const now = Date.now()
+          const last = lastScrollRef.current
+          const dt = now - last.t
+          if (dt > 0) {
+            const v = (y - last.y) / dt
+            if (v > 2.5) {
+              setShowUnreadAll(true)
+              if (unreadHideTimer.current) clearTimeout(unreadHideTimer.current)
+              unreadHideTimer.current = setTimeout(() => setShowUnreadAll(false), 4000)
+            }
+          }
+          lastScrollRef.current = { y, t: now }
           pendingArchiveRef.current.forEach((exitY, id) => {
             if (y - exitY > 300) {
               pendingArchiveRef.current.delete(id)
@@ -290,6 +320,11 @@ export default function FeedScreen() {
           </View>
         }
       />
+      {showUnreadAll && archivedIds.size > 0 && (
+        <Pressable style={s.unreadAllBtn} onPress={handleUnreadAll} hitSlop={8}>
+          <Text style={s.unreadAllText}>↺ Unread all ({archivedIds.size})</Text>
+        </Pressable>
+      )}
       <TagSelectorModal
         visible={tagModalId !== null}
         objectId={tagModalId ?? ''}
@@ -353,6 +388,22 @@ function buildStyles(t: Theme) {
       zIndex: 10,
     },
     unarchiveBtnText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+    unreadAllBtn: {
+      position: 'absolute',
+      top: 12,
+      right: 12,
+      backgroundColor: t.colors.accent,
+      borderRadius: 20,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      zIndex: 100,
+      shadowColor: '#000',
+      shadowOpacity: 0.25,
+      shadowRadius: 6,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 4,
+    },
+    unreadAllText: { color: '#fff', fontSize: 13, fontWeight: '700' },
     deleteAction: {
       width: 80,
       backgroundColor: '#ef4444',
