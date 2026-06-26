@@ -177,7 +177,8 @@ function renderHighlightCard(hl: HlData): HTMLElement {
   deleteBtn.className = 'hl-delete-btn'
   deleteBtn.dataset.id = hl.id
   deleteBtn.dataset.action = 'delete'
-  deleteBtn.textContent = '🗑'
+  // Ionicons trash-outline — mirrors IconButton "trash-outline" in HighlightCard.tsx (parity).
+  deleteBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 512 512" aria-hidden="true"><path d="M112 112l20 320c.95 18.49 14.4 32 32 32h184c17.67 0 30.87-13.51 32-32l20-320" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="32"/><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="32" d="M80 112h352"/><path d="M192 112V72h0a23.93 23.93 0 0124-24h80a23.93 23.93 0 0124 24h0v40M256 176v224M184 176l8 224M328 176l-8 224" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="32"/></svg>'
   deleteBtn.title = 'Delete highlight'
 
   const spacer = document.createElement('div')
@@ -187,7 +188,8 @@ function renderHighlightCard(hl: HlData): HTMLElement {
   tagsBtn.className = 'hl-btn hl-icon'
   tagsBtn.dataset.id = hl.id
   tagsBtn.dataset.action = 'tags'
-  tagsBtn.textContent = '#'
+  // Ionicons pricetag-outline — mirrors IconButton "pricetag-outline" in HighlightCard.tsx (parity).
+  tagsBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 512 512" aria-hidden="true"><path d="M435.25 48h-122.9a14.46 14.46 0 00-10.2 4.2L56.45 297.9a28.85 28.85 0 000 40.7l117 117a28.85 28.85 0 0040.7 0L459.75 210a14.46 14.46 0 004.2-10.2v-123a28.66 28.66 0 00-28.7-28.8z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="32"/><path d="M384 160a32 32 0 1132-32 32 32 0 01-32 32z"/></svg>'
   tagsBtn.title = 'Tags'
 
   const annotateBtn = document.createElement('button')

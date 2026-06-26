@@ -182,7 +182,12 @@ test-go:
 
 [group('quality')]
 [doc('Lint all code (go vet + golangci-lint + eslint)')]
-lint: lint-go lint-app check-native-log
+lint: lint-go lint-app check-native-log lint-parity
+
+[group('quality')]
+[doc('Check paired-renderer files (Highlight card: RN feed vs WebView DOM) stay in sync vs main')]
+lint-parity: tooling-build
+    REPO_ROOT="{{justfile_directory()}}" ./tooling/bin/spec parity
 
 [group('quality')]
 lint-go:

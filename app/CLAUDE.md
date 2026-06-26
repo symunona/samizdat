@@ -64,10 +64,25 @@ Digest: assembled citations, LLM draft, export.
 ## UI guidelines
 Always look for existing components before making a new one.
 
-**Icon conventions** — use these consistently everywhere:
-- Note action buttons: `<NoteEditButton onPress={…} />` (`src/NoteEditButton.tsx`) — Ionicons `create-outline` tilted pencil, accent bg, no text. Use everywhere a note/annotate action button appears.
-- Notes / annotations inline display: `✏` (pencil emoji) — annotation badges, note preview text only
+**Always use styled icons** — never raw emoji/glyphs (`🗑`, `#`, `★`) as tappable controls. Use `@expo/vector-icons` (Ionicons) via a styled component so every icon gets consistent color, sizing, and desktop hover.
+- Tappable icons: `<IconButton name="…" onPress={…} />` (`src/IconButton.tsx`) — Ionicons wrapper with non-touch hover (scale + color shift). Use for delete (`trash-outline`), tags (`pricetags-outline`), and any new icon button.
+- Note action buttons: `<NoteEditButton onPress={…} />` (`src/NoteEditButton.tsx`) — wraps `IconButton` with `create-outline` (tilted pencil). Use everywhere a note/annotate action button appears.
+- Notes / annotations inline display: `✏` (pencil emoji) — annotation badges, note preview text only (display, not a control)
 Interactions: when user clicks on something that does an API call - indicate loading, disable button. On error, toast, indicate error on button. Make this a component, reuse wherever.
+
+## Highlight card lives in TWO renderers — keep them in parity
+
+The Highlight card is rendered in two places that **cannot share a rendered component** (different runtimes):
+- `src/HighlightCard.tsx` — **React Native** (the feed list; native + RN-Web).
+- `src/webview/document-viewer.ts` → `renderHighlightCard()` — **raw DOM inside a WebView** (the document body). React does not run here; it's `document.createElement` + event-delegation → `postMessage` back to RN.
+
+They must show the **same actions (pin · tags · annotate · delete), same icons, same layout**. A change to the action set / an icon / a label / the layout in one MUST be mirrored in the other.
+
+**Why no shared component:** native RN has no DOM/`innerHTML`; the WebView has no RN renderer. `dangerouslySetInnerHTML` does NOT bridge this — it's web-only and kills React's event wiring (you'd hand-roll delegation anyway), and per-row HTML in a FlatList is a perf anti-pattern. So: **share the spec, not the pixels.**
+- **Icons:** same Ionicons glyph both sides — RN uses the `@expo/vector-icons` component (`IconButton`); the WebView inlines the *same glyph's* SVG path data (vector-icons can't run in the WebView). Form differs, glyph/size/meaning must match.
+- **Action protocol:** the WebView posts `hl_pin` / `hl_delete` / `hl_tags` / `hl_annotate`; the RN host (`app/(drawer)/document/[id].tsx`) maps them to the same callbacks the feed wires directly.
+
+**Enforced:** `just lint` runs `spec parity` — if one of the two files changed vs main and the other didn't (or they diverged), it flags it and asks Claude whether the change needs mirroring. See `tooling/CLAUDE.md`.
 
 ## Connection state — NEVER bypass ConnectionProvider
 

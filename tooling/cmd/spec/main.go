@@ -44,6 +44,7 @@ func main() {
 		lintCmd(),
 		diffReviewCmd(),
 		libCheckCmd(),
+		parityCmd(),
 		allCmd(),
 	)
 
@@ -83,10 +84,20 @@ func libCheckCmd() *cobra.Command {
 	}
 }
 
+func parityCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "parity",
+		Short: "Check paired-renderer files (e.g. Highlight card RN vs WebView) stay in sync vs main",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return linting.RunParity(repoRoot())
+		},
+	}
+}
+
 func allCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "all",
-		Short: "Run lint + diff-review + lib-check",
+		Short: "Run lint + lib-check + parity + diff-review",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			root := repoRoot()
 			var errs []error
@@ -94,6 +105,9 @@ func allCmd() *cobra.Command {
 				errs = append(errs, err)
 			}
 			if err := linting.RunLibCheck(root); err != nil {
+				errs = append(errs, err)
+			}
+			if err := linting.RunParity(root); err != nil {
 				errs = append(errs, err)
 			}
 			if err := linting.RunDiffReview(root); err != nil {

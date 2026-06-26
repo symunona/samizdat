@@ -6,6 +6,7 @@ import { useUnistyles } from 'react-native-unistyles'
 import type { HighlightWithDoc } from './api'
 import MarkdownBody from './MarkdownBody'
 import NoteEditButton from './NoteEditButton'
+import IconButton from './IconButton'
 import { isTouchDevice } from './touch'
 
 const MAX_BODY_HEIGHT = 400
@@ -37,6 +38,8 @@ export default function HighlightCard({
   } as Record<string, string>), [theme])
 
   const [modalOpen, setModalOpen] = useState(false)
+  // Popout navigates to the document at the right place (highlight deep-link); only ✕ closes.
+  const goToDoc = () => { setModalOpen(false); onPress?.() }
   const publishedLabel = useMemo(() => {
     if (!item.document_published_at) return null
     const d = new Date(item.document_published_at)
@@ -50,12 +53,14 @@ export default function HighlightCard({
   const stableLinkedDocs = useMemo(() => linkedDocuments, [item.id])
 
   return (
-    <Pressable style={[s.card, pinned && s.cardPinned]} onPress={onPress}>
+    <View style={[s.card, pinned && s.cardPinned]}>
       <View style={s.cardHeader}>
         <View style={[s.kindBadge, { backgroundColor: kindColor[item.kind] ?? '#888' }]}>
           <Text style={s.kindText}>{item.kind}</Text>
         </View>
-        <Text style={s.hlTitle} numberOfLines={1}>{item.title}</Text>
+        <Pressable style={s.titlePress} onPress={onPress}>
+          <Text style={s.hlTitle} numberOfLines={1}>{item.title}</Text>
+        </Pressable>
         {busy
           ? <ActivityIndicator size="small" color={theme.colors.accent} />
           : onPin && !touch
@@ -67,7 +72,7 @@ export default function HighlightCard({
             : null}
       </View>
 
-      <View style={s.bodyClipMax}>
+      <Pressable style={s.bodyClipMax} onPress={() => setModalOpen(true)}>
         <View>
           <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={onDocumentPress} onLinkAction={onLinkAction}>
             {item.body}
@@ -75,15 +80,17 @@ export default function HighlightCard({
         </View>
         {isClipped && (
           <Pressable style={s.expandOverlay} onPress={() => setModalOpen(true)}>
-            <Text style={s.expandText}>Tap to expand</Text>
+            <Text style={s.expandText}>More…</Text>
           </Pressable>
         )}
-      </View>
+      </Pressable>
 
       {modalOpen && (
         <Modal transparent animationType="fade" onRequestClose={() => setModalOpen(false)}>
           <Pressable style={s.modalBackdrop} onPress={() => setModalOpen(false)}>
-            <Pressable style={s.modalSheet} onPress={() => {}}>
+            {/* Sheet press → goToDoc: title & body are non-Pressable, so taps bubble here.
+                Only the ✕ Pressable (and markdown links) intercept. */}
+            <Pressable style={s.modalSheet} onPress={goToDoc}>
               <View style={s.modalHeader}>
                 <Text style={s.modalTitle} numberOfLines={2}>{item.title}</Text>
                 <Pressable style={s.modalCloseBtn} onPress={() => setModalOpen(false)} hitSlop={10}>
@@ -112,20 +119,14 @@ export default function HighlightCard({
 
       <View style={s.cardFooter}>
         {!touch && onDelete ? (
-          <Pressable style={s.deleteBtn} onPress={onDelete} hitSlop={6}>
-            <Text style={s.deleteBtnText}>🗑</Text>
-          </Pressable>
+          <IconButton name="trash-outline" onPress={onDelete} hitSlop={6} hoverColor="#ef4444" />
         ) : null}
         {publishedLabel ? <Text style={s.dateText}>{publishedLabel}</Text> : null}
         <View style={s.footerSpacer} />
-        {onTags
-          ? <Pressable style={s.footerBtn} onPress={onTags} hitSlop={6}>
-              <Text style={s.footerBtnText}>#</Text>
-            </Pressable>
-          : null}
+        {onTags ? <IconButton name="pricetag-outline" onPress={onTags} hitSlop={6} /> : null}
         {onAnnotate ? <NoteEditButton onPress={onAnnotate} hitSlop={6} /> : null}
       </View>
-    </Pressable>
+    </View>
   )
 }
 
@@ -147,7 +148,8 @@ function buildStyles(t: Theme) {
     cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     kindBadge: { borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
     kindText: { color: '#fff', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
-    hlTitle: { flex: 1, color: t.colors.text, fontSize: 13, fontWeight: '600' },
+    titlePress: { flex: 1 },
+    hlTitle: { color: t.colors.text, fontSize: 13, fontWeight: '600' },
     starBtn: { padding: 2 },
     starIcon: { fontSize: 18, color: t.colors.muted },
     starIconActive: { color: '#facc15' },
@@ -161,24 +163,7 @@ function buildStyles(t: Theme) {
       gap: 6,
     },
     footerSpacer: { flex: 1 },
-    deleteBtn: {
-      width: 30,
-      height: 30,
-      borderRadius: 6,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    deleteBtnText: { fontSize: 16, color: t.colors.muted },
     dateText: { color: t.colors.muted, fontSize: 11, opacity: 0.8 },
-    footerBtn: {
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      borderRadius: 6,
-      backgroundColor: t.colors.background,
-      borderWidth: 1,
-      borderColor: t.colors.border,
-    },
-    footerBtnText: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
     tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
     tagChip: {
       paddingHorizontal: 8,
@@ -187,26 +172,20 @@ function buildStyles(t: Theme) {
       borderWidth: 1,
     },
     tagText: { fontSize: 11, fontWeight: '600' },
-bodyClipMax: { maxHeight: MAX_BODY_HEIGHT, overflow: 'hidden' },
+    bodyClipMax: { maxHeight: MAX_BODY_HEIGHT, overflow: 'hidden' },
     expandOverlay: {
       position: 'absolute',
-      bottom: 0,
-      left: 0,
-      right: 0,
-      height: 60,
-      backgroundColor: 'transparent',
-      alignItems: 'center',
-      justifyContent: 'flex-end',
-      paddingBottom: 4,
+      bottom: 4,
+      right: 6,
     },
     expandText: {
       color: t.colors.accent,
-      fontSize: 12,
+      fontSize: 11,
       fontWeight: '700',
       backgroundColor: t.colors.surface,
-      paddingHorizontal: 10,
-      paddingVertical: 4,
-      borderRadius: 12,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 10,
       borderWidth: 1,
       borderColor: t.colors.accent,
       overflow: 'hidden',
