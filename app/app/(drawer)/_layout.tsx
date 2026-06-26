@@ -1,19 +1,32 @@
 import { Text, View, Pressable, ScrollView } from 'react-native'
 import { Drawer } from 'expo-router/drawer'
-import { Link, useNavigation, useRouter, usePathname } from 'expo-router'
+import { Link, useNavigation, usePathname, type Href } from 'expo-router'
 import { UnistylesRuntime, useUnistyles } from 'react-native-unistyles'
-import { clearConnection, saveTheme } from '../../src/storage'
+import { saveTheme } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
 
-const SCREENS = [
-  { name: 'index', label: 'Feed', href: '/' as const },
-  { name: 'archived', label: 'Archived', href: '/archived' as const },
-  { name: 'documents', label: 'Documents', href: '/documents' as const },
-  { name: 'tags', label: 'Tags', href: '/tags' as const },
-  { name: 'subscriptions', label: 'Subscriptions', href: '/subscriptions' as const },
-  { name: 'pipelines', label: 'Pipelines', href: '/pipelines' as const },
-  { name: 'jobs', label: 'Jobs', href: '/jobs' as const },
-  { name: 'settings', label: 'Settings', href: '/settings' as const },
+type NavRow =
+  | { kind: 'header'; label: string }
+  | { kind: 'link'; name: string; label: string; href: Href; indent?: boolean }
+
+// Grouped nav. Each inner array is a block; blocks are separated by a divider line.
+const NAV_BLOCKS: NavRow[][] = [
+  [
+    { kind: 'header', label: 'Feed' },
+    { kind: 'link', name: 'index', label: 'Main', href: '/' as Href, indent: true },
+    { kind: 'link', name: 'starred', label: 'Starred', href: '/starred' as Href, indent: true },
+    { kind: 'link', name: 'archived', label: 'Archived', href: '/archived' as Href, indent: true },
+    { kind: 'link', name: 'documents', label: 'Documents', href: '/documents' as Href },
+    { kind: 'link', name: 'tags', label: 'Tags', href: '/tags' as Href },
+  ],
+  [
+    { kind: 'link', name: 'subscriptions', label: 'Subscriptions', href: '/subscriptions' as Href },
+    { kind: 'link', name: 'pipelines', label: 'Pipelines', href: '/pipelines' as Href },
+    { kind: 'link', name: 'jobs', label: 'Jobs', href: '/jobs' as Href },
+  ],
+  [
+    { kind: 'link', name: 'settings', label: 'Settings', href: '/settings' as Href },
+  ],
 ]
 
 function hostname(url: string): string {
@@ -22,15 +35,9 @@ function hostname(url: string): string {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function DrawerContent(_props: any) {
-  const router = useRouter()
   const pathname = usePathname()
   const { status, activeUrl } = useConnection()
   const { theme, rt } = useUnistyles()
-
-  async function handleDisconnect() {
-    await clearConnection()
-    router.replace('/connect')
-  }
 
   async function handleThemeToggle() {
     const next = rt.themeName === 'dark' ? 'light' : 'dark'
@@ -54,26 +61,40 @@ function DrawerContent(_props: any) {
             {urlLabel}
           </Text>
         </View>
-        {SCREENS.map((screen) => {
-          const active = pathname === screen.href || (screen.href === '/' && pathname === '')
-          return (
-            <Link key={screen.name} href={screen.href} asChild>
-              <Pressable style={{ paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8, marginHorizontal: 8, backgroundColor: active ? theme.colors.background : 'transparent' }}>
-                <Text style={{ color: active ? theme.colors.accent : theme.colors.muted, fontSize: 15, fontWeight: active ? '700' : '500' }}>
-                  {screen.label}
-                </Text>
-              </Pressable>
-            </Link>
-          )
-        })}
+        {NAV_BLOCKS.map((block, bi) => (
+          <View key={bi}>
+            {bi > 0 && (
+              <View style={{ height: 1, backgroundColor: theme.colors.border, marginVertical: 8, marginHorizontal: 16 }} />
+            )}
+            {block.map((row) => {
+              if (row.kind === 'header') {
+                return (
+                  <Text
+                    key={`h-${row.label}`}
+                    style={{ color: theme.colors.placeholder, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 2 }}
+                  >
+                    {row.label}
+                  </Text>
+                )
+              }
+              const active = pathname === row.href || (row.href === '/' && pathname === '')
+              return (
+                <Link key={row.name} href={row.href} asChild>
+                  <Pressable style={{ paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, marginHorizontal: 8, marginLeft: row.indent ? 20 : 8, backgroundColor: active ? theme.colors.background : 'transparent' }}>
+                    <Text style={{ color: active ? theme.colors.accent : theme.colors.muted, fontSize: 15, fontWeight: active ? '700' : '500' }}>
+                      {row.label}
+                    </Text>
+                  </Pressable>
+                </Link>
+              )
+            })}
+          </View>
+        ))}
       </ScrollView>
-      <View style={{ borderTopWidth: 1, borderTopColor: theme.colors.border, padding: 16, gap: 4 }}>
+      <View style={{ borderTopWidth: 1, borderTopColor: theme.colors.border, padding: 16 }}>
         <Pressable onPress={handleThemeToggle} style={{ paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Text style={{ fontSize: 16 }}>{isDark ? '☀' : '☾'}</Text>
           <Text style={{ color: theme.colors.muted, fontSize: 14 }}>{isDark ? 'Light mode' : 'Dark mode'}</Text>
-        </Pressable>
-        <Pressable onPress={handleDisconnect} style={{ paddingVertical: 8 }}>
-          <Text style={{ color: theme.colors.muted, fontSize: 14 }}>Disconnect</Text>
         </Pressable>
       </View>
     </View>
@@ -108,6 +129,7 @@ export default function DrawerLayout() {
       }}
     >
       <Drawer.Screen name="index" options={{ title: 'Feed' }} />
+      <Drawer.Screen name="starred" options={{ title: 'Starred' }} />
       <Drawer.Screen name="archived" options={{ title: 'Archived' }} />
       <Drawer.Screen name="documents" options={{ title: 'Documents' }} />
       <Drawer.Screen name="tags" options={{ title: 'Tags' }} />

@@ -2918,6 +2918,47 @@ func (q *Queries) ListMediaAssetsByDocument(ctx context.Context, documentID stri
 	return items, nil
 }
 
+const listPinnedHighlights = `-- name: ListPinnedHighlights :many
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, archived_at, created_at, updated_at, rev, deleted_at FROM highlights WHERE deleted_at IS NULL AND pinned = 1 ORDER BY created_at DESC LIMIT ?
+`
+
+func (q *Queries) ListPinnedHighlights(ctx context.Context, limit int64) ([]Highlight, error) {
+	rows, err := q.db.QueryContext(ctx, listPinnedHighlights, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Highlight
+	for rows.Next() {
+		var i Highlight
+		if err := rows.Scan(
+			&i.ID,
+			&i.DocumentID,
+			&i.PipelineRunID,
+			&i.Kind,
+			&i.Title,
+			&i.Body,
+			&i.Metadata,
+			&i.Pinned,
+			&i.ArchivedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPipelineRunsByDocument = `-- name: ListPipelineRunsByDocument :many
 SELECT id, pipeline_id, document_id, job_id, document_content_hash, status, step_index, state, superseded_at, created_at, updated_at, rev, deleted_at FROM pipeline_runs WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at DESC
 `
