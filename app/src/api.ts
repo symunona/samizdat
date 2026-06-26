@@ -327,7 +327,16 @@ export type Job = {
   updated_at: string
   parent_job_id: string | null
   llm_cost_usd?: number
+  llm?: JobLLMUsage[]
   children_count?: number
+}
+
+export type JobLLMUsage = {
+  provider: string
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
 }
 
 export async function fetchJobs(

@@ -582,50 +582,6 @@ func (q *Queries) GetJob(ctx context.Context, id string) (Job, error) {
 	return i, err
 }
 
-const getLLMUsageByJob = `-- name: GetLLMUsageByJob :many
-SELECT provider, model,
-       COALESCE(SUM(input_tokens), 0)  AS input_tokens,
-       COALESCE(SUM(output_tokens), 0) AS output_tokens
-FROM llm_usages
-WHERE job_id = ?
-GROUP BY provider, model
-`
-
-type GetLLMUsageByJobRow struct {
-	Provider     string      `json:"provider"`
-	Model        string      `json:"model"`
-	InputTokens  interface{} `json:"input_tokens"`
-	OutputTokens interface{} `json:"output_tokens"`
-}
-
-func (q *Queries) GetLLMUsageByJob(ctx context.Context, jobID *string) ([]GetLLMUsageByJobRow, error) {
-	rows, err := q.db.QueryContext(ctx, getLLMUsageByJob, jobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GetLLMUsageByJobRow
-	for rows.Next() {
-		var i GetLLMUsageByJobRow
-		if err := rows.Scan(
-			&i.Provider,
-			&i.Model,
-			&i.InputTokens,
-			&i.OutputTokens,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const getLLMUsageTotals = `-- name: GetLLMUsageTotals :one
 SELECT
     COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,

@@ -101,9 +101,67 @@ func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string) ([]stor
 	return jobs, rows.Err()
 }
 
+// jobLLMUsage is the per-(provider,model) LLM spend attributed to a job.
+type jobLLMUsage struct {
+	Provider     string  `json:"provider"`
+	Model        string  `json:"model"`
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	CostUSD      float64 `json:"cost_usd"`
+}
+
 type jobWithCost struct {
 	store.Job
-	LLMCostUSD float64 `json:"llm_cost_usd"`
+	LLM        []jobLLMUsage `json:"llm,omitempty"`
+	LLMCostUSD float64       `json:"llm_cost_usd"`
+}
+
+// usageByJobs returns LLM usage grouped per job_id for the given job IDs, with
+// cost estimated per (provider, model) row.
+func (h *jobsHandler) usageByJobs(r *http.Request, ids []string) (map[string][]jobLLMUsage, error) {
+	out := map[string][]jobLLMUsage{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	idsJSON, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	const qry = `
+		SELECT job_id, provider, model,
+		       COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
+		FROM llm_usages
+		WHERE job_id IN (SELECT value FROM json_each(?))
+		GROUP BY job_id, provider, model`
+	rows, err := h.db.QueryContext(r.Context(), qry, string(idsJSON))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var jid string
+		var u jobLLMUsage
+		if err := rows.Scan(&jid, &u.Provider, &u.Model, &u.InputTokens, &u.OutputTokens); err != nil {
+			return nil, err
+		}
+		u.CostUSD = llm.EstimateCost(u.Model, int(u.InputTokens), int(u.OutputTokens))
+		out[jid] = append(out[jid], u)
+	}
+	return out, rows.Err()
+}
+
+// wrapJobs attaches LLM usage + total cost to each job for API responses.
+func wrapJobs(jobs []store.Job, usage map[string][]jobLLMUsage) []jobWithCost {
+	out := make([]jobWithCost, len(jobs))
+	for i, j := range jobs {
+		u := usage[j.ID]
+		var cost float64
+		for _, x := range u {
+			cost += x.CostUSD
+		}
+		out[i] = jobWithCost{Job: j, LLM: u, LLMCostUSD: cost}
+	}
+	return out
 }
 
 // GET /api/v1/jobs/:id — get single job by ID.
@@ -118,22 +176,20 @@ func (h *jobsHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
-	usageRows, _ := h.q.GetLLMUsageByJob(r.Context(), &id)
-	var costUSD float64
-	for _, row := range usageRows {
-		in := toInt64(row.InputTokens)
-		out := toInt64(row.OutputTokens)
-		costUSD += llm.EstimateCost(row.Model, int(in), int(out))
+	usage, err := h.usageByJobs(r, []string{id})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
 	}
-	writeJSON(w, http.StatusOK, jobWithCost{Job: job, LLMCostUSD: costUSD})
+	writeJSON(w, http.StatusOK, wrapJobs([]store.Job{job}, usage)[0])
 }
 
 type jobsPageResponse struct {
-	Items   []store.Job `json:"items"`
-	Total   int64       `json:"total"`  // count of root jobs only
-	HasMore bool        `json:"has_more"`
-	Offset  int64       `json:"offset"` // offset into root jobs
-	Limit   int64       `json:"limit"`
+	Items   []jobWithCost `json:"items"`
+	Total   int64         `json:"total"` // count of root jobs only
+	HasMore bool          `json:"has_more"`
+	Offset  int64         `json:"offset"` // offset into root jobs
+	Limit   int64         `json:"limit"`
 }
 
 // GET /api/v1/jobs — list with optional ?status= ?kind= ?limit= ?offset= query params.
@@ -171,7 +227,16 @@ func (h *jobsHandler) list(w http.ResponseWriter, r *http.Request) {
 		if jobs == nil {
 			jobs = []store.Job{}
 		}
-		writeJSON(w, http.StatusOK, jobs)
+		ids := make([]string, len(jobs))
+		for i, j := range jobs {
+			ids[i] = j.ID
+		}
+		usage, err := h.usageByJobs(r, ids)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		writeJSON(w, http.StatusOK, wrapJobs(jobs, usage))
 		return
 	}
 
@@ -239,12 +304,22 @@ func (h *jobsHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return roots first, then descendants (flat); client buildTree re-assembles.
-	items := make([]store.Job, 0, len(roots)+len(descendants))
-	items = append(items, roots...)
-	items = append(items, descendants...)
+	flat := make([]store.Job, 0, len(roots)+len(descendants))
+	flat = append(flat, roots...)
+	flat = append(flat, descendants...)
+
+	allIDs := make([]string, len(flat))
+	for i, j := range flat {
+		allIDs[i] = j.ID
+	}
+	usage, err := h.usageByJobs(r, allIDs)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, jobsPageResponse{
-		Items:   items,
+		Items:   wrapJobs(flat, usage),
 		Total:   total,
 		HasMore: offset+int64(len(roots)) < total,
 		Offset:  offset,

@@ -53,6 +53,22 @@ function kindLabel(kind: string): string {
   return kind.replace(/_/g, ' ')
 }
 
+// shortModel collapses a model id to a compact badge label.
+// claude-opus-4-8 → opus · claude-haiku-4-5-20251001 → haiku · others → first segment.
+function shortModel(model: string): string {
+  const m = model.toLowerCase()
+  if (m.includes('opus')) return 'opus'
+  if (m.includes('sonnet')) return 'sonnet'
+  if (m.includes('haiku')) return 'haiku'
+  return model.split(/[/:]/).pop()?.slice(0, 16) ?? model
+}
+
+// uniqueModels returns the distinct short model labels used by a job.
+function uniqueModels(llm?: { model: string }[]): string[] {
+  if (!llm || llm.length === 0) return []
+  return [...new Set(llm.map(u => shortModel(u.model)))]
+}
+
 function parsePayload(payload: string): Record<string, string> {
   try { return JSON.parse(payload) as Record<string, string> } catch { return {} }
 }
@@ -394,6 +410,14 @@ export default function JobsScreen() {
         <View style={s.cardTop}>
           <View style={[s.statusDot, { backgroundColor: statusColor }]} />
           <Text style={s.kindText}>{kindLabel(job.kind)}</Text>
+          {uniqueModels(job.llm).map(m => (
+            <View key={m} style={s.modelBadge}>
+              <Text style={s.modelBadgeText}>{m}</Text>
+            </View>
+          ))}
+          {!!job.llm_cost_usd && job.llm_cost_usd > 0 && (
+            <Text style={s.costText}>${job.llm_cost_usd < 0.01 ? '<0.01' : job.llm_cost_usd.toFixed(2)}</Text>
+          )}
           <Text style={s.ageText}>{formatAge(job.updated_at)}</Text>
           {job.status === 'queued' && queuePos != null && (
             <Text style={s.queueLabel}>#{queuePos} queued</Text>
@@ -686,6 +710,9 @@ function buildStyles(t: Theme) {
     cardTop: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm, marginBottom: 4 },
     statusDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
     kindText: { flex: 1, color: t.colors.text, fontSize: 13, fontFamily: 'monospace', fontWeight: '600' },
+    modelBadge: { backgroundColor: t.colors.accent + '22', borderRadius: t.radius.sm, paddingHorizontal: 6, paddingVertical: 1, flexShrink: 0 },
+    modelBadgeText: { color: t.colors.accent, fontSize: 10, fontWeight: '700', fontFamily: 'monospace' },
+    costText: { color: t.colors.placeholder, fontSize: 11, fontFamily: 'monospace', flexShrink: 0 },
     ageText: { color: t.colors.placeholder, fontSize: 11 },
     queueLabel: { color: t.colors.placeholder, fontSize: 10, fontFamily: 'monospace' },
     collapseBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 4 },

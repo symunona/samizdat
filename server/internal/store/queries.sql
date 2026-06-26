@@ -595,14 +595,6 @@ SELECT
     COUNT(*)                         AS total_calls
 FROM llm_usages;
 
--- name: GetLLMUsageByJob :many
-SELECT provider, model,
-       COALESCE(SUM(input_tokens), 0)  AS input_tokens,
-       COALESCE(SUM(output_tokens), 0) AS output_tokens
-FROM llm_usages
-WHERE job_id = ?
-GROUP BY provider, model;
-
 -- name: GetLLMUsageTotalsByModel :many
 SELECT model,
        COALESCE(SUM(input_tokens), 0)  AS input_tokens,
