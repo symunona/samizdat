@@ -710,6 +710,7 @@ export async function runPipelineOnDocument(
 export type HighlightWithDoc = Highlight & {
   document_title: string
   document_url: string
+  document_published_at?: string | null
   linked_documents?: Record<string, string>
   tags?: Tag[]
 }

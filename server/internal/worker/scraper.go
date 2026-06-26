@@ -116,7 +116,14 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	heroImageURL := strings.TrimSpace(extracted.Metadata.Image)
 	author := strings.TrimSpace(extracted.Metadata.Author)
 
-	logScraper.Printf("extracted: title=%q  author=%q  md=%d chars", title, author, len(md))
+	// Original article publish date (nil if the page exposed none).
+	var publishedAt *string
+	if !extracted.Metadata.Date.IsZero() {
+		pa := extracted.Metadata.Date.UTC().Format(time.RFC3339)
+		publishedAt = &pa
+	}
+
+	logScraper.Printf("extracted: title=%q  author=%q  published=%v  md=%d chars", title, author, publishedAt, len(md))
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	docID := IDFromURL(canonical)
@@ -130,6 +137,7 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		Excerpt:      excerpt,
 		HeroImageUrl: heroImageURL,
 		Author:       author,
+		PublishedAt:  publishedAt,
 		SourceFeedID: p.FeedID,
 		CreatedAt:    now,
 		UpdatedAt:    now,

@@ -51,6 +51,7 @@ type Document struct {
 	Excerpt      string  `json:"excerpt"`
 	HeroImageUrl string  `json:"hero_image_url"`
 	Author       string  `json:"author"`
+	PublishedAt  *string `json:"published_at"`
 	SourceFeedID *string `json:"source_feed_id"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`

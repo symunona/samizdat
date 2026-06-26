@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS documents (
     excerpt         TEXT NOT NULL DEFAULT '',
     hero_image_url  TEXT NOT NULL DEFAULT '',
     author          TEXT NOT NULL DEFAULT '',
+    published_at    TEXT,
     source_feed_id  TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,

@@ -77,8 +77,8 @@ WHERE status = 'running' AND updated_at < ? AND deleted_at IS NULL;
 SELECT * FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1;
 
 -- name: UpsertDocument :one
-INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, source_feed_id, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 ON CONFLICT(canonical_url) DO UPDATE SET
   title          = excluded.title,
   markdown       = excluded.markdown,
@@ -86,6 +86,7 @@ ON CONFLICT(canonical_url) DO UPDATE SET
   excerpt        = excluded.excerpt,
   hero_image_url = excluded.hero_image_url,
   author         = excluded.author,
+  published_at   = COALESCE(excluded.published_at, documents.published_at),
   source_feed_id = COALESCE(excluded.source_feed_id, documents.source_feed_id),
   updated_at     = excluded.updated_at,
   rev            = documents.rev + 1
@@ -367,7 +368,7 @@ ORDER BY a.created_at DESC;
 
 -- name: ListDocumentsWithAnnotationCount :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.created_at, d.updated_at,
        d.rev, d.deleted_at,
        COALESCE(COUNT(DISTINCT a.id), 0) AS annotation_count,
        COALESCE(COUNT(DISTINCT h.id), 0) AS highlight_count
@@ -565,7 +566,7 @@ SELECT COUNT(*) FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND d
 
 -- name: ListDocumentsByPipeline :many
 SELECT DISTINCT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 JOIN pipeline_runs pr ON pr.document_id = d.id
@@ -575,7 +576,7 @@ LIMIT 200;
 
 -- name: ListDocumentsByFeed :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.source_feed_id, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 WHERE d.source_feed_id = ? AND d.deleted_at IS NULL

@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS documents (
     excerpt         TEXT NOT NULL DEFAULT '',
     hero_image_url  TEXT NOT NULL DEFAULT '',
     author          TEXT NOT NULL DEFAULT '',
+    published_at    TEXT,
     source_feed_id  TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
@@ -341,6 +342,8 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS llm_usages_created_at ON llm_usages(created_at)`,
 		// archived_at on highlights: user-driven "seen" state (scroll-to-archive)
 		`ALTER TABLE highlights ADD COLUMN archived_at TEXT`,
+		// original article publish date (from scraper metadata), nullable
+		`ALTER TABLE documents ADD COLUMN published_at TEXT`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {

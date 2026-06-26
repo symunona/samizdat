@@ -37,6 +37,12 @@ export default function HighlightCard({
   } as Record<string, string>), [theme])
 
   const [modalOpen, setModalOpen] = useState(false)
+  const publishedLabel = useMemo(() => {
+    if (!item.document_published_at) return null
+    const d = new Date(item.document_published_at)
+    if (isNaN(d.getTime())) return null
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  }, [item.document_published_at])
   const isClipped = item.body.length > CLIP_CHAR_THRESHOLD || item.body.includes('![')
   // Stabilize by item.id: linked_documents are computed once per highlight and don't change.
   // Prevents new object refs from React Query refetches bypassing MarkdownBody memo.
@@ -110,6 +116,7 @@ export default function HighlightCard({
             <Text style={s.deleteBtnText}>🗑</Text>
           </Pressable>
         ) : null}
+        {publishedLabel ? <Text style={s.dateText}>{publishedLabel}</Text> : null}
         <View style={s.footerSpacer} />
         {onTags
           ? <Pressable style={s.footerBtn} onPress={onTags} hitSlop={6}>
@@ -162,6 +169,7 @@ function buildStyles(t: Theme) {
       justifyContent: 'center',
     },
     deleteBtnText: { fontSize: 16, color: t.colors.muted },
+    dateText: { color: t.colors.muted, fontSize: 11, opacity: 0.8 },
     footerBtn: {
       paddingHorizontal: 10,
       paddingVertical: 5,
