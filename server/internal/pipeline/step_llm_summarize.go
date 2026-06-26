@@ -98,18 +98,20 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 		}
 	}
 
-	_, err = q.InsertHighlight(ctx, store.InsertHighlightParams{
-		ID:            uuid.NewString(),
-		DocumentID:    run.DocumentID,
-		PipelineRunID: run.ID,
-		Kind:          "summary",
-		Title:         doc.Title,
-		Body:          body,
-		Metadata:      string(meta),
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	})
-	if err != nil {
+	if err := InsertTx(ctx, q, func(q *store.Queries) error {
+		_, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
+			ID:            uuid.NewString(),
+			DocumentID:    run.DocumentID,
+			PipelineRunID: run.ID,
+			Kind:          "summary",
+			Title:         doc.Title,
+			Body:          body,
+			Metadata:      string(meta),
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		})
+		return err
+	}); err != nil {
 		return StepResult{}, fmt.Errorf("llm_summarize: insert highlight: %w", err)
 	}
 

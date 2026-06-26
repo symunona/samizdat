@@ -53,6 +53,7 @@ type Document struct {
 	Author       string  `json:"author"`
 	PublishedAt  *string `json:"published_at"`
 	SourceFeedID *string `json:"source_feed_id"`
+	ContentHash  string  `json:"content_hash"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
 	Rev          int64   `json:"rev"`
@@ -181,16 +182,19 @@ type Pipeline struct {
 }
 
 type PipelineRun struct {
-	ID         string  `json:"id"`
-	PipelineID string  `json:"pipeline_id"`
-	DocumentID string  `json:"document_id"`
-	Status     string  `json:"status"`
-	StepIndex  int64   `json:"step_index"`
-	State      string  `json:"state"`
-	CreatedAt  string  `json:"created_at"`
-	UpdatedAt  string  `json:"updated_at"`
-	Rev        int64   `json:"rev"`
-	DeletedAt  *string `json:"deleted_at"`
+	ID                  string  `json:"id"`
+	PipelineID          string  `json:"pipeline_id"`
+	DocumentID          string  `json:"document_id"`
+	JobID               *string `json:"job_id"`
+	DocumentContentHash string  `json:"document_content_hash"`
+	Status              string  `json:"status"`
+	StepIndex           int64   `json:"step_index"`
+	State               string  `json:"state"`
+	SupersededAt        *string `json:"superseded_at"`
+	CreatedAt           string  `json:"created_at"`
+	UpdatedAt           string  `json:"updated_at"`
+	Rev                 int64   `json:"rev"`
+	DeletedAt           *string `json:"deleted_at"`
 }
 
 type ReadState struct {

@@ -4,6 +4,7 @@ package pipeline
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,7 +15,10 @@ import (
 
 type contextKey int
 
-const parentJobIDKey contextKey = iota
+const (
+	parentJobIDKey contextKey = iota
+	dbKey
+)
 
 // WithParentJobID injects the driving job's ID into ctx so step handlers can
 // set it as ParentJobID on any child jobs they enqueue.
@@ -30,6 +34,32 @@ func ParentJobIDFromCtx(ctx context.Context) *string {
 		return nil
 	}
 	return &v
+}
+
+// WithDB injects the database handle so step handlers can run their highlight
+// inserts in a transaction (see InsertTx).
+func WithDB(ctx context.Context, db *sql.DB) context.Context {
+	return context.WithValue(ctx, dbKey, db)
+}
+
+// dbFromCtx returns the *sql.DB stored by WithDB, or nil.
+func dbFromCtx(ctx context.Context) *sql.DB {
+	db, _ := ctx.Value(dbKey).(*sql.DB)
+	return db
+}
+
+// InsertTx runs fn inside a single transaction when a *sql.DB is present in ctx,
+// so a step's batch of highlight inserts is atomic: a mid-batch error rolls the
+// whole batch back, and a job retry replaces rather than appends (no duplicates).
+// Falls back to running fn directly with q when no DB is in ctx (e.g. tests that
+// pass a plain *Queries). The closure MUST use the *Queries it receives for every
+// DB call — the connection pool is single-writer, so touching the outer q would
+// deadlock against the open transaction.
+func InsertTx(ctx context.Context, q *store.Queries, fn func(*store.Queries) error) error {
+	if db := dbFromCtx(ctx); db != nil {
+		return store.InTx(ctx, db, fn)
+	}
+	return fn(q)
 }
 
 // StepConfig is a single step from the pipeline.steps JSON array.

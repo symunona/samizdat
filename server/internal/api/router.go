@@ -26,7 +26,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 		llmClient = llm.New(llmCfg[0])
 	}
 
-	w := worker.New(q, cacheDir, extractorDir, llmClient)
+	w := worker.New(q, db, cacheDir, extractorDir, llmClient)
 	w.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -53,6 +53,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("POST /api/v1/jobs/resume-all", bearerAuth(q, jobsH.resumeAll))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/resume", bearerAuth(q, jobsH.resume))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/retry", bearerAuth(q, jobsH.retry))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/rerun", bearerAuth(q, jobsH.rerun))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", bearerAuth(q, jobsH.softDelete))
 
 	subsH := &subscriptionsHandler{q: q, reg: w.ExtractorRegistry(), extractorsDir: extractorDir}

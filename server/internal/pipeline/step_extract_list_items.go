@@ -111,74 +111,92 @@ func initItems(ctx context.Context, q *store.Queries, run store.PipelineRun, ski
 	now := time.Now().UTC().Format(time.RFC3339)
 	var tracked []trackedItem
 
-	for _, body := range rawItems {
-		hlID := uuid.NewString()
-		if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
-			ID:            hlID,
-			DocumentID:    run.DocumentID,
-			PipelineRunID: run.ID,
-			Kind:          "item",
-			Title:         doc.Title,
-			Body:          body,
-			Metadata:      "{}",
-			CreatedAt:     now,
+	// Wrap item creation in one transaction so a mid-loop failure rolls back and a
+	// retry replaces rather than appends. The leading clear handles the case where a
+	// prior attempt committed its highlights but failed before its state was saved —
+	// the run is brand-new here (state empty), so no user interaction exists yet.
+	if err := InsertTx(ctx, q, func(q *store.Queries) error {
+		tracked = nil
+		if err := q.SoftDeleteHighlightsByPipelineRun(ctx, store.SoftDeleteHighlightsByPipelineRunParams{
+			DeletedAt:     &now,
 			UpdatedAt:     now,
+			PipelineRunID: run.ID,
 		}); err != nil {
-			return extractListItemsState{}, fmt.Errorf("extract_list_items: insert highlight: %w", err)
+			return fmt.Errorf("extract_list_items: clear prior highlights: %w", err)
 		}
 
-		links := extractMarkdownLinks(body)
-		if len(links) == 0 {
-			tracked = append(tracked, trackedItem{Phase: itemPhaseNoLink, HighlightID: hlID})
-			continue
-		}
-		url := links[0].url
-
-		// Already scraped?
-		existing, err := q.GetDocumentByCanonicalURL(ctx, url)
-		if err == nil && existing.ID != "" {
-			if skipNewScrapes {
-				// skip_new_scrapes: don't poll the summarizer cycle; highlight
-				// body already has the original list-item text — leave it as-is.
-				tracked = append(tracked, trackedItem{Phase: itemPhaseDone, HighlightID: hlID})
-			} else {
-				tracked = append(tracked, trackedItem{
-					Phase:       itemPhaseScraping,
-					HighlightID: hlID,
-					URL:         url,
-					ScrapeJobID: "existing:" + existing.ID,
-				})
+		for _, body := range rawItems {
+			hlID := uuid.NewString()
+			if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
+				ID:            hlID,
+				DocumentID:    run.DocumentID,
+				PipelineRunID: run.ID,
+				Kind:          "item",
+				Title:         doc.Title,
+				Body:          body,
+				Metadata:      "{}",
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			}); err != nil {
+				return fmt.Errorf("extract_list_items: insert highlight: %w", err)
 			}
-			continue
-		}
 
-		if skipNewScrapes {
-			tracked = append(tracked, trackedItem{Phase: itemPhaseNoLink, HighlightID: hlID})
-			continue
-		}
+			links := extractMarkdownLinks(body)
+			if len(links) == 0 {
+				tracked = append(tracked, trackedItem{Phase: itemPhaseNoLink, HighlightID: hlID})
+				continue
+			}
+			url := links[0].url
 
-		// Enqueue scrape job.
-		payload, _ := json.Marshal(map[string]string{"url": url})
-		jobID := uuid.NewString()
-		if _, err := q.InsertJob(ctx, store.InsertJobParams{
-			ID:          jobID,
-			Kind:        "scrape_url",
-			Payload:     string(payload),
-			RunAfter:    now,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-			ParentJobID: ParentJobIDFromCtx(ctx),
-		}); err != nil {
-			// Enqueue failed — treat as no-link.
-			tracked = append(tracked, trackedItem{Phase: itemPhaseNoLink, HighlightID: hlID})
-			continue
+			// Already scraped?
+			existing, err := q.GetDocumentByCanonicalURL(ctx, url)
+			if err == nil && existing.ID != "" {
+				if skipNewScrapes {
+					// skip_new_scrapes: don't poll the summarizer cycle; highlight
+					// body already has the original list-item text — leave it as-is.
+					tracked = append(tracked, trackedItem{Phase: itemPhaseDone, HighlightID: hlID})
+				} else {
+					tracked = append(tracked, trackedItem{
+						Phase:       itemPhaseScraping,
+						HighlightID: hlID,
+						URL:         url,
+						ScrapeJobID: "existing:" + existing.ID,
+					})
+				}
+				continue
+			}
+
+			if skipNewScrapes {
+				tracked = append(tracked, trackedItem{Phase: itemPhaseNoLink, HighlightID: hlID})
+				continue
+			}
+
+			// Enqueue scrape job.
+			payload, _ := json.Marshal(map[string]string{"url": url})
+			jobID := uuid.NewString()
+			if _, err := q.InsertJob(ctx, store.InsertJobParams{
+				ID:          jobID,
+				Kind:        "scrape_url",
+				Payload:     string(payload),
+				RunAfter:    now,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+				ParentJobID: ParentJobIDFromCtx(ctx),
+			}); err != nil {
+				// Enqueue failed — treat as no-link.
+				tracked = append(tracked, trackedItem{Phase: itemPhaseNoLink, HighlightID: hlID})
+				continue
+			}
+			tracked = append(tracked, trackedItem{
+				Phase:       itemPhaseScraping,
+				HighlightID: hlID,
+				URL:         url,
+				ScrapeJobID: jobID,
+			})
 		}
-		tracked = append(tracked, trackedItem{
-			Phase:       itemPhaseScraping,
-			HighlightID: hlID,
-			URL:         url,
-			ScrapeJobID: jobID,
-		})
+		return nil
+	}); err != nil {
+		return extractListItemsState{}, err
 	}
 
 	return extractListItemsState{Items: tracked}, nil

@@ -15,7 +15,7 @@ import { useInfiniteQuery } from '@tanstack/react-query'
 import { useUnistyles } from 'react-native-unistyles'
 import { v5 as uuidv5 } from 'uuid'
 import {
-  fetchJobsPage, fetchDocuments, retryJob, clearCompletedJobs,
+  fetchJobsPage, fetchDocuments, retryJob, rerunJob, clearCompletedJobs,
   resumeJob, resumeAllJobs, deleteJob, clearQueuedJobs,
   queueFeedPipelines, queueDocumentPipelines,
 } from '../../src/api'
@@ -144,6 +144,9 @@ export default function JobsScreen() {
   const [clearing, setClearing] = useState(false)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [queueingPipelinesId, setQueueingPipelinesId] = useState<string | null>(null)
+  const [showHistory, setShowHistory] = useState(false)
+  const [rerunPreviewId, setRerunPreviewId] = useState<string | null>(null)
+  const [rerunningId, setRerunningId] = useState<string | null>(null)
 
   const enabled = status === 'connected' && !!activeUrl && !!token
 
@@ -158,12 +161,13 @@ export default function JobsScreen() {
     refetch,
     isRefetching,
   } = useInfiniteQuery({
-    queryKey: ['jobs', activeUrl, filter],
+    queryKey: ['jobs', activeUrl, filter, showHistory],
     queryFn: async ({ pageParam }) => {
       const opts = {
         offset: pageParam as number,
         limit: PAGE_LIMIT,
-        ...(filter !== 'all' ? { status: filter } : {}),
+        ...(showHistory ? { includeSuperseded: true } : {}),
+        ...(filter !== 'all' && !showHistory ? { status: filter } : {}),
       }
       return fetchJobsPage(activeUrl!, token!, opts)
     },
@@ -221,6 +225,19 @@ export default function JobsScreen() {
       await refetch()
     } catch { /* ignore */ }
     finally { setRetryingId(null) }
+  }
+
+  async function handleRerunConfirm(job: Job) {
+    if (!activeUrl || !token || rerunningId) return
+    setRerunningId(job.id)
+    try {
+      await rerunJob(activeUrl, token, job.id)
+      toast('Rerun queued — subtree regenerating', 'success')
+      setRerunPreviewId(null)
+      await refetch()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Rerun failed', 'error')
+    } finally { setRerunningId(null) }
   }
 
   async function handleResume(job: Job) {
@@ -322,6 +339,52 @@ export default function JobsScreen() {
     [data]
   )
 
+  // Affected subtree (node + all descendants) for the rerun preview highlight.
+  const affectedIds = useMemo(() => {
+    const set = new Set<string>()
+    if (!rerunPreviewId) return set
+    const byParent = new Map<string, Job[]>()
+    for (const j of jobs) {
+      if (j.parent_job_id) {
+        const arr = byParent.get(j.parent_job_id) ?? []
+        arr.push(j)
+        byParent.set(j.parent_job_id, arr)
+      }
+    }
+    set.add(rerunPreviewId)
+    const stack = [rerunPreviewId]
+    while (stack.length) {
+      const id = stack.pop()!
+      for (const c of byParent.get(id) ?? []) {
+        if (!set.has(c.id)) { set.add(c.id); stack.push(c.id) }
+      }
+    }
+    return set
+  }, [rerunPreviewId, jobs])
+
+  // Version labels (v1, v2 current, …) for run_pipeline jobs grouped by
+  // (pipeline_id, document_id) — only meaningful in the history view.
+  const versionLabels = useMemo(() => {
+    const m = new Map<string, string>()
+    if (!showHistory) return m
+    const groups = new Map<string, Job[]>()
+    for (const j of jobs) {
+      if (j.kind !== 'run_pipeline') continue
+      const p = parsePayload(j.payload)
+      const key = `${p.pipeline_id ?? ''}|${p.document_id ?? ''}`
+      if (key === '|') continue
+      const arr = groups.get(key) ?? []
+      arr.push(j)
+      groups.set(key, arr)
+    }
+    for (const arr of groups.values()) {
+      if (arr.length < 2) continue
+      arr.sort((a, b) => a.created_at.localeCompare(b.created_at))
+      arr.forEach((j, i) => m.set(j.id, j.deleted_at ? `v${i + 1}` : `v${i + 1} current`))
+    }
+    return m
+  }, [jobs, showHistory])
+
   // Build flat tree list; collapse subtrees for collapsed roots
   const treeItems = useMemo(() => {
     const byId = new Map<string, Job>()
@@ -381,6 +444,10 @@ export default function JobsScreen() {
     const r = parseResult(job.result)
     const isRetrying = retryingId === job.id
     const isCollapsed = isRoot && collapsed.has(job.id)
+    const isSuperseded = !!job.deleted_at
+    const isAffected = affectedIds.has(job.id)
+    const versionLabel = versionLabels.get(job.id)
+    const skipped = r.skipped === true
 
     const payloadUrl = p.url ?? ''
     const feedId = p.feed_id ?? ''
@@ -403,13 +470,28 @@ export default function JobsScreen() {
     const indentPx = depth * 16
 
     return (
-      <View style={[s.card, depth > 0 && s.childCard, { marginLeft: indentPx }]}>
+      <View style={[
+        s.card,
+        depth > 0 && s.childCard,
+        isSuperseded && s.supersededCard,
+        isAffected && s.previewCard,
+        { marginLeft: indentPx },
+      ]}>
         {/* Connector line for children */}
         {depth > 0 && <View style={s.connectorLine} />}
 
         <View style={s.cardTop}>
           <View style={[s.statusDot, { backgroundColor: statusColor }]} />
-          <Text style={s.kindText}>{kindLabel(job.kind)}</Text>
+          <Text style={[s.kindText, isSuperseded && s.supersededText]}>{kindLabel(job.kind)}</Text>
+          {versionLabel && (
+            <View style={s.versionBadge}><Text style={s.versionBadgeText}>{versionLabel}</Text></View>
+          )}
+          {isSuperseded && (
+            <View style={s.supersededBadge}><Text style={s.supersededBadgeText}>superseded</Text></View>
+          )}
+          {skipped && (
+            <View style={s.skippedBadge}><Text style={s.skippedBadgeText}>skipped</Text></View>
+          )}
           {uniqueModels(job.llm).map(m => (
             <View key={m} style={s.modelBadge}>
               <Text style={s.modelBadgeText}>{m}</Text>
@@ -588,6 +670,42 @@ export default function JobsScreen() {
             </Pressable>
           </View>
         )}
+
+        {/* Rerun: forced regenerate of this node's whole subtree */}
+        {!isSuperseded && rerunPreviewId !== job.id && (
+          <Pressable
+            style={({ pressed }) => [s.rerunBtn, pressed && s.rerunBtnPressed]}
+            onPress={() => setRerunPreviewId(job.id)}
+          >
+            <Text style={s.rerunBtnText}>⟳ Rerun</Text>
+          </Pressable>
+        )}
+        {rerunPreviewId === job.id && (
+          <View style={s.rerunConfirm}>
+            <Text style={s.rerunConfirmText}>
+              Erase this subtree's results and regenerate? Interacted highlights are kept.
+            </Text>
+            <View style={s.rerunConfirmActions}>
+              <Pressable
+                style={({ pressed }) => [s.rerunGoBtn, (rerunningId === job.id || pressed) && s.rerunBtnPressed]}
+                onPress={() => handleRerunConfirm(job)}
+                disabled={!!rerunningId}
+              >
+                {rerunningId === job.id
+                  ? <ActivityIndicator size="small" color="#0b0b0c" />
+                  : <Text style={s.rerunGoText}>Erase & regenerate</Text>
+                }
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [s.rerunCancelBtn, pressed && s.rerunBtnPressed]}
+                onPress={() => setRerunPreviewId(null)}
+                disabled={!!rerunningId}
+              >
+                <Text style={s.rerunCancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
       </View>
     )
   }
@@ -612,6 +730,14 @@ export default function JobsScreen() {
           ))}
         </View>
         <View style={s.bulkActions}>
+          <Pressable
+            style={({ pressed }) => [s.clearBtn, pressed && s.clearBtnPressed]}
+            onPress={() => setShowHistory(v => !v)}
+          >
+            <Text style={[s.historyBtnText, showHistory && s.historyBtnActive]}>
+              {showHistory ? '✓ history' : 'history'}
+            </Text>
+          </Pressable>
           <Pressable
             style={({ pressed }) => [s.clearBtn, (resumingAll || pressed) && s.clearBtnPressed]}
             onPress={handleResumeAll}
@@ -706,6 +832,27 @@ function buildStyles(t: Theme) {
     sep: { height: t.spacing.xs },
     card: { backgroundColor: t.colors.surface, borderRadius: t.radius.sm, padding: t.spacing.md, borderWidth: 1, borderColor: t.colors.border },
     childCard: { borderLeftWidth: 2, borderLeftColor: t.colors.accent + '55', borderRadius: t.radius.sm },
+    supersededCard: { opacity: 0.55, borderStyle: 'dashed' },
+    supersededText: { textDecorationLine: 'line-through' },
+    previewCard: { borderColor: '#f87171', borderWidth: 2, backgroundColor: '#f8717111' },
+    versionBadge: { backgroundColor: t.colors.accent + '22', borderRadius: t.radius.sm, paddingHorizontal: 6, paddingVertical: 1, flexShrink: 0 },
+    versionBadgeText: { color: t.colors.accent, fontSize: 10, fontWeight: '700', fontFamily: 'monospace' },
+    supersededBadge: { backgroundColor: '#9ca3af33', borderRadius: t.radius.sm, paddingHorizontal: 6, paddingVertical: 1, flexShrink: 0 },
+    supersededBadgeText: { color: '#9ca3af', fontSize: 10, fontWeight: '700', fontFamily: 'monospace' },
+    skippedBadge: { backgroundColor: '#60a5fa33', borderRadius: t.radius.sm, paddingHorizontal: 6, paddingVertical: 1, flexShrink: 0 },
+    skippedBadgeText: { color: '#60a5fa', fontSize: 10, fontWeight: '700', fontFamily: 'monospace' },
+    historyBtnText: { color: t.colors.muted, fontSize: 12, fontFamily: 'monospace', fontWeight: '600' },
+    historyBtnActive: { color: t.colors.accent },
+    rerunBtn: { alignSelf: 'flex-start', marginTop: t.spacing.sm, borderWidth: 1, borderColor: t.colors.border, borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 4 },
+    rerunBtnPressed: { opacity: 0.6 },
+    rerunBtnText: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace', fontWeight: '600' },
+    rerunConfirm: { marginTop: t.spacing.sm, padding: t.spacing.sm, borderWidth: 1, borderColor: '#f87171', borderRadius: t.radius.sm, backgroundColor: '#f8717111' },
+    rerunConfirmText: { color: t.colors.text, fontSize: 12, marginBottom: t.spacing.sm, lineHeight: 17 },
+    rerunConfirmActions: { flexDirection: 'row', gap: t.spacing.sm },
+    rerunGoBtn: { backgroundColor: '#f87171', borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 5, minWidth: 140, alignItems: 'center' },
+    rerunGoText: { color: '#0b0b0c', fontSize: 12, fontWeight: '700' },
+    rerunCancelBtn: { borderWidth: 1, borderColor: t.colors.border, borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 5, alignItems: 'center' },
+    rerunCancelText: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
     connectorLine: { position: 'absolute', left: -1, top: 0, bottom: 0, width: 2, backgroundColor: t.colors.accent + '33' },
     cardTop: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm, marginBottom: 4 },
     statusDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },

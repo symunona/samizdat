@@ -193,7 +193,43 @@ async function runSmoke() {
     }
   }
 
+  // API contract checks for the rerun-cascade feature (no LLM / network needed;
+  // deep cascade semantics are covered by the Go store/pipeline tests).
+  errors.push(...await runJobsApiChecks(token))
+
   return errors
+}
+
+// runJobsApiChecks validates the rerun + history endpoints end-to-end through the
+// running server.
+async function runJobsApiChecks(token) {
+  const auth = { Authorization: `Bearer ${token}` }
+  const out = []
+
+  // 1. History listing returns the paged shape with an items array.
+  try {
+    const res = await fetch(`${BASE_URL}/api/v1/jobs?include_superseded=true&limit=5&offset=0`, { headers: auth })
+    if (!res.ok) {
+      out.push(`[jobs-api] include_superseded HTTP ${res.status}`)
+    } else {
+      const body = await res.json()
+      if (!Array.isArray(body.items)) out.push('[jobs-api] include_superseded: items not an array')
+      else console.log('  PASS [jobs-api] include_superseded returns paged items')
+    }
+  } catch (e) {
+    out.push(`[jobs-api] include_superseded threw: ${e.message}`)
+  }
+
+  // 2. Rerun of an unknown job id is a clean 404 (not a 500).
+  try {
+    const res = await fetch(`${BASE_URL}/api/v1/jobs/does-not-exist/rerun`, { method: 'POST', headers: auth })
+    if (res.status !== 404) out.push(`[jobs-api] rerun unknown id: expected 404, got ${res.status}`)
+    else console.log('  PASS [jobs-api] rerun unknown id → 404')
+  } catch (e) {
+    out.push(`[jobs-api] rerun threw: ${e.message}`)
+  }
+
+  return out
 }
 
 async function main() {

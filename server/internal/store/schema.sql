@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS documents (
     author          TEXT NOT NULL DEFAULT '',
     published_at    TEXT,
     source_feed_id  TEXT,
+    content_hash    TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     rev             INTEGER NOT NULL DEFAULT 0,
@@ -197,20 +198,24 @@ CREATE TABLE IF NOT EXISTS pipelines (
 );
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
-    id          TEXT    PRIMARY KEY,
-    pipeline_id TEXT    NOT NULL REFERENCES pipelines(id),
-    document_id TEXT    NOT NULL REFERENCES documents(id),
-    status      TEXT    NOT NULL DEFAULT 'queued',
-    step_index  INTEGER NOT NULL DEFAULT 0,
-    state       TEXT    NOT NULL DEFAULT '{}',
-    created_at  TEXT    NOT NULL,
-    updated_at  TEXT    NOT NULL,
-    rev         INTEGER NOT NULL DEFAULT 0,
-    deleted_at  TEXT
+    id                    TEXT    PRIMARY KEY,
+    pipeline_id           TEXT    NOT NULL REFERENCES pipelines(id),
+    document_id           TEXT    NOT NULL REFERENCES documents(id),
+    job_id                TEXT,
+    document_content_hash TEXT    NOT NULL DEFAULT '',
+    status                TEXT    NOT NULL DEFAULT 'queued',
+    step_index            INTEGER NOT NULL DEFAULT 0,
+    state                 TEXT    NOT NULL DEFAULT '{}',
+    superseded_at         TEXT,
+    created_at            TEXT    NOT NULL,
+    updated_at            TEXT    NOT NULL,
+    rev                   INTEGER NOT NULL DEFAULT 0,
+    deleted_at            TEXT
 );
 
 CREATE INDEX IF NOT EXISTS pipeline_runs_document_id ON pipeline_runs(document_id);
 CREATE INDEX IF NOT EXISTS pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id);
+CREATE INDEX IF NOT EXISTS pipeline_runs_job_id ON pipeline_runs(job_id);
 
 CREATE TABLE IF NOT EXISTS highlights (
     id              TEXT    PRIMARY KEY,

@@ -163,39 +163,43 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 		}
 	}
 
-	_, err = q.InsertHighlight(ctx, store.InsertHighlightParams{
-		ID:            uuid.NewString(),
-		DocumentID:    run.DocumentID,
-		PipelineRunID: run.ID,
-		Kind:          "summary",
-		Title:         doc.Title,
-		Body:          summaryBody,
-		Metadata:      string(meta),
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	})
-	if err != nil {
-		return StepResult{}, fmt.Errorf("llm_ai_newsletter: insert summary highlight: %w", err)
-	}
-
-	for _, h := range parsed.Highlights {
-		if h.Kind == "" || h.Title == "" {
-			continue
-		}
-		_, err = q.InsertHighlight(ctx, store.InsertHighlightParams{
+	// Insert the summary + per-topic highlights atomically (idempotent on retry).
+	if err := InsertTx(ctx, q, func(q *store.Queries) error {
+		if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
 			ID:            uuid.NewString(),
 			DocumentID:    run.DocumentID,
 			PipelineRunID: run.ID,
-			Kind:          h.Kind,
-			Title:         h.Title,
-			Body:          h.bodyString(),
+			Kind:          "summary",
+			Title:         doc.Title,
+			Body:          summaryBody,
 			Metadata:      string(meta),
 			CreatedAt:     now,
 			UpdatedAt:     now,
-		})
-		if err != nil {
-			return StepResult{}, fmt.Errorf("llm_ai_newsletter: insert highlight %q: %w", h.Title, err)
+		}); err != nil {
+			return fmt.Errorf("llm_ai_newsletter: insert summary highlight: %w", err)
 		}
+
+		for _, h := range parsed.Highlights {
+			if h.Kind == "" || h.Title == "" {
+				continue
+			}
+			if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
+				ID:            uuid.NewString(),
+				DocumentID:    run.DocumentID,
+				PipelineRunID: run.ID,
+				Kind:          h.Kind,
+				Title:         h.Title,
+				Body:          h.bodyString(),
+				Metadata:      string(meta),
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			}); err != nil {
+				return fmt.Errorf("llm_ai_newsletter: insert highlight %q: %w", h.Title, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return StepResult{}, err
 	}
 
 	return StepResult{Done: true}, nil

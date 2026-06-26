@@ -325,6 +325,7 @@ export type Job = {
   result: string
   created_at: string
   updated_at: string
+  deleted_at?: string | null
   parent_job_id: string | null
   llm_cost_usd?: number
   llm?: JobLLMUsage[]
@@ -378,6 +379,19 @@ export async function retryJob(serverUrl: string, token: string, id: string): Pr
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) throw new ApiError(res.status, `retry job failed: HTTP ${res.status}`)
+}
+
+// rerunJob tombstones the job node's whole subtree (jobs + pipeline_runs +
+// regenerable highlights, keeping interacted ones) and re-enqueues a fresh forced
+// equivalent. Returns the new job id.
+export async function rerunJob(serverUrl: string, token: string, id: string): Promise<string> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/jobs/${encodeURIComponent(id)}/rerun`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new ApiError(res.status, `rerun job failed: HTTP ${res.status}`)
+  const body = await json<{ job_id: string }>(res, '/api/v1/jobs/:id/rerun')
+  return body.job_id
 }
 
 export async function resumeJob(serverUrl: string, token: string, id: string): Promise<void> {
@@ -939,11 +953,12 @@ export type JobsPage = {
 export async function fetchJobsPage(
   serverUrl: string,
   token: string,
-  opts: { status?: string; kind?: string; offset?: number; limit?: number } = {},
+  opts: { status?: string; kind?: string; offset?: number; limit?: number; includeSuperseded?: boolean } = {},
 ): Promise<JobsPage> {
   const params = new URLSearchParams()
   if (opts.status) params.set('status', opts.status)
   if (opts.kind) params.set('kind', opts.kind)
+  if (opts.includeSuperseded) params.set('include_superseded', 'true')
   params.set('offset', String(opts.offset ?? 0))
   params.set('limit', String(opts.limit ?? 50))
   const res = await fetch(`${base(serverUrl)}/api/v1/jobs?${params.toString()}`, {

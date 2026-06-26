@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS documents (
     author          TEXT NOT NULL DEFAULT '',
     published_at    TEXT,
     source_feed_id  TEXT,
+    content_hash    TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     rev             INTEGER NOT NULL DEFAULT 0,
@@ -236,16 +237,19 @@ CREATE TABLE IF NOT EXISTS pipelines (
 );
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
-    id          TEXT    PRIMARY KEY,
-    pipeline_id TEXT    NOT NULL REFERENCES pipelines(id),
-    document_id TEXT    NOT NULL REFERENCES documents(id),
-    status      TEXT    NOT NULL DEFAULT 'queued',
-    step_index  INTEGER NOT NULL DEFAULT 0,
-    state       TEXT    NOT NULL DEFAULT '{}',
-    created_at  TEXT    NOT NULL,
-    updated_at  TEXT    NOT NULL,
-    rev         INTEGER NOT NULL DEFAULT 0,
-    deleted_at  TEXT
+    id                    TEXT    PRIMARY KEY,
+    pipeline_id           TEXT    NOT NULL REFERENCES pipelines(id),
+    document_id           TEXT    NOT NULL REFERENCES documents(id),
+    job_id                TEXT,
+    document_content_hash TEXT    NOT NULL DEFAULT '',
+    status                TEXT    NOT NULL DEFAULT 'queued',
+    step_index            INTEGER NOT NULL DEFAULT 0,
+    state                 TEXT    NOT NULL DEFAULT '{}',
+    superseded_at         TEXT,
+    created_at            TEXT    NOT NULL,
+    updated_at            TEXT    NOT NULL,
+    rev                   INTEGER NOT NULL DEFAULT 0,
+    deleted_at            TEXT
 );
 
 CREATE INDEX IF NOT EXISTS pipeline_runs_document_id ON pipeline_runs(document_id);
@@ -344,6 +348,20 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE highlights ADD COLUMN archived_at TEXT`,
 		// original article publish date (from scraper metadata), nullable
 		`ALTER TABLE documents ADD COLUMN published_at TEXT`,
+		// content-hash change detection + run provenance for rerun cascade
+		`ALTER TABLE documents ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pipeline_runs ADD COLUMN job_id TEXT`,
+		`ALTER TABLE pipeline_runs ADD COLUMN document_content_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE pipeline_runs ADD COLUMN superseded_at TEXT`,
+		// backfill run↔job link from the run_pipeline job's result JSON (was JSON-only).
+		// Guard with json_valid — many jobs.result values are empty or non-JSON, and
+		// json_extract errors ("malformed JSON") on those without the guard.
+		`UPDATE pipeline_runs SET job_id = (
+			SELECT j.id FROM jobs j
+			WHERE json_valid(j.result) AND json_extract(j.result, '$.pipeline_run_id') = pipeline_runs.id
+			LIMIT 1
+		) WHERE job_id IS NULL`,
+		`CREATE INDEX IF NOT EXISTS pipeline_runs_job_id ON pipeline_runs(job_id)`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {

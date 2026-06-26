@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -62,7 +63,8 @@ func (h *jobsHandler) create(w http.ResponseWriter, r *http.Request) {
 }
 
 // listDescendants fetches all descendants (recursive) of the given root job IDs.
-func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string) ([]store.Job, error) {
+// When includeDeleted is true, tombstoned (superseded) descendants are included too.
+func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string, includeDeleted bool) ([]store.Job, error) {
 	if len(rootIDs) == 0 {
 		return nil, nil
 	}
@@ -70,12 +72,16 @@ func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string) ([]stor
 	if err != nil {
 		return nil, err
 	}
-	const qry = `
+	delFilter := "AND j.deleted_at IS NULL"
+	if includeDeleted {
+		delFilter = ""
+	}
+	qry := `
 		WITH RECURSIVE desc AS (
 			SELECT j.* FROM jobs j, json_each(?) r
-			WHERE j.parent_job_id = r.value AND j.deleted_at IS NULL
+			WHERE j.parent_job_id = r.value ` + delFilter + `
 			UNION ALL
-			SELECT j.* FROM jobs j JOIN desc d ON j.parent_job_id = d.id WHERE j.deleted_at IS NULL
+			SELECT j.* FROM jobs j JOIN desc d ON j.parent_job_id = d.id WHERE 1=1 ` + delFilter + `
 		)
 		SELECT id, kind, payload, status, attempts, run_after, last_error, result,
 		       created_at, updated_at, rev, deleted_at, parent_job_id
@@ -99,6 +105,108 @@ func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string) ([]stor
 		jobs = append(jobs, j)
 	}
 	return jobs, rows.Err()
+}
+
+// subtreeJobIDs returns the rooted subtree of job ids: the node itself plus all
+// of its non-deleted descendants (recursive over parent_job_id).
+func (h *jobsHandler) subtreeJobIDs(ctx context.Context, rootID string) ([]string, error) {
+	const qry = `
+		WITH RECURSIVE sub AS (
+			SELECT id FROM jobs WHERE id = ?
+			UNION ALL
+			SELECT j.id FROM jobs j JOIN sub s ON j.parent_job_id = s.id WHERE j.deleted_at IS NULL
+		)
+		SELECT id FROM sub`
+	rows, err := h.db.QueryContext(ctx, qry, rootID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// rerun tombstones a job node's whole descendant subtree (jobs + their
+// pipeline_runs + regenerable highlights), preserving user-interacted highlights,
+// then re-enqueues a fresh forced equivalent of the node. All in one transaction.
+func (h *jobsHandler) rerun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
+		return
+	}
+	ctx := r.Context()
+	node, err := h.q.GetJob(ctx, id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	jobIDs, err := h.subtreeJobIDs(ctx, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	// Fresh payload = node payload with force=true (bypass the skip guard).
+	var payload map[string]any
+	if json.Unmarshal([]byte(node.Payload), &payload) != nil || payload == nil {
+		payload = map[string]any{}
+	}
+	payload["force"] = true
+	freshPayload, _ := json.Marshal(payload)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	newJobID := uuid.NewString()
+
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	runIDs, err := store.RunIDsByJobIDs(ctx, tx, jobIDs)
+	if err == nil {
+		err = store.RegenerateCascade(ctx, tx, runIDs, now)
+	}
+	if err == nil {
+		err = store.SoftDeleteJobsByIDs(ctx, tx, jobIDs, now)
+	}
+	if err == nil {
+		_, err = store.New(tx).InsertJob(ctx, store.InsertJobParams{
+			ID:          newJobID,
+			Kind:        node.Kind,
+			Payload:     string(freshPayload),
+			RunAfter:    now,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			ParentJobID: node.ParentJobID,
+		})
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	committed = true
+
+	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": newJobID})
 }
 
 // jobLLMUsage is the per-(provider,model) LLM spend attributed to a job.
@@ -250,12 +358,22 @@ func (h *jobsHandler) list(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
+	inclSuperseded := q.Get("include_superseded") == "true"
+
 	var (
 		roots []store.Job
 		total int64
 		err   error
 	)
 	switch {
+	case inclSuperseded:
+		// History view: include tombstoned (superseded) roots + subtrees.
+		roots, err = h.q.ListRootJobsPageInclDeleted(r.Context(), store.ListRootJobsPageInclDeletedParams{
+			Limit: limit, Offset: offset,
+		})
+		if err == nil {
+			total, err = h.q.CountRootJobsInclDeleted(r.Context())
+		}
 	case status != "" && kind != "":
 		roots, err = h.q.ListRootJobsByStatusAndKindPage(r.Context(), store.ListRootJobsByStatusAndKindPageParams{
 			Status: status, Kind: kind, Limit: limit, Offset: offset,
@@ -297,7 +415,7 @@ func (h *jobsHandler) list(w http.ResponseWriter, r *http.Request) {
 	for i, j := range roots {
 		rootIDs[i] = j.ID
 	}
-	descendants, err := h.listDescendants(r, rootIDs)
+	descendants, err := h.listDescendants(r, rootIDs, inclSuperseded)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return

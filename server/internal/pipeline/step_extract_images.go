@@ -36,36 +36,43 @@ func handleExtractImages(ctx context.Context, q *store.Queries, run store.Pipeli
 	matches := mdImageRe.FindAllStringSubmatch(doc.Markdown, -1)
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	seen := map[string]bool{}
-	count := 0
-	for _, m := range matches {
-		url := m[2]
-		if seen[url] {
-			continue
-		}
-		seen[url] = true
+	// Insert all image highlights atomically so a mid-loop failure rolls back and
+	// a retry replaces rather than appends (no duplicates).
+	if err := InsertTx(ctx, q, func(q *store.Queries) error {
+		seen := map[string]bool{}
+		count := 0
+		for _, m := range matches {
+			url := m[2]
+			if seen[url] {
+				continue
+			}
+			seen[url] = true
 
-		body := m[0] // the full ![alt](url) markdown
+			body := m[0] // the full ![alt](url) markdown
 
-		meta, _ := json.Marshal(map[string]string{"image_url": url})
-		if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
-			ID:            uuid.NewString(),
-			DocumentID:    run.DocumentID,
-			PipelineRunID: run.ID,
-			Kind:          "image",
-			Title:         doc.Title,
-			Body:          body,
-			Metadata:      string(meta),
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}); err != nil {
-			return StepResult{}, fmt.Errorf("extract_images: insert highlight: %w", err)
-		}
+			meta, _ := json.Marshal(map[string]string{"image_url": url})
+			if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
+				ID:            uuid.NewString(),
+				DocumentID:    run.DocumentID,
+				PipelineRunID: run.ID,
+				Kind:          "image",
+				Title:         doc.Title,
+				Body:          body,
+				Metadata:      string(meta),
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			}); err != nil {
+				return fmt.Errorf("extract_images: insert highlight: %w", err)
+			}
 
-		count++
-		if c.MaxImages > 0 && count >= c.MaxImages {
-			break
+			count++
+			if c.MaxImages > 0 && count >= c.MaxImages {
+				break
+			}
 		}
+		return nil
+	}); err != nil {
+		return StepResult{}, err
 	}
 
 	return StepResult{Done: true}, nil

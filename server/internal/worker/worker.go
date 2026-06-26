@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/llm"
+	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -24,13 +25,14 @@ const (
 
 type Worker struct {
 	q            *store.Queries
+	db           *sql.DB
 	cacheDir     string
 	browser      *BrowserPool
 	extractorReg extractor.Registry
 	llmClient    llm.Client
 }
 
-func New(q *store.Queries, cacheDir string, extractorDir string, llmClient llm.Client) *Worker {
+func New(q *store.Queries, db *sql.DB, cacheDir string, extractorDir string, llmClient llm.Client) *Worker {
 	browser, err := NewBrowserPool()
 	if err != nil {
 		logWorker.Fatalf("browser init failed: %v", err)
@@ -41,7 +43,7 @@ func New(q *store.Queries, cacheDir string, extractorDir string, llmClient llm.C
 		reg = make(extractor.Registry)
 	}
 	logWorker.Printf("loaded %d extractor configs from %s", len(reg), extractorDir)
-	return &Worker{q: q, cacheDir: cacheDir, browser: browser, extractorReg: reg, llmClient: llmClient}
+	return &Worker{q: q, db: db, cacheDir: cacheDir, browser: browser, extractorReg: reg, llmClient: llmClient}
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -169,6 +171,10 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 		job.ID[:8], job.Kind, job.Attempts+1, job.Payload)
 	start := time.Now()
 
+	// Make the DB handle available to pipeline steps so they can wrap their
+	// highlight inserts in a transaction (idempotent retries — no duplicates).
+	ctx = pipeline.WithDB(ctx, w.db)
+
 	var (
 		result string
 		err    error
@@ -181,7 +187,7 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	case "poll_feed":
 		result, err = handlePollFeed(ctx, w.q, job, w.browser, w.extractorReg)
 	case "run_pipeline":
-		result, err = handleRunPipeline(ctx, w.q, job, w.llmClient)
+		result, err = handleRunPipeline(ctx, w.q, w.db, job, w.llmClient)
 	case "run_pipeline_step":
 		result, err = handleRunPipelineStep(ctx, w.q, job, w.llmClient)
 	default:

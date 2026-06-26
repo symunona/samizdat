@@ -3,6 +3,8 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -128,6 +130,11 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	now := time.Now().UTC().Format(time.RFC3339)
 	docID := IDFromURL(canonical)
 
+	// content_hash = sha256(markdown): lets re-scrapes of unchanged content skip
+	// needless pipeline regeneration (see worker/pipeline.go skip guard).
+	sum := sha256.Sum256([]byte(md))
+	contentHash := hex.EncodeToString(sum[:])
+
 	doc, err := q.UpsertDocument(ctx, store.UpsertDocumentParams{
 		ID:           docID,
 		CanonicalUrl: canonical,
@@ -139,6 +146,7 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		Author:       author,
 		PublishedAt:  publishedAt,
 		SourceFeedID: p.FeedID,
+		ContentHash:  contentHash,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	})

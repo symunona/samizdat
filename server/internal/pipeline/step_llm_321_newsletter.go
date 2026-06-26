@@ -114,23 +114,28 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 	now := time.Now().UTC().Format(time.RFC3339)
 	meta, _ := json.Marshal(map[string]string{"model": c.Model})
 
-	for _, h := range parsed.Highlights {
-		if h.Kind == "" || h.Title == "" {
-			continue
+	if err := InsertTx(ctx, q, func(q *store.Queries) error {
+		for _, h := range parsed.Highlights {
+			if h.Kind == "" || h.Title == "" {
+				continue
+			}
+			if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
+				ID:            uuid.NewString(),
+				DocumentID:    run.DocumentID,
+				PipelineRunID: run.ID,
+				Kind:          h.Kind,
+				Title:         h.Title,
+				Body:          h.Body,
+				Metadata:      string(meta),
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			}); err != nil {
+				return fmt.Errorf("llm_321_newsletter: insert highlight %q: %w", h.Title, err)
+			}
 		}
-		if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
-			ID:            uuid.NewString(),
-			DocumentID:    run.DocumentID,
-			PipelineRunID: run.ID,
-			Kind:          h.Kind,
-			Title:         h.Title,
-			Body:          h.Body,
-			Metadata:      string(meta),
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}); err != nil {
-			return StepResult{}, fmt.Errorf("llm_321_newsletter: insert highlight %q: %w", h.Title, err)
-		}
+		return nil
+	}); err != nil {
+		return StepResult{}, err
 	}
 
 	return StepResult{Done: true}, nil

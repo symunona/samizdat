@@ -77,8 +77,8 @@ WHERE status = 'running' AND updated_at < ? AND deleted_at IS NULL;
 SELECT * FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1;
 
 -- name: UpsertDocument :one
-INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 ON CONFLICT(canonical_url) DO UPDATE SET
   title          = excluded.title,
   markdown       = excluded.markdown,
@@ -88,6 +88,7 @@ ON CONFLICT(canonical_url) DO UPDATE SET
   author         = excluded.author,
   published_at   = COALESCE(excluded.published_at, documents.published_at),
   source_feed_id = COALESCE(excluded.source_feed_id, documents.source_feed_id),
+  content_hash   = excluded.content_hash,
   updated_at     = excluded.updated_at,
   rev            = documents.rev + 1
 RETURNING *;
@@ -368,7 +369,7 @@ ORDER BY a.created_at DESC;
 
 -- name: ListDocumentsWithAnnotationCount :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.created_at, d.updated_at,
        d.rev, d.deleted_at,
        COALESCE(COUNT(DISTINCT a.id), 0) AS annotation_count,
        COALESCE(COUNT(DISTINCT h.id), 0) AS highlight_count
@@ -405,8 +406,8 @@ UPDATE pipelines SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 --  PipelineRuns
 
 -- name: InsertPipelineRun :one
-INSERT INTO pipeline_runs (id, pipeline_id, document_id, status, step_index, state, created_at, updated_at, rev)
-VALUES (?, ?, ?, 'queued', 0, '{}', ?, ?, 0)
+INSERT INTO pipeline_runs (id, pipeline_id, document_id, job_id, document_content_hash, status, step_index, state, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, 'queued', 0, '{}', ?, ?, 0)
 RETURNING *;
 
 -- name: GetPipelineRun :one
@@ -418,6 +419,11 @@ SELECT * FROM pipeline_runs WHERE document_id = ? AND deleted_at IS NULL ORDER B
 -- name: GetPipelineRunByDocumentAndPipeline :one
 SELECT * FROM pipeline_runs
 WHERE document_id = ? AND pipeline_id = ? AND deleted_at IS NULL
+ORDER BY created_at DESC LIMIT 1;
+
+-- name: GetLatestDoneRunForDoc :one
+SELECT * FROM pipeline_runs
+WHERE pipeline_id = ? AND document_id = ? AND status = 'done' AND deleted_at IS NULL
 ORDER BY created_at DESC LIMIT 1;
 
 -- name: UpdatePipelineRunProgress :exec
@@ -549,6 +555,13 @@ SELECT * FROM jobs WHERE parent_job_id IS NULL AND status = ? AND kind = ? AND d
 -- name: CountRootJobs :one
 SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL AND deleted_at IS NULL;
 
+-- Root paging including superseded (tombstoned) roots, for the jobs history view.
+-- name: ListRootJobsPageInclDeleted :many
+SELECT * FROM jobs WHERE parent_job_id IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?;
+
+-- name: CountRootJobsInclDeleted :one
+SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL;
+
 -- name: CountRootJobsByStatus :one
 SELECT COUNT(*) FROM jobs WHERE parent_job_id IS NULL AND status = ? AND deleted_at IS NULL;
 
@@ -566,7 +579,7 @@ SELECT COUNT(*) FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND d
 
 -- name: ListDocumentsByPipeline :many
 SELECT DISTINCT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 JOIN pipeline_runs pr ON pr.document_id = d.id
@@ -576,7 +589,7 @@ LIMIT 200;
 
 -- name: ListDocumentsByFeed :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 WHERE d.source_feed_id = ? AND d.deleted_at IS NULL

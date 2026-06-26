@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -20,6 +21,8 @@ type runPipelinePayload struct {
 	DocumentID    string `json:"document_id"`
 	PipelineName  string `json:"pipeline_name,omitempty"`
 	DocumentTitle string `json:"document_title,omitempty"`
+	// Force bypasses the content-hash skip guard (set by the rerun endpoint).
+	Force bool `json:"force,omitempty"`
 }
 
 type runPipelineStepPayload struct {
@@ -30,7 +33,7 @@ type runPipelineStepPayload struct {
 	StepIndex     int    `json:"step_index,omitempty"`
 }
 
-func handleRunPipeline(ctx context.Context, q *store.Queries, job store.Job, llmClient llm.Client) (string, error) {
+func handleRunPipeline(ctx context.Context, q *store.Queries, db *sql.DB, job store.Job, llmClient llm.Client) (string, error) {
 	var p runPipelinePayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 		return "", fmt.Errorf("bad payload: %w", err)
@@ -38,13 +41,42 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, job store.Job, llm
 
 	logPipeline.Printf("starting pipeline %s for document %s", p.PipelineID[:8], p.DocumentID[:8])
 
+	doc, err := q.GetDocumentByID(ctx, p.DocumentID)
+	if err != nil {
+		return "", fmt.Errorf("get document: %w", err)
+	}
+
+	// Skip guard: unless forced, reuse an existing DONE run when the document
+	// content is unchanged since that run — avoids needless duplicate regeneration.
+	// An empty hash (legacy doc, never re-scraped) never matches, so it never skips.
+	if !p.Force {
+		existing, gerr := q.GetLatestDoneRunForDoc(ctx, store.GetLatestDoneRunForDocParams{
+			PipelineID: p.PipelineID,
+			DocumentID: p.DocumentID,
+		})
+		if gerr == nil && doc.ContentHash != "" && existing.DocumentContentHash == doc.ContentHash {
+			logPipeline.Printf("pipeline %s skipped for document %s (unchanged, reusing run %s)",
+				p.PipelineID[:8], p.DocumentID[:8], existing.ID[:8])
+			result, _ := json.Marshal(map[string]any{"skipped": true, "reused_run_id": existing.ID})
+			return string(result), nil
+		}
+	}
+
+	// Prior active runs for this (pipeline, doc) — superseded below once the new run
+	// exists, so a content-change re-trigger replaces stale highlights instead of
+	// piling up a second set. Collected before the new run so it isn't included.
+	priorRunIDs, _ := store.ActiveRunIDsForDoc(ctx, db, p.PipelineID, p.DocumentID)
+
 	now := time.Now().UTC().Format(time.RFC3339)
+	jobID := job.ID
 	run, err := q.InsertPipelineRun(ctx, store.InsertPipelineRunParams{
-		ID:         uuid.NewString(),
-		PipelineID: p.PipelineID,
-		DocumentID: p.DocumentID,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:                  uuid.NewString(),
+		PipelineID:          p.PipelineID,
+		DocumentID:          p.DocumentID,
+		JobID:               &jobID,
+		DocumentContentHash: doc.ContentHash,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	})
 	if err != nil {
 		return "", fmt.Errorf("insert pipeline run: %w", err)
@@ -85,6 +117,17 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, job store.Job, llm
 	}
 
 	logPipeline.Printf("run %s step 0 enqueued", run.ID[:8])
+
+	// Supersede prior runs and tombstone their regenerable highlights (keeping any
+	// the user interacted with). No-op on a forced rerun — the rerun endpoint already
+	// tombstoned those runs, so they are no longer active.
+	if len(priorRunIDs) > 0 {
+		if err := store.RegenerateCascade(ctx, db, priorRunIDs, now); err != nil {
+			logPipeline.Errorf("supersede prior runs for document %s: %v", p.DocumentID[:8], err)
+		} else {
+			logPipeline.Printf("superseded %d prior run(s) for document %s", len(priorRunIDs), p.DocumentID[:8])
+		}
+	}
 
 	result, _ := json.Marshal(map[string]string{"pipeline_run_id": run.ID})
 	return string(result), nil
