@@ -50,6 +50,8 @@ func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if r.URL.Query().Get("archived") == "1" {
 		rows, err = h.q.ListArchivedHighlights(r.Context(), limit)
+	} else if r.URL.Query().Get("pinned") == "1" {
+		rows, err = h.q.ListPinnedHighlights(r.Context(), limit)
 	} else {
 		rows, err = h.q.ListHighlights(r.Context(), limit)
 	}

@@ -738,9 +738,10 @@ export type HighlightWithDoc = Highlight & {
   tags?: Tag[]
 }
 
-export async function fetchHighlights(serverUrl: string, token: string, limit = 100, archived = false): Promise<HighlightWithDoc[]> {
+export async function fetchHighlights(serverUrl: string, token: string, limit = 100, archived = false, pinned = false): Promise<HighlightWithDoc[]> {
   const params = new URLSearchParams({ limit: String(limit) })
   if (archived) params.set('archived', '1')
+  if (pinned) params.set('pinned', '1')
   const res = await fetch(`${base(serverUrl)}/api/v1/highlights?${params}`, {
     headers: { Authorization: `Bearer ${token}` },
   })

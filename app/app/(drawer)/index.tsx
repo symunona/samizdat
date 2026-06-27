@@ -165,6 +165,15 @@ export default function FeedScreen() {
     }
   }, [activeUrl, token, annotateItem])
 
+  // Stable refs: passed straight into memo(MarkdownBody). Inline arrows here would
+  // get a new identity on every scroll-driven re-render, defeating the memo and
+  // remounting RN <Image> (visible flicker). Neither closes over `item`.
+  const handleDocumentPress = useCallback(
+    (docId: string) => router.push(`/document/${encodeURIComponent(docId)}?from=/`),
+    [router],
+  )
+  const handleLinkAction = useCallback((url: string) => setLinkUrl(url), [])
+
   const renderItem = useCallback(({ item }: { item: HighlightWithDoc }) => {
     const isArchived = archivedIds.has(item.id)
     if (deletingIds.has(item.id)) {
@@ -205,8 +214,8 @@ export default function FeedScreen() {
         onDelete={() => initiateDelete(item)}
         onAnnotate={() => setAnnotateItem(item)}
         onTags={() => setTagModalId(item.id)}
-        onDocumentPress={(docId) => router.push(`/document/${encodeURIComponent(docId)}?from=/`)}
-        onLinkAction={(url) => setLinkUrl(url)}
+        onDocumentPress={handleDocumentPress}
+        onLinkAction={handleLinkAction}
       />
     )
 
@@ -245,7 +254,7 @@ export default function FeedScreen() {
         {unarchiveBtn}
       </View>
     )
-  }, [actionLoading, archivedIds, deletingIds, handlePin, handleUnarchive, initiateDelete, undoDelete, router, s])
+  }, [actionLoading, archivedIds, deletingIds, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
 
   if (loading && highlights.length === 0) {
     return (

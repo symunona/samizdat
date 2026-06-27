@@ -22,6 +22,8 @@ const BASE_URL = `http://localhost:${TEST_PORT}`
 // Pages to visit: [path, description]
 const PAGES = [
   ['/', 'root / connect'],
+  ['/starred', 'starred'],
+  ['/archived', 'archived'],
   ['/documents', 'documents'],
   ['/tags', 'tags'],
   ['/jobs', 'jobs'],

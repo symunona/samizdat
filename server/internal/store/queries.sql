@@ -446,6 +446,9 @@ SELECT * FROM highlights WHERE deleted_at IS NULL AND archived_at IS NULL ORDER 
 -- name: ListArchivedHighlights :many
 SELECT * FROM highlights WHERE deleted_at IS NULL AND archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT ?;
 
+-- name: ListPinnedHighlights :many
+SELECT * FROM highlights WHERE deleted_at IS NULL AND pinned = 1 ORDER BY created_at DESC LIMIT ?;
+
 -- name: ListHighlightsByDocument :many
 SELECT * FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at ASC;
 
