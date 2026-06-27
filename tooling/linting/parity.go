@@ -33,7 +33,8 @@ var highlightCardPair = parityPair{
 	invariant: `Both files render the SAME Highlight card — same action set (pin, tags, annotate, delete), same icons, same layout — but in two runtimes that CANNOT share a rendered component:
 - app/src/HighlightCard.tsx       React Native (feed list; native + RN-Web)
 - app/src/webview/document-viewer.ts   raw DOM inside a WebView (document body; React does not run here)
-A change to the action set, an icon, a label, or the card layout in one MUST be mirrored in the other. Icons differ in FORM only (Ionicons component on the RN side vs inline SVG of the same glyph in the WebView) — the glyph, size and meaning must match.`,
+A change to the action set, an icon, a label, or the card layout in one MUST be mirrored in the other. Icons differ in FORM only (Ionicons component on the RN side vs inline SVG of the same glyph in the WebView) — the glyph, size and meaning must match.
+ICON-BUTTON STYLE: the footer action buttons (delete, tags, annotate) must look the same in both renderers — FLAT and BORDERLESS (transparent background, no border/box outline), with a fill-background hover. The RN side uses the IconButton component (src/IconButton.tsx); the WebView uses the .hl-icon-btn CSS class. Their geometry (padding, radius, glyph size, hover scale) is shared via src/iconButtonSpec.ts and must come from there in BOTH files — flag any re-introduction of a border/box on one side, a divergent hover treatment, or a hardcoded geometry value that bypasses iconButtonSpec.`,
 }
 
 // RunParity verifies that paired-renderer files stay in sync vs main. No-op on

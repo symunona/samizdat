@@ -1,7 +1,10 @@
 // document-viewer.ts — compiled to IIFE by `just webview-build`
 // Runs inside the WebView/iframe. Communicates with RN via postMessage.
+// Only dependency-free imports allowed (esbuild --bundle inlines them); never
+// pull in react-native-unistyles here — keep the WebView bundle lean.
+import { iconButtonSpec as IB } from '../iconButtonSpec'
 
-// ── Types (no imports — this is a browser bundle) ────────────────────────────
+// ── Types ────────────────────────────────────────────────────────────────────
 
 type HlData = {
   id: string
@@ -111,10 +114,12 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 .hl-body p:last-child{margin-bottom:0}
 .hl-body a{color:var(--ac)}
 .hl-footer{display:flex;align-items:center;gap:6px;padding:6px 10px;border-top:1px solid var(--bo);background:var(--su)}
-.hl-btn{background:none;border:1px solid var(--bo);border-radius:5px;cursor:pointer;font-size:12px;padding:4px 10px;color:var(--mu);font-weight:600;line-height:1}
-.hl-btn:hover{border-color:var(--ac);color:var(--ac)}
-.hl-btn.hl-icon{width:28px;height:28px;padding:0;display:flex;align-items:center;justify-content:center}
-.hl-delete-btn{border:none;background:none;width:28px;height:28px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:15px;padding:0;color:var(--mu);cursor:pointer}
+/* Flat icon buttons — mirror RN IconButton (src/IconButton.tsx). Borderless,
+   transparent; hover fills the background + scales. Geometry from the shared
+   iconButtonSpec so both renderers stay in lockstep — see src/iconButtonSpec.ts. */
+.hl-icon-btn{background:transparent;border:none;cursor:pointer;color:var(--mu);line-height:0;flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:${IB.padY}px ${IB.padX}px;border-radius:${IB.radius}px;transition:background 0.12s,transform 0.12s}
+.hl-icon-btn:hover{background:var(--bg);color:var(--fg);transform:scale(${IB.hoverScale})}
+.hl-icon-btn svg{width:${IB.size}px;height:${IB.size}px;display:block}
 .hl-delete-btn:hover{color:#b91c1c}
 .hl-spacer{flex:1}
 `
@@ -174,7 +179,7 @@ function renderHighlightCard(hl: HlData): HTMLElement {
   footer.className = 'hl-footer'
 
   const deleteBtn = document.createElement('button')
-  deleteBtn.className = 'hl-delete-btn'
+  deleteBtn.className = 'hl-icon-btn hl-delete-btn'
   deleteBtn.dataset.id = hl.id
   deleteBtn.dataset.action = 'delete'
   // Ionicons trash-outline — mirrors IconButton "trash-outline" in HighlightCard.tsx (parity).
@@ -185,7 +190,7 @@ function renderHighlightCard(hl: HlData): HTMLElement {
   spacer.className = 'hl-spacer'
 
   const tagsBtn = document.createElement('button')
-  tagsBtn.className = 'hl-btn hl-icon'
+  tagsBtn.className = 'hl-icon-btn'
   tagsBtn.dataset.id = hl.id
   tagsBtn.dataset.action = 'tags'
   // Ionicons pricetag-outline — mirrors IconButton "pricetag-outline" in HighlightCard.tsx (parity).
@@ -193,7 +198,7 @@ function renderHighlightCard(hl: HlData): HTMLElement {
   tagsBtn.title = 'Tags'
 
   const annotateBtn = document.createElement('button')
-  annotateBtn.className = 'hl-btn hl-icon'
+  annotateBtn.className = 'hl-icon-btn'
   annotateBtn.dataset.id = hl.id
   annotateBtn.dataset.action = 'annotate'
   annotateBtn.title = 'Add note'

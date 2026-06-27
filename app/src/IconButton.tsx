@@ -16,12 +16,15 @@ interface Props {
 
 // Styled icon button with desktop hover (non-touch): scales up + shifts color.
 // onHoverIn/onHoverOut only fire for a fine pointer, so touch is unaffected.
-export default function IconButton({ name, onPress, hitSlop = 8, size = 16, color, hoverColor }: Props) {
+// Geometry comes from the shared iconButtonSpec (theme.iconButton) so the
+// WebView highlight card can mirror it — see src/iconButtonSpec.ts.
+export default function IconButton({ name, onPress, hitSlop = 8, size, color, hoverColor }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const [hover, setHover] = useState(false)
   const base = color ?? theme.colors.muted
   const active = hoverColor ?? theme.colors.text
+  const glyph = size ?? theme.iconButton.size
   return (
     <Pressable
       onPress={onPress}
@@ -30,7 +33,7 @@ export default function IconButton({ name, onPress, hitSlop = 8, size = 16, colo
       onHoverOut={() => setHover(false)}
       style={[s.btn, hover && s.btnHover]}
     >
-      <Ionicons name={name} size={size} color={hover ? active : base} />
+      <Ionicons name={name} size={glyph} color={hover ? active : base} />
     </Pressable>
   )
 }
@@ -39,14 +42,14 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
     btn: {
-      paddingHorizontal: 8,
-      paddingVertical: 5,
-      borderRadius: 6,
+      paddingHorizontal: t.iconButton.padX,
+      paddingVertical: t.iconButton.padY,
+      borderRadius: t.iconButton.radius,
       backgroundColor: 'transparent',
     },
     btnHover: {
       backgroundColor: t.colors.background,
-      transform: [{ scale: 1.18 }],
+      transform: [{ scale: t.iconButton.hoverScale }],
     },
   })
 }

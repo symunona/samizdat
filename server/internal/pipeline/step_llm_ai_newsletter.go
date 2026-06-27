@@ -55,8 +55,9 @@ const aiNewsletterSystemPrompt = `You analyze AI/ML newsletters. Return ONLY val
 Schema:
 {
   "summary": string[],
-  "highlights": [{"kind": string, "title": string, "body": string}]
+  "highlights": [{"kind": string, "title": string, "body": string[]}]
 }
+body is an ARRAY of strings — one bullet per element. Never a single string. Each element is one WWWWH bullet.
 
 SUMMARY RULES — ultra caveman:
 - Max 7 bullets. Each: [thing] [action] [why it matters].
@@ -66,7 +67,7 @@ SUMMARY RULES — ultra caveman:
 - Bold the key topic/name of each bullet: **keyword** at start or where it naturally lands. One bold per bullet.
 
 CONDITIONAL HIGHLIGHTS — include only if genuinely present in document:
-Body of each highlight: bullet list, one bullet per WWWWH element where it makes sense (*Who* made it · *What* it is/does · *When/Where* available · *Why* it matters · *How* to use/get it). Caveman style. Italicize the WWWWH label (*Who*, *What*, etc); bold the sentence's keyword (**key name/term**) in each bullet. No prose paragraphs — bullets only.
+body is a string ARRAY, one element per WWWWH bullet where it makes sense (*Who* made it · *What* it is/does · *When/Where* available · *Why* it matters · *How* to use/get it). Caveman style. Each array element = one bullet, do NOT prefix with "- " and do NOT join into one string. Italicize the WWWWH label (*Who*, *What*, etc); bold the sentence's keyword (**key name/term**) in each bullet. No prose paragraphs — bullets only.
 
 1. kind="frontier_model" — new frontier/SOTA proprietary model announced (GPT-X, Claude X, Gemini X, Grok X, etc). Title: model name. Body: WWWWH + benchmark delta. Skip if just mentioned in passing.
 2. kind="tool" — new tool/product/library/service worth knowing. Title: tool name. Body: WWWWH. One highlight per distinct tool.

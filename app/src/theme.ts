@@ -1,4 +1,5 @@
 import { StyleSheet } from 'react-native-unistyles'
+import { iconButtonSpec } from './iconButtonSpec'
 
 const dark = {
   colors: {
@@ -24,6 +25,7 @@ const dark = {
     md: 10,
     lg: 16,
   },
+  iconButton: iconButtonSpec,
 } as const
 
 const light = {
@@ -50,6 +52,7 @@ const light = {
     md: 10,
     lg: 16,
   },
+  iconButton: iconButtonSpec,
 } as const
 
 declare module 'react-native-unistyles' {
