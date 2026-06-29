@@ -110,9 +110,11 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 	base := filepath.Join(mediaDir, audioAssetID)
 
 	// One yt-dlp session: audio + metadata + subtitles. Minimizes bot exposure.
+	// Re-encode to 64k AAC: transparent for speech, ~half the disk/sync size on
+	// the 4GB box vs bestaudio (see docs/youtube-ingest.md).
 	args := []string{
 		"-f", "bestaudio",
-		"-x", "--audio-format", "m4a",
+		"-x", "--audio-format", "m4a", "--audio-quality", "64K",
 		"--write-info-json",
 		"--write-subs", "--write-auto-subs",
 		"--sub-langs", "en.*,en,en-orig",
