@@ -95,6 +95,9 @@ CREATE TABLE IF NOT EXISTS documents (
     published_at    TEXT,
     source_feed_id  TEXT,
     content_hash    TEXT NOT NULL DEFAULT '',
+    media_type      TEXT NOT NULL DEFAULT 'article',
+    media_metadata  TEXT NOT NULL DEFAULT '',
+    transcript      TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     rev             INTEGER NOT NULL DEFAULT 0,
@@ -181,6 +184,7 @@ CREATE TABLE IF NOT EXISTS annotations (
     suffix       TEXT    NOT NULL DEFAULT '',
     pos_start    INTEGER NOT NULL DEFAULT 0,
     pos_end      INTEGER NOT NULL DEFAULT 0,
+    media_ts_ms  INTEGER NOT NULL DEFAULT 0,
     color        TEXT    NOT NULL DEFAULT 'yellow',
     note         TEXT    NOT NULL DEFAULT '',
     created_at   TEXT    NOT NULL,
@@ -362,6 +366,11 @@ func migrate(db *sql.DB) error {
 			LIMIT 1
 		) WHERE job_id IS NULL`,
 		`CREATE INDEX IF NOT EXISTS pipeline_runs_job_id ON pipeline_runs(job_id)`,
+		// YouTube/podcast video documents: media kind, metadata, time-anchored transcript
+		`ALTER TABLE documents ADD COLUMN media_type TEXT NOT NULL DEFAULT 'article'`,
+		`ALTER TABLE documents ADD COLUMN media_metadata TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE documents ADD COLUMN transcript TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE annotations ADD COLUMN media_ts_ms INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {

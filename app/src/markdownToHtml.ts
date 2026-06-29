@@ -25,8 +25,28 @@ export function buildDocumentHtml(
   docsByUrl: Record<string, string>,
 ): string {
   const bodyHtml = markDocumentLinks(mdToHtml(markdown), docsByUrl)
-  const escapedTitle = escapeHtmlAttr(title || '')
+  return wrapViewerHtml(title, bodyHtml)
+}
 
+// buildTranscriptHtml renders a video Document's time-anchored transcript: each
+// segment is a `.seg` paragraph carrying its `data-start-ms`, so the WebView can
+// highlight/seek by playback time while reusing the same annotation machinery.
+export function buildTranscriptHtml(
+  segments: { start_ms: number; text: string }[],
+  title: string,
+): string {
+  const body = segments
+    .map(s => `<p class="seg" data-start-ms="${s.start_ms}">${escapeHtmlText(s.text)}</p>`)
+    .join('\n')
+  return wrapViewerHtml(title, body)
+}
+
+function escapeHtmlText(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function wrapViewerHtml(title: string, bodyHtml: string): string {
+  const escapedTitle = escapeHtmlAttr(title || '')
   return `<!DOCTYPE html>
 <html lang="en">
 <head>

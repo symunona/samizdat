@@ -5,7 +5,8 @@
 // Requires: server binary at server/bin/samizdat, web build at app/dist/
 
 import puppeteer from 'puppeteer-core'
-import { spawn } from 'node:child_process'
+import { spawn, execSync } from 'node:child_process'
+import fs from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -19,6 +20,10 @@ const TEST_CONFIG = join(ROOT, 'config/config-test.toml')
 const TEST_PORT = 8766
 const BASE_URL = `http://localhost:${TEST_PORT}`
 
+// A fixed video Document id seeded into the test DB so the video player screen
+// (transcript + audio + seeker) is exercised by the smoke test.
+const VIDEO_DOC_ID = 'eeeeeeee-0000-4000-8000-000000000001'
+
 // Pages to visit: [path, description]
 const PAGES = [
   ['/', 'root / connect'],
@@ -29,6 +34,7 @@ const PAGES = [
   ['/jobs', 'jobs'],
   ['/subscriptions', 'subscriptions'],
   ['/pipelines', 'pipelines'],
+  [`/document/${VIDEO_DOC_ID}`, 'video document'],
 ]
 
 let serverProc = null
@@ -112,6 +118,43 @@ async function pairDevice() {
   return { token, deviceId }
 }
 
+// seedVideoDoc inserts a video Document (transcript + audio asset) into the test
+// DB so the dedicated player screen is covered. There's no API to create video
+// Documents directly (ingest needs yt-dlp + a residential proxy), so we seed the
+// rows + a placeholder audio file the same way the engine would.
+function seedVideoDoc(deviceId) {
+  const aid = 'eeeeeeee-0000-4000-8000-0000000000a1'
+  const rsid = 'eeeeeeee-0000-4000-8000-0000000000b1'
+  const mediaDir = '/tmp/samizdat-test/cache/media'
+  fs.mkdirSync(mediaDir, { recursive: true })
+  // Placeholder file: makes GET /documents/:id/audio return 200 (no 4xx); the
+  // headless run never plays it.
+  fs.writeFileSync(join(mediaDir, `${aid}.m4a`), Buffer.alloc(2048))
+  const now = new Date().toISOString()
+  const segs = [
+    { start_ms: 0, end_ms: 3000, text: 'First line of the seeded transcript.' },
+    { start_ms: 3000, end_ms: 6000, text: 'Second line follows along with playback.' },
+    { start_ms: 6000, end_ms: 9000, text: 'Third line for the smoke test.' },
+  ]
+  const q = s => s.replace(/'/g, "''")
+  const transcript = q(JSON.stringify(segs))
+  const markdown = q(segs.map(s => s.text).join('\n'))
+  const meta = q(JSON.stringify({ provider: 'youtube', external_id: 'PqtggjVAi8M', duration_ms: 9000, transcript_status: 'subs' }))
+  const cu = 'https://www.youtube.com/watch?v=SMOKETEST01'
+  const sql = `
+INSERT OR REPLACE INTO documents (id,canonical_url,title,markdown,fetched_at,excerpt,hero_image_url,author,published_at,source_feed_id,content_hash,media_type,media_metadata,transcript,created_at,updated_at,rev,deleted_at)
+VALUES ('${VIDEO_DOC_ID}','${cu}','Smoke Video','${markdown}','${now}','','','Smoke',NULL,NULL,'smokehash','video','${meta}','${transcript}','${now}','${now}',1,NULL);
+INSERT OR REPLACE INTO media_assets (id,document_id,original_url,local_path,kind,width,height,created_at,updated_at,rev,deleted_at)
+VALUES ('${aid}','${VIDEO_DOC_ID}','${cu}#audio','media/${aid}.m4a','audio',NULL,NULL,'${now}','${now}',0,NULL);
+INSERT OR REPLACE INTO read_states (id,device_id,document_id,scroll_y,created_at,updated_at,rev,deleted_at)
+VALUES ('${rsid}','${deviceId}','${VIDEO_DOC_ID}',0,'${now}','${now}',0,NULL);
+`
+  const sqlFile = '/tmp/samizdat-test/seed.sql'
+  fs.writeFileSync(sqlFile, sql)
+  execSync(`sqlite3 /tmp/samizdat-test/app.db < ${sqlFile}`)
+  console.log('  seeded video document', VIDEO_DOC_ID)
+}
+
 async function runSmoke() {
   // Kill any stale test server on this port, then clean test DB
   const { execSync } = await import('node:child_process')
@@ -123,6 +166,7 @@ async function runSmoke() {
 
   await startServer()
   const { token, deviceId } = await pairDevice()
+  seedVideoDoc(deviceId)
 
   console.log('  launching browser...')
   browser = await puppeteer.launch({

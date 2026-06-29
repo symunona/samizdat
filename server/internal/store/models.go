@@ -13,6 +13,7 @@ type Annotation struct {
 	Suffix      string  `json:"suffix"`
 	PosStart    int64   `json:"pos_start"`
 	PosEnd      int64   `json:"pos_end"`
+	MediaTsMs   int64   `json:"media_ts_ms"`
 	Color       string  `json:"color"`
 	Note        string  `json:"note"`
 	CreatedAt   string  `json:"created_at"`
@@ -43,21 +44,24 @@ type Device struct {
 }
 
 type Document struct {
-	ID           string  `json:"id"`
-	CanonicalUrl string  `json:"canonical_url"`
-	Title        string  `json:"title"`
-	Markdown     string  `json:"markdown"`
-	FetchedAt    string  `json:"fetched_at"`
-	Excerpt      string  `json:"excerpt"`
-	HeroImageUrl string  `json:"hero_image_url"`
-	Author       string  `json:"author"`
-	PublishedAt  *string `json:"published_at"`
-	SourceFeedID *string `json:"source_feed_id"`
-	ContentHash  string  `json:"content_hash"`
-	CreatedAt    string  `json:"created_at"`
-	UpdatedAt    string  `json:"updated_at"`
-	Rev          int64   `json:"rev"`
-	DeletedAt    *string `json:"deleted_at"`
+	ID            string  `json:"id"`
+	CanonicalUrl  string  `json:"canonical_url"`
+	Title         string  `json:"title"`
+	Markdown      string  `json:"markdown"`
+	FetchedAt     string  `json:"fetched_at"`
+	Excerpt       string  `json:"excerpt"`
+	HeroImageUrl  string  `json:"hero_image_url"`
+	Author        string  `json:"author"`
+	PublishedAt   *string `json:"published_at"`
+	SourceFeedID  *string `json:"source_feed_id"`
+	ContentHash   string  `json:"content_hash"`
+	MediaType     string  `json:"media_type"`
+	MediaMetadata string  `json:"media_metadata"`
+	Transcript    string  `json:"transcript"`
+	CreatedAt     string  `json:"created_at"`
+	UpdatedAt     string  `json:"updated_at"`
+	Rev           int64   `json:"rev"`
+	DeletedAt     *string `json:"deleted_at"`
 }
 
 type DocumentTag struct {

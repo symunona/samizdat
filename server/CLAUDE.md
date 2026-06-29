@@ -38,7 +38,14 @@ server/
       pair.go               # POST /api/v1/pair            (public, code→token)
       me.go                 # GET  /api/v1/me              (bearer-authed)
       admin_pair.go         # POST /api/v1/admin/pair/new  (passphrase + loopback only)
+      media.go              # GET  /api/v1/media/{id}      (asset serving)
+                            # GET  /api/v1/documents/{id}/audio (audio streaming)
+      ytdlp_status.go       # GET  /api/v1/ytdlp/status    (bearer-authed, proxy health)
       middleware.go         # bearerAuth, localhostOnly guards
+    transcript/
+      vtt.go                # WebVTT parser → []Segment{StartMs,EndMs,Text}
+    worker/
+      youtube.go            # yt-dlp ingest: audio + transcript → video Document
 ```
 
 > `sam qr` (CLI) calls `POST /api/v1/admin/pair/new` authenticated by `Authorization: Passphrase <argon2-hash>`, loopback only. Server returns `{code, qr_data_uri}`. CLI prints the QR. Keeps DB ownership in the server; CLI stays a thin client.
@@ -66,6 +73,23 @@ CREATE TABLE IF NOT EXISTS server_settings (
   key         TEXT PRIMARY KEY,
   value       TEXT NOT NULL
   -- keys: "passphrase_hash" (Argon2id $argon2id$... string)
+  --       "ytdlp_proxy_last_ok_at" (RFC3339, persisted across restarts)
+);
+
+CREATE TABLE IF NOT EXISTS documents (
+  ...
+  content_hash    TEXT NOT NULL DEFAULT '',
+  media_type      TEXT NOT NULL DEFAULT 'article',  -- 'article' | 'video'
+  media_metadata  TEXT NOT NULL DEFAULT '',         -- JSON: {provider, external_id, duration_ms, transcript_status}
+  transcript      TEXT NOT NULL DEFAULT '',         -- JSON: [{start_ms,end_ms,text}] (video only)
+  ...
+);
+
+CREATE TABLE IF NOT EXISTS annotations (
+  ...
+  pos_end      INTEGER NOT NULL DEFAULT 0,
+  media_ts_ms  INTEGER NOT NULL DEFAULT 0,  -- playback timestamp for video annotations (0 = none)
+  ...
 );
 ```
 
@@ -110,11 +134,51 @@ Banned: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`
 ## Highlight vs Annotation (critical distinction)
 - **`Highlight`** — LLM-extracted unit from a Document. Machine data. Server→phone **one-way**. Created by `Pipeline`.
 - **`Annotation`** — user-created text selection on a `Document` or `Highlight`. Has a text anchor (W3C TextQuoteSelector JSON) + optional note body (markdown). User-authored → **two-way sync** (LWW push). Never machine-generated.
+- **Video annotations** additionally carry `media_ts_ms` (playback timestamp in milliseconds; 0 = not a video annotation). This is the only permitted deviation from the text-anchor model.
+
+## Document media types
+- **`media_type = 'article'`** — default. HTML scrape via Playwright + Trafilatura.
+- **`media_type = 'video'`** — YouTube/podcast ingest via yt-dlp. Fields:
+  - `media_metadata`: JSON `{provider, external_id, duration_ms, transcript_status}` where `transcript_status` ∈ `"subs" | "auto" | "none"`.
+  - `transcript`: JSON `[{start_ms, end_ms, text}]` segments (empty array `[]` when none).
+  - `markdown`: flattened transcript text (one segment per line); falls back to video description when no transcript.
+
+## YouTube ingest pipeline
+- Triggered by `scrape_url` jobs for any YouTube URL (all forms: watch, youtu.be, shorts, embed, music, m.).
+- **Canonical form**: always `https://www.youtube.com/watch?v=<id>` — canonicalization happens before DB dedup.
+- **yt-dlp invocation**: one session for audio + metadata + subtitles. Flags: `-f bestaudio -x --audio-format m4a --write-info-json --write-subs --write-auto-subs --sub-langs en.*,en,en-orig --sub-format vtt --convert-subs vtt`.
+- **Transcript preference**: manual subs → auto-captions → none.
+- **Audio asset**: stored as `media_assets` row with `kind="audio"`, accessible at `GET /api/v1/documents/{id}/audio` (range-request capable via `http.ServeFile`).
+- **Intermediate files** (info.json, .vtt) are deleted after processing; only the .m4a is kept.
+- **Post-ingest**: calls `finishDocument()` (shared with article scraper) — enqueues `fetch_assets` and triggers matching pipelines.
+
+## yt-dlp config (`[ytdlp]` in TOML)
+```toml
+[ytdlp]
+path    = "yt-dlp"               # binary; default = PATH lookup
+proxy   = "socks5h://100.x.y.z:1080"  # residential proxy (required for VPS; Tailscale home node recommended)
+cookies = "/path/to/cookies.txt" # optional Netscape cookies.txt (fallback/auth)
+```
+The VPS datacenter IP is bot-blocked by YouTube. A residential proxy (e.g. home node over Tailscale) is required for the happy path. See `docs/youtube-ingest.md`.
+
+## yt-dlp proxy status endpoint
+`GET /api/v1/ytdlp/status` (bearer-authed):
+- Background goroutine probes the SOCKS5 proxy every 60 seconds by fetching `https://api.ipify.org` through it.
+- GET also triggers an immediate fresh probe (8s timeout) — page refresh = recheck.
+- `last_ok_at` (last successful probe time) is persisted in `server_settings` under key `ytdlp_proxy_last_ok_at` so it survives restarts.
+- Response: `{configured, proxy, ok, exit_ip, error, checked_at, last_ok_at}`.
+- If no proxy is configured, the handler is registered but always returns `{configured: false}` and no background goroutine runs.
+
+## Media serving
+- `GET /api/v1/media/{id}` — serves any media asset by asset ID; content-type inferred by extension.
+- `GET /api/v1/documents/{id}/audio` — looks up the `audio`-kind asset for a document; streams it via `http.ServeFile` (supports HTTP range requests for seek).
+- Content-type is inferred by file extension: `.m4a/.mp4/.aac` → `audio/mp4`, `.mp3` → `audio/mpeg`, `.webm/.opus` → `audio/webm`, `.png` → `image/png`, default → `image/jpeg`.
 
 ## Job enqueueing rules
 - **Always set `ParentJobID`** when enqueueing a job from inside a pipeline step or worker handler. Use `ParentJobIDFromCtx(ctx)` in pipeline steps; use `&job.ID` or `job.ParentJobID` in worker handlers. Never insert a job with a nil parent when a driving job exists — this is required for job-tree visibility in the UI.
 - **Pipeline filter exclusions**: use `exclude_source_feed_ids` in a pipeline's filter JSON to prevent it from running on specific feeds (e.g., a global summarizer pipeline should exclude feed IDs that have their own dedicated pipeline). Never rely on pipeline ordering or naming conventions to avoid double-processing.
 - **`skip_new_scrapes` config**: both `extract_links` and `extract_list_items` steps support `{"skip_new_scrapes": true}` — set this on pipelines that should only enrich already-scraped links, never trigger new scrapes.
+- **`finishDocument()`** is the shared post-upsert hook for any scraped Document (article or video): enqueues `fetch_assets` and triggers matching pipelines. Failures inside `finishDocument` are logged but not propagated — the Document is already persisted, so re-raising would cause needless re-scrape/re-download on retry.
 
 ## LLM routing
 - Two adapters only: Anthropic Messages API + OpenAI-compatible
@@ -133,5 +197,13 @@ Banned: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`
 - `sqlc` — SQL codegen
 - `github.com/google/uuid` — UUID generation
 - `golang.org/x/crypto` — Argon2id
+- `golang.org/x/net` — SOCKS5 proxy dialer (for yt-dlp proxy health checks)
+- `golang.org/x/image` — image processing
 - `CertMagic` — TLS (post-M1)
+- `github.com/markusmobius/go-trafilatura` — HTML content extraction (direct dep, not indirect)
+- `github.com/playwright-community/playwright-go` — headless browser scraping (direct dep, not indirect)
+- `github.com/JohannesKaufmann/html-to-markdown/v2` — HTML→Markdown conversion (direct dep, not indirect)
+- `github.com/yuin/goldmark` — Markdown processing (direct dep, not indirect)
+- `gopkg.in/yaml.v3` — YAML parsing (direct dep, not indirect)
 - LLM: plain HTTP client to Anthropic + OpenAI-compat endpoints (post-M1)
+- **yt-dlp**: external binary (not a Go library) — invoked via `os/exec`. Must be installed separately on the host.

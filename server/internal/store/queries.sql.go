@@ -374,7 +374,7 @@ func (q *Queries) DeleteSubscriptionsByFeed(ctx context.Context, arg DeleteSubsc
 }
 
 const getAnnotation = `-- name: GetAnnotation :one
-SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE id = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetAnnotation(ctx context.Context, id string) (Annotation, error) {
@@ -389,6 +389,7 @@ func (q *Queries) GetAnnotation(ctx context.Context, id string) (Annotation, err
 		&i.Suffix,
 		&i.PosStart,
 		&i.PosEnd,
+		&i.MediaTsMs,
 		&i.Color,
 		&i.Note,
 		&i.CreatedAt,
@@ -452,7 +453,7 @@ func (q *Queries) GetDeviceByTokenHash(ctx context.Context, tokenHash string) (D
 }
 
 const getDocumentByCanonicalURL = `-- name: GetDocumentByCanonicalURL :one
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, created_at, updated_at, rev, deleted_at FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl string) (Document, error) {
@@ -470,6 +471,9 @@ func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl st
 		&i.PublishedAt,
 		&i.SourceFeedID,
 		&i.ContentHash,
+		&i.MediaType,
+		&i.MediaMetadata,
+		&i.Transcript,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -479,7 +483,7 @@ func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl st
 }
 
 const getDocumentByID = `-- name: GetDocumentByID :one
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, created_at, updated_at, rev, deleted_at FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetDocumentByID(ctx context.Context, id string) (Document, error) {
@@ -497,6 +501,9 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id string) (Document, err
 		&i.PublishedAt,
 		&i.SourceFeedID,
 		&i.ContentHash,
+		&i.MediaType,
+		&i.MediaMetadata,
+		&i.Transcript,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -677,6 +684,34 @@ func (q *Queries) GetLatestDoneRunForDoc(ctx context.Context, arg GetLatestDoneR
 		&i.StepIndex,
 		&i.State,
 		&i.SupersededAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getMediaAssetByDocumentAndKind = `-- name: GetMediaAssetByDocumentAndKind :one
+SELECT id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev, deleted_at FROM media_assets WHERE document_id = ? AND kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1
+`
+
+type GetMediaAssetByDocumentAndKindParams struct {
+	DocumentID string `json:"document_id"`
+	Kind       string `json:"kind"`
+}
+
+func (q *Queries) GetMediaAssetByDocumentAndKind(ctx context.Context, arg GetMediaAssetByDocumentAndKindParams) (MediaAsset, error) {
+	row := q.db.QueryRowContext(ctx, getMediaAssetByDocumentAndKind, arg.DocumentID, arg.Kind)
+	var i MediaAsset
+	err := row.Scan(
+		&i.ID,
+		&i.DocumentID,
+		&i.OriginalUrl,
+		&i.LocalPath,
+		&i.Kind,
+		&i.Width,
+		&i.Height,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -940,9 +975,9 @@ func (q *Queries) GetTagByName(ctx context.Context, name string) (Tag, error) {
 }
 
 const insertAnnotation = `-- name: InsertAnnotation :one
-INSERT INTO annotations (id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-RETURNING id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev, deleted_at
+INSERT INTO annotations (id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev, deleted_at
 `
 
 type InsertAnnotationParams struct {
@@ -954,6 +989,7 @@ type InsertAnnotationParams struct {
 	Suffix      string  `json:"suffix"`
 	PosStart    int64   `json:"pos_start"`
 	PosEnd      int64   `json:"pos_end"`
+	MediaTsMs   int64   `json:"media_ts_ms"`
 	Color       string  `json:"color"`
 	Note        string  `json:"note"`
 	CreatedAt   string  `json:"created_at"`
@@ -970,6 +1006,7 @@ func (q *Queries) InsertAnnotation(ctx context.Context, arg InsertAnnotationPara
 		arg.Suffix,
 		arg.PosStart,
 		arg.PosEnd,
+		arg.MediaTsMs,
 		arg.Color,
 		arg.Note,
 		arg.CreatedAt,
@@ -985,6 +1022,7 @@ func (q *Queries) InsertAnnotation(ctx context.Context, arg InsertAnnotationPara
 		&i.Suffix,
 		&i.PosStart,
 		&i.PosEnd,
+		&i.MediaTsMs,
 		&i.Color,
 		&i.Note,
 		&i.CreatedAt,
@@ -1528,7 +1566,7 @@ func (q *Queries) ListAnnotationTagsSince(ctx context.Context, updatedAt string)
 }
 
 const listAnnotationsByDocument = `-- name: ListAnnotationsByDocument :many
-SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE document_id = ? AND deleted_at IS NULL ORDER BY pos_start ASC
+SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE document_id = ? AND deleted_at IS NULL ORDER BY pos_start ASC
 `
 
 func (q *Queries) ListAnnotationsByDocument(ctx context.Context, documentID string) ([]Annotation, error) {
@@ -1549,6 +1587,7 @@ func (q *Queries) ListAnnotationsByDocument(ctx context.Context, documentID stri
 			&i.Suffix,
 			&i.PosStart,
 			&i.PosEnd,
+			&i.MediaTsMs,
 			&i.Color,
 			&i.Note,
 			&i.CreatedAt,
@@ -1570,7 +1609,7 @@ func (q *Queries) ListAnnotationsByDocument(ctx context.Context, documentID stri
 }
 
 const listAnnotationsByTag = `-- name: ListAnnotationsByTag :many
-SELECT a.id, a.document_id, a.highlight_id, a.exact, a.prefix, a.suffix, a.pos_start, a.pos_end, a.color, a.note, a.created_at, a.updated_at, a.rev, a.deleted_at FROM annotations a
+SELECT a.id, a.document_id, a.highlight_id, a.exact, a.prefix, a.suffix, a.pos_start, a.pos_end, a.media_ts_ms, a.color, a.note, a.created_at, a.updated_at, a.rev, a.deleted_at FROM annotations a
 JOIN annotation_tags at2 ON at2.annotation_id = a.id
 WHERE at2.tag_id = ? AND at2.deleted_at IS NULL AND a.deleted_at IS NULL
 ORDER BY a.created_at DESC
@@ -1594,6 +1633,7 @@ func (q *Queries) ListAnnotationsByTag(ctx context.Context, tagID string) ([]Ann
 			&i.Suffix,
 			&i.PosStart,
 			&i.PosEnd,
+			&i.MediaTsMs,
 			&i.Color,
 			&i.Note,
 			&i.CreatedAt,
@@ -1615,7 +1655,7 @@ func (q *Queries) ListAnnotationsByTag(ctx context.Context, tagID string) ([]Ann
 }
 
 const listAnnotationsSince = `-- name: ListAnnotationsSince :many
-SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE updated_at > ? ORDER BY updated_at ASC
+SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE updated_at > ? ORDER BY updated_at ASC
 `
 
 func (q *Queries) ListAnnotationsSince(ctx context.Context, updatedAt string) ([]Annotation, error) {
@@ -1636,6 +1676,7 @@ func (q *Queries) ListAnnotationsSince(ctx context.Context, updatedAt string) ([
 			&i.Suffix,
 			&i.PosStart,
 			&i.PosEnd,
+			&i.MediaTsMs,
 			&i.Color,
 			&i.Note,
 			&i.CreatedAt,
@@ -1769,7 +1810,7 @@ func (q *Queries) ListDocumentTagsSince(ctx context.Context, updatedAt string) (
 }
 
 const listDocuments = `-- name: ListDocuments :many
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, created_at, updated_at, rev, deleted_at FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50
 `
 
 func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
@@ -1793,6 +1834,9 @@ func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
 			&i.PublishedAt,
 			&i.SourceFeedID,
 			&i.ContentHash,
+			&i.MediaType,
+			&i.MediaMetadata,
+			&i.Transcript,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -1813,7 +1857,8 @@ func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
 
 const listDocumentsByFeed = `-- name: ListDocumentsByFeed :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash,
+       d.media_type, d.media_metadata, d.transcript, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 WHERE d.source_feed_id = ? AND d.deleted_at IS NULL
@@ -1841,6 +1886,9 @@ func (q *Queries) ListDocumentsByFeed(ctx context.Context, sourceFeedID *string)
 			&i.PublishedAt,
 			&i.SourceFeedID,
 			&i.ContentHash,
+			&i.MediaType,
+			&i.MediaMetadata,
+			&i.Transcript,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -1861,7 +1909,8 @@ func (q *Queries) ListDocumentsByFeed(ctx context.Context, sourceFeedID *string)
 
 const listDocumentsByPipeline = `-- name: ListDocumentsByPipeline :many
 SELECT DISTINCT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash,
+       d.media_type, d.media_metadata, d.transcript, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 JOIN pipeline_runs pr ON pr.document_id = d.id
@@ -1891,6 +1940,9 @@ func (q *Queries) ListDocumentsByPipeline(ctx context.Context, pipelineID string
 			&i.PublishedAt,
 			&i.SourceFeedID,
 			&i.ContentHash,
+			&i.MediaType,
+			&i.MediaMetadata,
+			&i.Transcript,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -1910,7 +1962,7 @@ func (q *Queries) ListDocumentsByPipeline(ctx context.Context, pipelineID string
 }
 
 const listDocumentsByTag = `-- name: ListDocumentsByTag :many
-SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt, d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.created_at, d.updated_at, d.rev, d.deleted_at FROM documents d
+SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt, d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.media_type, d.media_metadata, d.transcript, d.created_at, d.updated_at, d.rev, d.deleted_at FROM documents d
 JOIN document_tags dt ON dt.document_id = d.id
 WHERE dt.tag_id = ? AND dt.deleted_at IS NULL AND d.deleted_at IS NULL
 ORDER BY d.created_at DESC
@@ -1937,6 +1989,9 @@ func (q *Queries) ListDocumentsByTag(ctx context.Context, tagID string) ([]Docum
 			&i.PublishedAt,
 			&i.SourceFeedID,
 			&i.ContentHash,
+			&i.MediaType,
+			&i.MediaMetadata,
+			&i.Transcript,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -1957,7 +2012,7 @@ func (q *Queries) ListDocumentsByTag(ctx context.Context, tagID string) ([]Docum
 
 const listDocumentsSince = `-- name: ListDocumentsSince :many
 
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, created_at, updated_at, rev, deleted_at FROM documents WHERE updated_at > ? ORDER BY updated_at ASC
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at FROM documents WHERE updated_at > ? ORDER BY updated_at ASC
 `
 
 // Differential sync queries (returns all rows changed after since, including tombstones)
@@ -1982,6 +2037,9 @@ func (q *Queries) ListDocumentsSince(ctx context.Context, updatedAt string) ([]D
 			&i.PublishedAt,
 			&i.SourceFeedID,
 			&i.ContentHash,
+			&i.MediaType,
+			&i.MediaMetadata,
+			&i.Transcript,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -4040,8 +4098,8 @@ func (q *Queries) UpdateSubscriptionPaused(ctx context.Context, arg UpdateSubscr
 }
 
 const upsertDocument = `-- name: UpsertDocument :one
-INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 ON CONFLICT(canonical_url) DO UPDATE SET
   title          = excluded.title,
   markdown       = excluded.markdown,
@@ -4052,25 +4110,31 @@ ON CONFLICT(canonical_url) DO UPDATE SET
   published_at   = COALESCE(excluded.published_at, documents.published_at),
   source_feed_id = COALESCE(excluded.source_feed_id, documents.source_feed_id),
   content_hash   = excluded.content_hash,
+  media_type     = excluded.media_type,
+  media_metadata = excluded.media_metadata,
+  transcript     = excluded.transcript,
   updated_at     = excluded.updated_at,
   rev            = documents.rev + 1
-RETURNING id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, created_at, updated_at, rev, deleted_at
+RETURNING id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at
 `
 
 type UpsertDocumentParams struct {
-	ID           string  `json:"id"`
-	CanonicalUrl string  `json:"canonical_url"`
-	Title        string  `json:"title"`
-	Markdown     string  `json:"markdown"`
-	FetchedAt    string  `json:"fetched_at"`
-	Excerpt      string  `json:"excerpt"`
-	HeroImageUrl string  `json:"hero_image_url"`
-	Author       string  `json:"author"`
-	PublishedAt  *string `json:"published_at"`
-	SourceFeedID *string `json:"source_feed_id"`
-	ContentHash  string  `json:"content_hash"`
-	CreatedAt    string  `json:"created_at"`
-	UpdatedAt    string  `json:"updated_at"`
+	ID            string  `json:"id"`
+	CanonicalUrl  string  `json:"canonical_url"`
+	Title         string  `json:"title"`
+	Markdown      string  `json:"markdown"`
+	FetchedAt     string  `json:"fetched_at"`
+	Excerpt       string  `json:"excerpt"`
+	HeroImageUrl  string  `json:"hero_image_url"`
+	Author        string  `json:"author"`
+	PublishedAt   *string `json:"published_at"`
+	SourceFeedID  *string `json:"source_feed_id"`
+	ContentHash   string  `json:"content_hash"`
+	MediaType     string  `json:"media_type"`
+	MediaMetadata string  `json:"media_metadata"`
+	Transcript    string  `json:"transcript"`
+	CreatedAt     string  `json:"created_at"`
+	UpdatedAt     string  `json:"updated_at"`
 }
 
 func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) (Document, error) {
@@ -4086,6 +4150,9 @@ func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) 
 		arg.PublishedAt,
 		arg.SourceFeedID,
 		arg.ContentHash,
+		arg.MediaType,
+		arg.MediaMetadata,
+		arg.Transcript,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -4102,6 +4169,9 @@ func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) 
 		&i.PublishedAt,
 		&i.SourceFeedID,
 		&i.ContentHash,
+		&i.MediaType,
+		&i.MediaMetadata,
+		&i.Transcript,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,

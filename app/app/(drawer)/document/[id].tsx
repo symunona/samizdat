@@ -47,6 +47,7 @@ import LinkActionSheet from '../../../src/LinkActionSheet'
 import { useScrapeQueue } from '../../../src/ScrapeQueueContext'
 import { buildDocumentHtml } from '../../../src/markdownToHtml'
 import { useSyncStore } from '../../../src/store/syncStore'
+import VideoDocument from '../../../src/VideoDocument'
 
 const DEBOUNCE_MS = 1000
 
@@ -220,7 +221,9 @@ export default function DocumentViewer() {
         fetchDocumentHighlights(activeUrl, token, id),
       ])
       setDoc(d)
-      setHtmlContent(buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
+      // Video Documents render in a dedicated player screen (VideoDocument),
+      // not the article WebView — skip the article HTML build.
+      setHtmlContent(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
       setAnnotations(anns)
       setHighlights(hl)
       if (d.source_feed_id) {
@@ -451,6 +454,11 @@ export default function DocumentViewer() {
   }, [startScrape])
 
   const progressPct = Math.round(scrollProgress * 100)
+
+  // Video/podcast Documents get a dedicated player + transcript screen.
+  if (doc && doc.media_type === 'video') {
+    return <VideoDocument doc={doc} from={from} />
+  }
 
   return (
     <SafeAreaView style={s.screen}>

@@ -18,6 +18,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
 	"github.com/google/uuid"
 	trafilatura "github.com/markusmobius/go-trafilatura"
+	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
 	"golang.org/x/net/html"
@@ -38,6 +39,11 @@ var utmParams = []string{
 }
 
 func canonicalize(raw string) (string, error) {
+	// YouTube: collapse every URL shape to the canonical watch URL so the
+	// scrape-once dedup holds (youtu.be, shorts, embed, extra params).
+	if id, ok := youtubeID(raw); ok {
+		return youtubeCanonical(id), nil
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("invalid url: %w", err)
@@ -51,7 +57,7 @@ func canonicalize(raw string) (string, error) {
 	return u.String(), nil
 }
 
-func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool) (string, error) {
+func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, cacheDir string, ytdlp config.YTDLPSection) (string, error) {
 	var p scrapePayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 		return "", fmt.Errorf("bad payload: %w", err)
@@ -60,6 +66,11 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	canonical, err := canonicalize(p.URL)
 	if err != nil {
 		return "", err
+	}
+
+	// YouTube/podcast videos take the yt-dlp path → video Document.
+	if vid, ok := youtubeID(canonical); ok {
+		return handleYouTube(ctx, q, job, canonical, vid, cacheDir, ytdlp, p.Manual)
 	}
 
 	logScraper.Printf("scraping %s", canonical)
@@ -156,10 +167,21 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 
 	logScraper.Printf("upserted document %s for %s", doc.ID[:8], canonical)
 
-	// Enqueue asset fetching job.
+	finishDocument(ctx, q, job, doc, title, p.Manual)
+
+	jobResult, _ := json.Marshal(map[string]string{"document_id": doc.ID, "title": title})
+	return string(jobResult), nil
+}
+
+// finishDocument runs the shared post-upsert steps for any scraped Document:
+// enqueue thumbnail/asset fetching and trigger matching pipelines. Best-effort —
+// the Document is already persisted, so failures here are logged, not retried
+// (a retry would needlessly re-scrape / re-download).
+func finishDocument(ctx context.Context, q *store.Queries, job store.Job, doc store.Document, title string, manual bool) {
+	now := time.Now().UTC().Format(time.RFC3339)
 	parentID := job.ID
 	assetPayload, _ := json.Marshal(map[string]string{"document_id": doc.ID, "document_title": title})
-	_, err = q.InsertJob(ctx, store.InsertJobParams{
+	if _, err := q.InsertJob(ctx, store.InsertJobParams{
 		ID:          uuid.NewString(),
 		Kind:        "fetch_assets",
 		Payload:     string(assetPayload),
@@ -167,17 +189,13 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ParentJobID: &parentID,
-	})
-	if err != nil {
-		return "", fmt.Errorf("enqueue fetch_assets: %w", err)
+	}); err != nil {
+		logScraper.Errorf("enqueue fetch_assets for %s: %v", doc.ID[:8], err)
 	}
 
-	// Trigger matching pipelines. Hold if the scrape was from a manual poll —
-	// the user controls when pipeline jobs run in that case.
-	triggerPipelines(ctx, q, doc, now, &parentID, p.Manual)
-
-	jobResult, _ := json.Marshal(map[string]string{"document_id": doc.ID, "title": title})
-	return string(jobResult), nil
+	// Hold pipeline jobs if the scrape was from a manual poll — the user controls
+	// when pipeline jobs run in that case.
+	triggerPipelines(ctx, q, doc, now, &parentID, manual)
 }
 
 // triggerPipelines checks all enabled on_new_document pipelines and enqueues runs for matches.

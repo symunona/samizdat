@@ -295,18 +295,20 @@ func runArchiveRestore(_ *cobra.Command, args []string) error {
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("open src: %w", err)
 	}
 	defer func() { _ = in.Close() }()
 
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		return err
+		return fmt.Errorf("open dst: %w", err)
 	}
 	defer func() { _ = out.Close() }()
 
-	_, err = io.Copy(out, in)
-	return err
+	if _, err = io.Copy(out, in); err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	return nil
 }
 
 func formatBytes(b int64) string {

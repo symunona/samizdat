@@ -77,8 +77,8 @@ WHERE status = 'running' AND updated_at < ? AND deleted_at IS NULL;
 SELECT * FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1;
 
 -- name: UpsertDocument :one
-INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+INSERT INTO documents (id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 ON CONFLICT(canonical_url) DO UPDATE SET
   title          = excluded.title,
   markdown       = excluded.markdown,
@@ -89,6 +89,9 @@ ON CONFLICT(canonical_url) DO UPDATE SET
   published_at   = COALESCE(excluded.published_at, documents.published_at),
   source_feed_id = COALESCE(excluded.source_feed_id, documents.source_feed_id),
   content_hash   = excluded.content_hash,
+  media_type     = excluded.media_type,
+  media_metadata = excluded.media_metadata,
+  transcript     = excluded.transcript,
   updated_at     = excluded.updated_at,
   rev            = documents.rev + 1
 RETURNING *;
@@ -136,6 +139,9 @@ SELECT * FROM media_assets WHERE id = ? AND deleted_at IS NULL LIMIT 1;
 
 -- name: ListMediaAssetsByDocument :many
 SELECT * FROM media_assets WHERE document_id = ? AND deleted_at IS NULL ORDER BY created_at;
+
+-- name: GetMediaAssetByDocumentAndKind :one
+SELECT * FROM media_assets WHERE document_id = ? AND kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1;
 
 -- name: UpsertFeed :one
 INSERT INTO feeds (id, url, kind, title, config, last_polled_at, created_at, updated_at, rev)
@@ -281,8 +287,8 @@ UPDATE jobs SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 UPDATE jobs SET last_error = ?, updated_at = ? WHERE id = ?;
 
 -- name: InsertAnnotation :one
-INSERT INTO annotations (id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, color, note, created_at, updated_at, rev)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+INSERT INTO annotations (id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
 RETURNING *;
 
 -- name: GetAnnotation :one
@@ -582,7 +588,8 @@ SELECT COUNT(*) FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND d
 
 -- name: ListDocumentsByPipeline :many
 SELECT DISTINCT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash,
+       d.media_type, d.media_metadata, d.transcript, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 JOIN pipeline_runs pr ON pr.document_id = d.id
@@ -592,7 +599,8 @@ LIMIT 200;
 
 -- name: ListDocumentsByFeed :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash,
+       d.media_type, d.media_metadata, d.transcript, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 WHERE d.source_feed_id = ? AND d.deleted_at IS NULL

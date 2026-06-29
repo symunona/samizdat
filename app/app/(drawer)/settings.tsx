@@ -4,6 +4,8 @@ import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, ApiError } from '../../src/api'
 import type { DeviceInfo, AppSettings } from '../../src/api'
+import { fetchYtdlpProxyStatus } from '../../src/proxyStatus'
+import type { YtdlpProxyStatus } from '../../src/proxyStatus'
 import { clearConnection, removeServerUrl, loadUrlLastUsedMap } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
 import { useConfirm } from '../../src/ConfirmContext'
@@ -59,6 +61,8 @@ export default function SettingsScreen() {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [settingsLoading, setSettingsLoading] = useState(false)
   const [urlLastUsed, setUrlLastUsed] = useState<Record<string, string>>({})
+  const [proxyStatus, setProxyStatus] = useState<YtdlpProxyStatus | null>(null)
+  const [proxyChecking, setProxyChecking] = useState(false)
   const [deviceNameInput, setDeviceNameInput] = useState('')
   const [deviceNameSaving, setDeviceNameSaving] = useState(false)
   const [deviceNameSaved, setDeviceNameSaved] = useState(false)
@@ -103,9 +107,28 @@ export default function SettingsScreen() {
     } catch { /* best-effort */ }
   }, [activeUrl, token])
 
+  const loadProxyStatus = useCallback(async () => {
+    if (!activeUrl || !token) return
+    setProxyChecking(true)
+    try {
+      setProxyStatus(await fetchYtdlpProxyStatus(activeUrl, token))
+    } catch { /* best-effort; keep prior status */ } finally {
+      setProxyChecking(false)
+    }
+  }, [activeUrl, token])
+
   useEffect(() => {
     loadUrlLastUsedMap().then(setUrlLastUsed)
   }, [])
+
+  // Auto-recheck the proxy on connect + poll every 20s so it flips to green
+  // automatically when the proxy host (e.g. fiona) comes back online.
+  useEffect(() => {
+    if (status !== 'connected') return
+    loadProxyStatus()
+    const id = setInterval(loadProxyStatus, 20000)
+    return () => clearInterval(id)
+  }, [status, loadProxyStatus])
 
   useEffect(() => {
     if (status === 'connected') {
@@ -325,6 +348,49 @@ export default function SettingsScreen() {
               />
           }
         </View>
+      </View>
+
+      {/* YouTube proxy */}
+      <View style={s.card}>
+        <View style={s.cardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.cardTitle}>YouTube Proxy</Text>
+            <Text style={s.cardSubtitle}>yt-dlp routes through this for video ingestion</Text>
+          </View>
+          {proxyChecking
+            ? <ActivityIndicator size="small" color={theme.colors.accent} />
+            : <Pressable onPress={loadProxyStatus} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
+                <Text style={s.refreshBtnText}>Recheck</Text>
+              </Pressable>
+          }
+        </View>
+
+        {proxyStatus === null ? (
+          <View style={s.statusRow}>
+            <View style={[s.dot, { backgroundColor: theme.colors.placeholder }]} />
+            <Text style={[s.statusText, { color: theme.colors.placeholder }]}>Checking…</Text>
+          </View>
+        ) : !proxyStatus.configured ? (
+          <Text style={s.connectionDetail}>
+            No proxy configured — yt-dlp connects directly (datacenter IPs are usually blocked). See docs/youtube-ingest.md
+          </Text>
+        ) : (
+          <>
+            <View style={s.statusRow}>
+              <View style={[s.dot, { backgroundColor: proxyChecking ? theme.colors.placeholder : proxyStatus.ok ? theme.colors.online : theme.colors.error }]} />
+              <Text style={[s.statusText, { color: proxyChecking ? theme.colors.placeholder : proxyStatus.ok ? theme.colors.online : theme.colors.error }]}>
+                {proxyChecking ? 'Checking…' : proxyStatus.ok ? `Online — exit IP ${proxyStatus.exit_ip}` : 'Offline'}
+              </Text>
+            </View>
+            <Text style={s.connectionDetail} numberOfLines={2}>
+              <Text style={s.connectionUrl}>{proxyStatus.proxy}</Text>
+              {proxyStatus.last_ok_at ? ` — last online ${formatRelative(proxyStatus.last_ok_at)}` : ' — never online'}
+            </Text>
+            {!proxyStatus.ok && proxyStatus.error ? (
+              <Text style={s.errorText} numberOfLines={3}>{proxyStatus.error}</Text>
+            ) : null}
+          </>
+        )}
       </View>
 
       {/* Devices */}

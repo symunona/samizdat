@@ -2,7 +2,7 @@
 created: 2026-06-28
 topic: YouTube / podcast video Documents — audio download, transcript, time-anchored player
 excerpt: Ingest a YouTube URL into a media Document (audio via yt-dlp + transcript), with a native audio player, on-demand YouTube iframe video, time-anchored autoscroll transcript, and timestamped annotations.
-status: planning
+status: feature-complete on branch feat/youtube-video-docs — server ingest + CLI + docs + proxy-status + app player ALL done; fiona proxy live; real ingest + just e2e green. Pending: final agent-browser eyeball + user review → squash merge to main.
 ---
 
 # YouTube Video Documents
@@ -145,3 +145,43 @@ Success = with the test video `https://www.youtube.com/watch?v=PqtggjVAi8M`:
 
 Commit this plan to `main`, branch `feat/youtube-video-docs`, small commits per phase, run
 `just build` + `just e2e` + linter before done, then ask user to check → squash merge.
+
+## Progress (2026-06-28)
+
+**Infra wrinkle found:** the VPS datacenter IP is bot-blocked by YouTube for *all*
+yt-dlp clients, even with a JS runtime (deno) installed — pure IP reputation. Resolved
+with user: route server-side yt-dlp through a residential proxy (**fiona**, a home node
+on Tailscale running microsocks) via `[ytdlp].proxy`; cookies as fallback. Walkthrough in
+`docs/youtube-ingest.md`.
+
+**DONE & committed (c8f9390, branch feat/youtube-video-docs):**
+- Phase 0: yt-dlp installed (`~/.local/bin`), `[ytdlp]` config (path/proxy/cookies), schema
+  migrations (`media_type`/`media_metadata`/`transcript`, `annotations.media_ts_ms`) + sqlc.
+- Phase 1: `worker/youtube.go` (detect/canonicalize/handleYouTube), WebVTT parser
+  (`internal/transcript`), range-capable audio serving + `GET /documents/:id/audio`,
+  bot-wall/missing-binary errors → actionable job errors.
+- CLI: `sam yt <url>` (token cached in CLI config — no device churn).
+- Tests: VTT parser + youtubeID/canonicalize unit tests green; **error-surfacing path
+  verified end-to-end** (job `last_error` shows the proxy/cookies fix + docs link).
+
+**Phase 2 (app player UI) — DONE (commit 30d7d11):** `VideoDocument.tsx` + platform audio
+backend (`useAudio.ts` native expo-audio / `useAudio.web.ts` HTML5 — expo-audio has no web
+playback), WebView transcript with `data-start-ms` spans (active-segment highlight + auto-
+follow, tap-to-seek), bottom native seeker (play/pause·scrubber·Add Note·Sync), Add-Note
+captures active line ±2 segments + `media_ts_ms`, on-demand YT iframe seeked to audio pos.
+`e2e/smoke.js` seeds a video doc + page added. Browser-verified by the build agent.
+
+**Proxy status (commit a3f0bf6):** `GET /api/v1/ytdlp/status` (probe via SOCKS, 60s
+background check, persisted `last_ok_at`) + Settings "YouTube Proxy" card (green/red/checking,
+auto-recheck + 20s poll).
+
+**fiona proxy LIVE (2026-06-29):** `socks5h://fiona.tail7f475e.ts.net:1080` (100.86.131.51),
+exit IP 5.38.238.163. `[server].port`+`[ytdlp].proxy` in repo config.toml. deno symlinked to
+~/.local/bin for yt-dlp extraction. Real ingest of PqtggjVAi8M succeeded on the live :8765
+server (208-seg transcript, 32MB audio); `just e2e` green.
+
+**Polish (commit f31b09e):** transcript HTML-entity decode + delete intermediate .info.json/.vtt.
+
+**REMAINING:** final agent-browser eyeball (real video render + green proxy card) → ask user to
+review → squash-merge feat/youtube-video-docs to main. Possible follow-ups: audio bitrate cap
+for the 4GB box; time-anchored Highlights; clipper "save to sam" (separate untracked plan).

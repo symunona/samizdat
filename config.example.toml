@@ -9,3 +9,11 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 # [providers]
 # anthropic_api_key = ""        # or env ANTHROPIC_API_KEY
 # openai_base_url   = ""        # e.g. http://localhost:11434/v1 (Ollama)
+
+# YouTube / podcast ingestion via yt-dlp. A datacenter VPS IP is bot-blocked by
+# YouTube, so set `proxy` to a residential proxy (e.g. a home node over Tailscale
+# running microsocks) or `cookies` to an exported cookies.txt. See docs/youtube-ingest.md.
+# [ytdlp]
+# path    = "yt-dlp"                       # binary on PATH, or an absolute path
+# proxy   = "socks5h://100.x.y.z:1080"     # fiona's tailnet IP (microsocks)
+# cookies = "/var/lib/samizdat/yt-cookies.txt"  # optional auth fallback

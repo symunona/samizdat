@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS documents (
     published_at    TEXT,
     source_feed_id  TEXT,
     content_hash    TEXT NOT NULL DEFAULT '',
+    media_type      TEXT NOT NULL DEFAULT 'article',  -- 'article' | 'video'
+    media_metadata  TEXT NOT NULL DEFAULT '',         -- JSON: {provider, external_id, duration_ms, transcript_status}
+    transcript      TEXT NOT NULL DEFAULT '',         -- JSON: [{start_ms,end_ms,text}] (video only)
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     rev             INTEGER NOT NULL DEFAULT 0,
@@ -138,6 +141,7 @@ CREATE TABLE IF NOT EXISTS annotations (
     suffix       TEXT    NOT NULL DEFAULT '',
     pos_start    INTEGER NOT NULL DEFAULT 0,
     pos_end      INTEGER NOT NULL DEFAULT 0,
+    media_ts_ms  INTEGER NOT NULL DEFAULT 0,  -- playback timestamp for video annotations (0 = none)
     color        TEXT    NOT NULL DEFAULT 'yellow',
     note         TEXT    NOT NULL DEFAULT '',
     created_at   TEXT    NOT NULL,

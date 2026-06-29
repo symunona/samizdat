@@ -18,7 +18,7 @@ import (
 
 // New returns the root HTTP handler. webDir may be empty (API-only mode).
 // serverURLs is the ordered list of reachable base URLs for this server.
-func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, cacheDir string, extractorDir string, llmCfg ...config.LLMSection) http.Handler {
+func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, cacheDir string, extractorDir string, ytdlp config.YTDLPSection, llmCfg ...config.LLMSection) http.Handler {
 	q := store.New(db)
 
 	var llmClient llm.Client
@@ -26,7 +26,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 		llmClient = llm.New(llmCfg[0])
 	}
 
-	w := worker.New(q, db, cacheDir, extractorDir, llmClient)
+	w := worker.New(q, db, cacheDir, extractorDir, llmClient, ytdlp)
 	w.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -111,6 +111,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 
 	mediaH := &mediaHandler{q: q, cacheDir: cacheDir}
 	mux.HandleFunc("GET /api/v1/media/{id}", mediaH.serve)
+	mux.HandleFunc("GET /api/v1/documents/{id}/audio", mediaH.serveDocAudio)
 
 	rsH := &readStatesHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents/{id}/progress", bearerAuth(q, rsH.get))
@@ -119,6 +120,9 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	settingsH := &settingsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/settings", bearerAuth(q, settingsH.get))
 	mux.HandleFunc("PUT /api/v1/settings", bearerAuth(q, settingsH.put))
+
+	ytStatusH := newYtdlpStatusHandler(ctx, q, ytdlp.Proxy)
+	mux.HandleFunc("GET /api/v1/ytdlp/status", bearerAuth(q, ytStatusH.get))
 
 	plH := &pipelinesHandler{q: q}
 	mux.HandleFunc("GET /api/v1/pipelines", bearerAuth(q, plH.list))

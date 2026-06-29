@@ -19,6 +19,7 @@ type annotationInput struct {
 	Suffix      string  `json:"suffix"`
 	PosStart    int64   `json:"pos_start"`
 	PosEnd      int64   `json:"pos_end"`
+	MediaTsMs   int64   `json:"media_ts_ms"`
 	Color       string  `json:"color"`
 	Note        string  `json:"note"`
 	HighlightID *string `json:"highlight_id"`
@@ -74,6 +75,7 @@ func (h *annotationsHandler) create(w http.ResponseWriter, r *http.Request) {
 		Suffix:      inp.Suffix,
 		PosStart:    inp.PosStart,
 		PosEnd:      inp.PosEnd,
+		MediaTsMs:   inp.MediaTsMs,
 		Color:       inp.Color,
 		Note:        inp.Note,
 		CreatedAt:   now,

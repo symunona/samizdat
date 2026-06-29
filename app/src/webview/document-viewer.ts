@@ -88,6 +88,11 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 #ann-gutter{position:fixed;top:0;right:0;width:6px;height:100%;pointer-events:none;z-index:90}
 #doc-title{font-size:1.6em;font-weight:700;color:var(--fg);margin:0 0 1em;line-height:1.3}
 
+/* Transcript segments (video/podcast documents) */
+.seg{cursor:pointer;border-radius:4px;padding:2px 6px;margin:0 -6px 0.35em;transition:background 0.2s,color 0.2s;color:var(--mu)}
+.seg:hover{background:var(--su);color:var(--fg)}
+.seg.active{background:rgba(232,116,59,0.16);color:var(--fg)}
+
 /* Highlight section */
 #hl-section{border:1px solid var(--bo);border-radius:8px;margin-bottom:1.5em;overflow:hidden;background:var(--su)}
 #hl-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--su);border:none;border-bottom:1px solid var(--bo);cursor:pointer;color:var(--mu);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px}
@@ -392,6 +397,57 @@ function removeMark(id: string): void {
   updateGutter()
 }
 
+// ── Transcript (video documents) ───────────────────────────────────────────────
+// Real user scrolls suppress auto-follow for a short window so playback doesn't
+// yank the view while the user is reading elsewhere.
+let _lastUserScroll = 0
+window.addEventListener('wheel', () => { _lastUserScroll = Date.now() }, { passive: true })
+window.addEventListener('touchmove', () => { _lastUserScroll = Date.now() }, { passive: true })
+
+function segEls(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('.seg[data-start-ms]'))
+}
+
+function activeSegIndex(els: HTMLElement[], ms: number): number {
+  let idx = -1
+  for (let i = 0; i < els.length; i++) {
+    if (Number(els[i].dataset.startMs) <= ms) idx = i
+    else break
+  }
+  return idx
+}
+
+function setActiveSeg(ms: number): void {
+  const els = segEls()
+  const idx = activeSegIndex(els, ms)
+  els.forEach((el, i) => el.classList.toggle('active', i === idx))
+  if (idx >= 0 && Date.now() - _lastUserScroll > 2500) {
+    els[idx].scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+function segCharOffset(el: HTMLElement): number {
+  const tn = el.firstChild
+  if (!tn || tn.nodeType !== Node.TEXT_NODE) return 0
+  const r = document.createRange()
+  r.setStart(tn, 0)
+  return getCharOffset(r)
+}
+
+// Build a {exact,prefix,suffix,pos_start,pos_end} anchor around the active
+// segment (exact = active line, ±2 segments of context) for a timestamped note.
+function segmentWindow(ms: number): SelectionData | null {
+  const els = segEls()
+  const idx = activeSegIndex(els, ms)
+  if (idx < 0) return null
+  const texts = els.map(e => e.textContent ?? '')
+  const exact = texts[idx]
+  const prefix = texts.slice(Math.max(0, idx - 2), idx).join(' ')
+  const suffix = texts.slice(idx + 1, idx + 3).join(' ')
+  const start = segCharOffset(els[idx])
+  return { exact, prefix, suffix, pos_start: start, pos_end: start + exact.length }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 interface InitMsg {
@@ -534,6 +590,16 @@ document.addEventListener('click', (e: MouseEvent) => {
     return
   }
 
+  // Transcript segment — tap (not a text selection) seeks playback to its time
+  const seg = target.closest && target.closest<HTMLElement>('.seg[data-start-ms]')
+  if (seg) {
+    const seln = window.getSelection()
+    if (!seln || seln.isCollapsed) {
+      sendMsg({ type: 'seek', ms: Number(seg.dataset.startMs) })
+    }
+    return
+  }
+
   // Links
   const a = target.closest && target.closest<HTMLAnchorElement>('a[href]')
   if (a) {
@@ -647,6 +713,16 @@ function handleMessage(event: MessageEvent): void {
         m.classList.add('focused')
         m.scrollIntoView({ behavior: 'smooth', block: 'center' })
       }
+      break
+    }
+
+    case 'mediaTime':
+      setActiveSeg(msg.ms as number)
+      break
+
+    case 'requestSegmentWindow': {
+      const win = segmentWindow(msg.ms as number)
+      if (win) sendMsg({ type: 'segmentWindow', data: win })
       break
     }
   }

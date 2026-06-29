@@ -6,6 +6,6 @@
     "@expo/metro-config",
     "react-native-worklets"
   ],
-  "ignoreFiles": ["babel.config.js"],
+  "ignoreFiles": ["babel.config.js", "src/useAudio.web.ts"],
   "ignoreExportsUsedInFile": true
 }

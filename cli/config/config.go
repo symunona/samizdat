@@ -9,12 +9,13 @@ import (
 )
 
 type Config struct {
-	DataDir  string        `toml:"data_dir"`
-	VaultDir string        `toml:"vault_dir"`
-	DBPath   string        `toml:"db_path"`
-	LLM      LLMConfig     `toml:"llm"`
-	Network  NetworkConfig `toml:"network"`
-	Server   ServerConfig  `toml:"server"`
+	DataDir     string        `toml:"data_dir"`
+	VaultDir    string        `toml:"vault_dir"`
+	DBPath      string        `toml:"db_path"`
+	DeviceToken string        `toml:"device_token,omitempty"` // cached local-trust bearer token for CLI→server calls
+	LLM         LLMConfig     `toml:"llm"`
+	Network     NetworkConfig `toml:"network"`
+	Server      ServerConfig  `toml:"server"`
 }
 
 // LLMTier maps to one of the three routing tiers: triage, breakdown, digest.

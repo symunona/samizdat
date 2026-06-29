@@ -95,12 +95,45 @@ export type Document = {
   hero_image_url: string
   author: string
   source_feed_id?: string | null
+  media_type?: 'article' | 'video'
+  media_metadata?: string
+  transcript?: string
   annotation_count?: number
   highlight_count?: number
   created_at: string
   updated_at: string
   rev: number
   deleted_at: string | null
+}
+
+// A time-anchored transcript segment (video/podcast Documents).
+export type TranscriptSegment = { start_ms: number; end_ms: number; text: string }
+
+export type MediaMetadata = {
+  provider?: string
+  external_id?: string
+  duration_ms?: number
+  transcript_status?: 'subs' | 'auto' | 'none'
+}
+
+// parseTranscript safely parses the Document.transcript JSON string.
+export function parseTranscript(doc: Document): TranscriptSegment[] {
+  if (!doc.transcript) return []
+  try {
+    const v = JSON.parse(doc.transcript)
+    return Array.isArray(v) ? (v as TranscriptSegment[]) : []
+  } catch { return [] }
+}
+
+// parseMediaMetadata safely parses the Document.media_metadata JSON string.
+export function parseMediaMetadata(doc: Document): MediaMetadata {
+  if (!doc.media_metadata) return {}
+  try { return JSON.parse(doc.media_metadata) as MediaMetadata } catch { return {} }
+}
+
+// audioDocUrl returns the streaming URL for a video Document's audio asset.
+export function audioDocUrl(serverUrl: string, id: string): string {
+  return `${base(serverUrl)}/api/v1/documents/${encodeURIComponent(id)}/audio`
 }
 
 export type MediaAsset = {
@@ -473,6 +506,7 @@ export type Annotation = {
   suffix: string
   pos_start: number
   pos_end: number
+  media_ts_ms: number
   color: string
   note: string
   created_at: string
@@ -491,7 +525,7 @@ export async function fetchAnnotations(serverUrl: string, token: string, docId: 
 
 export async function createAnnotation(
   serverUrl: string, token: string, docId: string,
-  data: { exact: string; prefix: string; suffix: string; pos_start: number; pos_end: number; color: string; note: string; highlight_id?: string },
+  data: { exact: string; prefix: string; suffix: string; pos_start: number; pos_end: number; color: string; note: string; highlight_id?: string; media_ts_ms?: number },
 ): Promise<Annotation> {
   const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/annotations`, {
     method: 'POST',
