@@ -45,6 +45,12 @@ export function useAudio(source: string): AudioControl {
     durationMs,
     play: () => { ref.current?.play().catch(() => {}) },
     pause: () => ref.current?.pause(),
-    seek: (ms: number) => { if (ref.current) ref.current.currentTime = ms / 1000 },
+    seek: (ms: number) => {
+      const a = ref.current
+      if (!a || !Number.isFinite(ms)) return
+      const dur = Number.isFinite(a.duration) ? a.duration : 0
+      if (dur <= 0) return // metadata not loaded yet — avoid a non-finite currentTime
+      a.currentTime = Math.max(0, Math.min(ms / 1000, dur))
+    },
   }
 }

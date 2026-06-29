@@ -20,6 +20,6 @@ export function useAudio(source: string): AudioControl {
     durationMs: Math.floor((status?.duration ?? 0) * 1000),
     play: () => player.play(),
     pause: () => player.pause(),
-    seek: (ms: number) => player.seekTo(ms / 1000),
+    seek: (ms: number) => { if (Number.isFinite(ms) && ms >= 0) player.seekTo(ms / 1000) },
   }
 }

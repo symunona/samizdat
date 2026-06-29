@@ -142,7 +142,7 @@ build-cli:
 [group('build')]
 [doc('Export the Expo web build (served by the server)')]
 build-app-web:
-    cd app && pnpm expo export --platform web --output-dir dist
+    cd app && pnpm expo export --platform web --output-dir dist --clear
 
 [group('build')]
 [doc('Package the clipper extension')]

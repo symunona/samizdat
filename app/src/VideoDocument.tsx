@@ -45,6 +45,11 @@ type ParsedMsg = {
   ms?: number
 }
 
+// Max on-screen width of the video/thumbnail so a wide desktop window keeps the
+// transcript + seeker visible (16:9 → ~405px tall at this width). Use the
+// in-window fullscreen button to go bigger.
+const PLAYER_MAX_W = 720
+
 function fmtTime(ms: number): string {
   const total = Math.floor(ms / 1000)
   const m = Math.floor(total / 60)
@@ -86,6 +91,9 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const transcriptIframeRef = useRef<any>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const videoIframeRef = useRef<any>(null)
+  // Video container — used to request native fullscreen on web.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const videoBoxRef = useRef<any>(null)
   const pendingMediaTsRef = useRef(0)
   // Audio position frozen at the moment video opens (so the iframe seeks there
   // and live position ticks don't reload it).
@@ -264,6 +272,14 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     })
   }, [playing, pause, positionMs])
 
+  // Web: request native fullscreen on the video container (the iframe fills it).
+  // Native: the WebView's allowsFullscreenVideo enables the player's own control.
+  const handleFullscreen = useCallback(() => {
+    if (Platform.OS !== 'web') return
+    const el = videoBoxRef.current as { requestFullscreen?: () => void } | null
+    el?.requestFullscreen?.()
+  }, [])
+
   const handleSync = useCallback(async () => {
     if (!remoteUrl || syncing) return
     setSyncing(true)
@@ -300,18 +316,25 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       {/* Player / thumbnail */}
       <View style={s.player}>
         {showVideo && ytId ? (
-          <View style={s.videoBox}>
+          <View ref={videoBoxRef} style={s.videoBox}>
             {Platform.OS === 'web' ? (
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              <iframe ref={videoIframeRef as any} src={videoSrc} allow="autoplay; encrypted-media"
+              <iframe ref={videoIframeRef as any} src={videoSrc} allow="autoplay; encrypted-media; fullscreen" allowFullScreen
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 style={{ width: '100%', height: '100%', border: 'none' } as any} />
             ) : (
-              <WebView source={{ uri: videoSrc }} style={s.fill} allowsInlineMediaPlayback javaScriptEnabled />
+              <WebView source={{ uri: videoSrc }} style={s.fill} allowsInlineMediaPlayback allowsFullscreenVideo javaScriptEnabled />
             )}
-            <Pressable onPress={toggleVideo} style={s.collapseBtn} hitSlop={10}>
-              <Ionicons name="chevron-up" size={18} color="#fff" />
-            </Pressable>
+            <View style={s.videoBtns}>
+              {Platform.OS === 'web' ? (
+                <Pressable onPress={handleFullscreen} style={s.videoBtn} hitSlop={10}>
+                  <Ionicons name="expand" size={16} color="#fff" />
+                </Pressable>
+              ) : null}
+              <Pressable onPress={toggleVideo} style={s.videoBtn} hitSlop={10}>
+                <Ionicons name="chevron-up" size={16} color="#fff" />
+              </Pressable>
+            </View>
           </View>
         ) : (
           <Pressable onPress={ytId ? toggleVideo : undefined} style={s.thumbBox}>
@@ -397,14 +420,17 @@ function buildStyles(t: Theme) {
     },
     backBtn: { flexShrink: 0, padding: t.spacing.sm },
     headerTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '600' },
-    player: { backgroundColor: '#000' },
-    thumbBox: { width: '100%', aspectRatio: 16 / 9, justifyContent: 'center', alignItems: 'center' },
+    // Center + cap the player so a wide desktop window never pushes the
+    // transcript/seeker off-screen; 16:9 is preserved within the cap.
+    player: { backgroundColor: '#000', alignItems: 'center' },
+    thumbBox: { width: '100%', maxWidth: PLAYER_MAX_W, aspectRatio: 16 / 9, justifyContent: 'center', alignItems: 'center' },
     thumb: { width: '100%', height: '100%' },
     thumbPlaceholder: { backgroundColor: t.colors.surface },
     playOverlay: { position: 'absolute', alignItems: 'center', gap: 4 },
     playOverlayText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-    videoBox: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#000' },
-    collapseBtn: { position: 'absolute', top: 6, right: 6, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 14, padding: 4 },
+    videoBox: { width: '100%', maxWidth: PLAYER_MAX_W, aspectRatio: 16 / 9, backgroundColor: '#000' },
+    videoBtns: { position: 'absolute', top: 6, right: 6, flexDirection: 'row', gap: 6 },
+    videoBtn: { backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 14, padding: 5 },
     transcript: { flex: 1, backgroundColor: t.colors.background },
     seeker: {
       flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,
