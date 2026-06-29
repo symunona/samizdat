@@ -40,7 +40,7 @@ type Selection = PendingSelection & { media_ts_ms?: number }
 
 type ParsedMsg = {
   type: string
-  data?: PendingSelection
+  data?: PendingSelection & { media_ts_ms?: number }
   id?: string
   ms?: number
 }
@@ -165,12 +165,13 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     } else if (msg.type === 'seek' && typeof msg.ms === 'number') {
       seekTo(msg.ms)
     } else if (msg.type === 'selection' && msg.data) {
-      setPendingSelection({ ...msg.data, media_ts_ms: positionMs })
+      // Prefer the anchored transcript segment's time; fall back to live playback.
+      setPendingSelection({ ...msg.data, media_ts_ms: msg.data.media_ts_ms ?? positionMs })
       setAnnMode('create')
       setExistingAnnotation(undefined)
       setAnnVisible(true)
     } else if (msg.type === 'segmentWindow' && msg.data) {
-      setPendingSelection({ ...msg.data, media_ts_ms: pendingMediaTsRef.current })
+      setPendingSelection({ ...msg.data, media_ts_ms: msg.data.media_ts_ms ?? pendingMediaTsRef.current })
       setAnnMode('create')
       setExistingAnnotation(undefined)
       setAnnVisible(true)

@@ -40,6 +40,9 @@ type SelectionData = {
   suffix: string
   pos_start: number
   pos_end: number
+  // For video transcripts: playback time of the anchored segment (data-start-ms).
+  // Undefined for article selections.
+  media_ts_ms?: number
 }
 
 // ── Platform-aware postMessage ────────────────────────────────────────────────
@@ -445,7 +448,8 @@ function segmentWindow(ms: number): SelectionData | null {
   const prefix = texts.slice(Math.max(0, idx - 2), idx).join(' ')
   const suffix = texts.slice(idx + 1, idx + 3).join(' ')
   const start = segCharOffset(els[idx])
-  return { exact, prefix, suffix, pos_start: start, pos_end: start + exact.length }
+  const media_ts_ms = Number(els[idx].dataset.startMs) || 0
+  return { exact, prefix, suffix, pos_start: start, pos_end: start + exact.length, media_ts_ms }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -641,7 +645,13 @@ function handleSelection(): void {
   const range = sel.getRangeAt(0)
   const start = getCharOffset(range)
   const ctx = getContext(range, 64)
-  _pendingSel = { exact, prefix: ctx.prefix, suffix: ctx.suffix, pos_start: start, pos_end: start + exact.length }
+  // If the selection sits inside a transcript segment, anchor the note to that
+  // segment's playback time (not wherever audio happens to be playing).
+  const startNode = range.startContainer
+  const startEl = startNode.nodeType === Node.TEXT_NODE ? startNode.parentElement : (startNode as HTMLElement)
+  const seg = startEl?.closest<HTMLElement>('.seg[data-start-ms]')
+  const media_ts_ms = seg ? Number(seg.dataset.startMs) || 0 : undefined
+  _pendingSel = { exact, prefix: ctx.prefix, suffix: ctx.suffix, pos_start: start, pos_end: start + exact.length, media_ts_ms }
   const annBtn = document.getElementById('ann-btn')
   if (annBtn) annBtn.style.display = 'block'
 }
