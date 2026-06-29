@@ -159,4 +159,49 @@ AGENT_BROWSER_ARGS="--no-sandbox" agent-browser --state tmp/debug-session/state.
 
 ## "Web vs mobile" = touch vs non-touch, not Platform.OS
 
-`Platform.OS === 'web'` is true for ALL browsers — desktop Chrome and mobile Safari alike. Never use it to mean "desktop". To branch on touch capability use `window.matchMedia('(pointer: coarse)').matches`. Mobile web and native app must behave identically; `Platform.OS === 'web'` silently breaks one of them.
+`Platform.OS === 'web'` is true for ALL browsers — desktop Chrome and mobile Safari alike. Never use it to mean "desktop". To branch on touch capability use `window.matchMedia('(pointer: coarse').matches`. Mobile web and native app must behave identically; `Platform.OS === 'web'` silently breaks one of them.
+
+## Video / podcast Documents (`media_type === 'video'`)
+
+Documents with `media_type === 'video'` get a dedicated player screen (`src/VideoDocument.tsx`) instead of the article WebView. The document viewer (`app/(drawer)/document/[id].tsx`) early-returns `<VideoDocument doc={doc} from={from} />` before building article HTML.
+
+### VideoDocument layout
+- Header with back button
+- Player area: thumbnail (tappable → expands inline YouTube iframe) OR 16:9 video box
+- Transcript pane (WebView / iframe) — always visible in both audio and video modes
+- Seeker bar: play/pause, time, scrub track, add-note, offline-sync (native only)
+- AnnotationPanel sheet for creating/editing time-anchored notes
+
+### Audio playback — `useAudio` hook (platform-split)
+Audio is abstracted behind a single hook with a **platform-split implementation**:
+- `src/useAudio.ts` — **native** backend using `expo-audio` (`useAudioPlayer` + `useAudioPlayerStatus`)
+- `src/useAudio.web.ts` — **web** backend using a plain HTML5 `<audio>` element
+
+Metro resolves `.web.ts` for web builds automatically. **Never import `expo-audio` directly in components** — always go through `useAudio`. The web file is knip-ignored because Metro handles the resolution.
+
+```ts
+const { playing, positionMs, durationMs, play, pause, seek } = useAudio(url)
+```
+
+`url` can be a local file URI (offline-synced) or a remote streaming URL. If both exist, prefer the local URI.
+
+### Offline audio sync (native only)
+`expo-file-system` (`legacy` import) downloads the audio asset to `FileSystem.documentDirectory`. The local URI is persisted in AsyncStorage under key `video_audio_<docId>` and restored on mount. The sync button is hidden on web (no `expo-file-system` on web).
+
+### Transcript rendering
+`buildTranscriptHtml()` in `src/markdownToHtml.ts` renders `TranscriptSegment[]` as `.seg` paragraphs with `data-start-ms` attributes. The document-viewer WebView bundle handles:
+- `mediaTime` message → highlights the active `.seg` and auto-scrolls (suppressed for 2.5s after user scroll)
+- `seek` message (outbound) → tapping a `.seg` seeks audio to that timestamp
+- `requestSegmentWindow` / `segmentWindow` messages → builds a text-anchor around the active segment for time-stamped annotations
+
+### Time-anchored annotations
+`Annotation` now has a `media_ts_ms` field. When creating an annotation on a video document, `positionMs` is captured at the time the user taps "add note" and sent as `media_ts_ms`. Tapping an existing annotation seeks audio to its timestamp.
+
+### `parseTranscript` / `parseMediaMetadata` helpers
+Both live in `src/api.ts` and safely parse the JSON string fields `Document.transcript` and `Document.media_metadata`. Always use these helpers — never `JSON.parse` the fields inline.
+
+### YouTube embed
+`meta.external_id` from `parseMediaMetadata` is the YouTube video ID. The embed URL includes `?start=<seconds>&autoplay=1`. Opening the video pauses the bottom audio player first; collapsing the video box stops the iframe. They must never play simultaneously.
+
+### `proxyStatus.ts` — yt-dlp proxy health
+`src/proxyStatus.ts` exposes `fetchYtdlpProxyStatus` and `YtdlpProxyStatus`. Kept separate from `api.ts` to avoid merge conflicts. The Settings screen polls this every 20s when connected and displays online/offline status with exit IP and last-ok timestamp.
