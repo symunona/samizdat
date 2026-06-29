@@ -237,42 +237,25 @@ update-landing:
 # ── Deploy ────────────────────────────────────────────────────────────────────
 
 [group('deploy')]
-[doc('Build everything, symlink bins, install & start the service (needs sudo)')]
-install: _check-no-dev install-conflict-check install-bins
+[doc('Build, symlink CLIs, install/start a per-instance systemd service (needs sudo)')]
+install: _check-no-dev install-bins
     @echo ""
     bash scripts/install-service.sh
+    @echo ""
+    @echo "CLI symlinks (shared; point at the most recently installed checkout):"
+    @echo "  sam      → $(readlink /usr/local/bin/sam)"
+    @echo "  samizdat → $(readlink /usr/local/bin/samizdat)"
+    @echo ""
+    @echo "Multiple checkouts run as separate services (samizdat-<dir>) on their own ports."
+    @echo "Rebuild anytime: just build   (then: sudo systemctl restart samizdat-$(basename {{justfile_directory()}}))"
 
 [group('deploy')]
-[doc('Warn + confirm if another checkout already owns the global install/service')]
-install-conflict-check:
-    @bash scripts/check-install-conflict.sh
-    @echo ""
-    @echo "sam     → $(readlink /usr/local/bin/sam)"
-    @echo "samizdat → $(readlink /usr/local/bin/samizdat)"
-    @echo ""
-    @echo "Rebuild anytime: just build   (symlinks stay, service picks up on next restart)"
-    @echo "Force restart:   sudo systemctl restart samizdat"
-
-[group('deploy')]
-[doc('Build + symlink sam and samizdat to /usr/local/bin (no service touch, needs sudo)')]
+[doc('Build + symlink the sam/samizdat CLIs to /usr/local/bin (no service, needs sudo)')]
 install-bins: build
-    @# Guard: another checkout may already own the global install + systemd service.
-    @# Repointing it silently (last `just install` wins) hijacks the running service
-    @# onto this checkout — confirm before clobbering a different one.
-    @current="$(readlink /usr/local/bin/samizdat 2>/dev/null || true)"; \
-    want="{{justfile_directory()}}/server/bin/samizdat"; \
-    if [ -n "$current" ] && [ "$current" != "$want" ]; then \
-      echo "⚠️  /usr/local/bin/samizdat is already installed from a DIFFERENT checkout:"; \
-      echo "       current : $current"; \
-      echo "       this one: $want"; \
-      if systemctl is-active --quiet samizdat 2>/dev/null; then \
-        echo "    The systemd 'samizdat' service is currently running that other checkout."; \
-      fi; \
-      echo "    Installing here repoints the global binary + restarts the service onto THIS repo."; \
-      printf "    Continue and take over the install? [y/N] "; \
-      read ans; case "$ans" in y|Y) ;; *) echo "Aborted — install unchanged."; exit 1;; esac; \
-    fi
-    @echo "Symlinking binaries — may prompt for sudo password"
+    @# CLI convenience symlinks only. The systemd service does NOT use these — it
+    @# runs each checkout's binary by absolute path (see scripts/install-service.sh),
+    @# so installing another checkout can't hijack a running service.
+    @echo "Symlinking CLIs — may prompt for sudo password"
     sudo -v
     sudo ln -sf "{{justfile_directory()}}/cli/bin/sam" /usr/local/bin/sam
     sudo ln -sf "{{justfile_directory()}}/server/bin/samizdat" /usr/local/bin/samizdat

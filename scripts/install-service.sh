@@ -1,59 +1,95 @@
 #!/usr/bin/env bash
-# Install or update the Samizdat systemd service.
-# Detects if already installed — if so, updates binary + web assets, then restarts.
+# Install/update Samizdat as a PER-INSTANCE systemd service.
+#
+# Each checkout installs its own service `samizdat-<instance>` that runs THIS
+# repo's binary with THIS repo's config.toml (own port + data_dir). So multiple
+# checkouts run side-by-side (e.g. sam on :8765, sam2 on :8766) without clashing.
+#
+# Env:
+#   INSTANCE=<name>   override instance name (default: basename of the repo dir)
+#   FORCE=1           non-interactive; on conflict, install as a separate service
+#   DRY_RUN=1         print the generated unit + chosen mode, touch nothing
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UNIT_SRC="$REPO_ROOT/deploy/samizdat.service"
-UNIT_DST="/etc/systemd/system/samizdat.service"
-SERVICE="samizdat"
-DATA_DIR="${HOME}/.samizdat"
-WEB_DST="$DATA_DIR/web"
-WEB_SRC="$REPO_ROOT/app/dist"
+USER_NAME="$(id -un)"
+HOME_DIR="$HOME"
+INSTANCE="${INSTANCE:-$(basename "$REPO_ROOT")}"
+TMPL="$REPO_ROOT/deploy/samizdat.service.tmpl"
+BIN="$REPO_ROOT/server/bin/samizdat"
+CFG="$REPO_ROOT/config.toml"
+WEBDIR="$REPO_ROOT/app/dist"
+LEGACY_UNIT="/etc/systemd/system/samizdat.service"
 
-# Copy web assets if built
-if [[ -d "$WEB_SRC" ]]; then
-  echo "→ Copying web assets → $WEB_DST"
-  mkdir -p "$WEB_DST"
-  cp -r "$WEB_SRC/." "$WEB_DST/"
-else
-  echo "  (no app/dist found — server will run API-only; run: just build-app-web)"
+SERVICE="samizdat-${INSTANCE}"
+UNIT_DST="/etc/systemd/system/${SERVICE}.service"
+
+port_of() { grep -E '^\s*port\s*=' "$1" 2>/dev/null | grep -oE '[0-9]+' | head -1; }
+PORT="$([[ -f "$CFG" ]] && port_of "$CFG" || true)"; PORT="${PORT:-8765}"
+
+# Which checkout owns the legacy global `samizdat.service` (if any)?
+legacy_repo=""
+if [[ -f "$LEGACY_UNIT" ]]; then
+  binpath="$(systemctl cat samizdat.service 2>/dev/null | sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' | head -1)"
+  binpath="$(readlink -f "$binpath" 2>/dev/null || true)"
+  [[ -n "$binpath" ]] && legacy_repo="$(cd "$(dirname "$binpath")/../.." 2>/dev/null && pwd || true)"
 fi
 
-# Write web_dir to config.toml so the server picks it up
-CFG="$DATA_DIR/config.toml"
-mkdir -p "$DATA_DIR"
-if [[ -f "$CFG" ]]; then
-  # Update or append web_dir under [server] section
-  if grep -q 'web_dir' "$CFG"; then
-    sed -i "s|web_dir.*|web_dir = \"$WEB_DST\"|" "$CFG"
+# Decide mode: takeover (repoint legacy samizdat.service) vs separate (samizdat-<instance>).
+MODE="separate"
+if [[ -f "$LEGACY_UNIT" && -n "$legacy_repo" && "$legacy_repo" != "$REPO_ROOT" ]]; then
+  echo "⚠  The legacy 'samizdat' service is owned by a DIFFERENT checkout:"
+  echo "     legacy owner: $legacy_repo"
+  echo "     this checkout: $REPO_ROOT  (instance '$INSTANCE', port $PORT)"
+  echo "   You can run both at once as separate services."
+  if [[ "${FORCE:-}" == "1" ]]; then
+    MODE="separate"; echo "   FORCE=1 → installing as a separate service 'samizdat-$INSTANCE'."
+  elif [[ "${DRY_RUN:-}" == "1" ]]; then
+    MODE="separate"; echo "   DRY_RUN: assuming [s] separate."
   else
-    printf '\n[server]\nweb_dir = "%s"\n' "$WEB_DST" >> "$CFG"
+    echo "     [t] take over the legacy 'samizdat' service with this checkout"
+    echo "     [s] install this checkout as a SEPARATE service 'samizdat-$INSTANCE' (run both)"
+    echo "     [a] abort"
+    read -r -p "   Choose [t/s/a]: " ch
+    case "$ch" in
+      t|T) MODE="takeover" ;;
+      s|S) MODE="separate" ;;
+      *) echo "Aborted — nothing changed."; exit 1 ;;
+    esac
   fi
-else
-  cat > "$CFG" << EOF
-data_dir = "$DATA_DIR"
-vault_dir = "$HOME/samizdat"
-db_path   = "$DATA_DIR/app.db"
-
-[server]
-port    = 8765
-web_dir = "$WEB_DST"
-EOF
+fi
+if [[ "$MODE" == "takeover" ]]; then
+  SERVICE="samizdat"; UNIT_DST="$LEGACY_UNIT"
 fi
 
-if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
-  echo "→ Service running — restarting with updated binary + assets"
-  sudo systemctl restart "$SERVICE"
-elif systemctl is-enabled --quiet "$SERVICE" 2>/dev/null; then
-  echo "→ Service exists but stopped — starting"
-  sudo systemctl start "$SERVICE"
-else
-  echo "→ Installing unit → $UNIT_DST"
-  sudo install -m 0644 "$UNIT_SRC" "$UNIT_DST"
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now "$SERVICE"
+if [[ ! -d "$WEBDIR" ]]; then
+  echo "  (no app/dist — run 'just build-app-web'; service will run API-only until then)"
 fi
 
+# Render the unit from the template.
+unit="$(sed \
+  -e "s|@USER@|$USER_NAME|g" \
+  -e "s|@HOME@|$HOME_DIR|g" \
+  -e "s|@REPO@|$REPO_ROOT|g" \
+  -e "s|@BIN@|$BIN|g" \
+  -e "s|@CFG@|$CFG|g" \
+  -e "s|@WEBDIR@|$WEBDIR|g" \
+  -e "s|@INSTANCE@|$INSTANCE|g" \
+  "$TMPL")"
+
+if [[ "${DRY_RUN:-}" == "1" ]]; then
+  echo "── DRY_RUN: would write $UNIT_DST (service '$SERVICE', port $PORT, mode $MODE) ──"
+  echo "$unit"
+  echo "── end (no changes made) ──"
+  exit 0
+fi
+
+echo "→ Installing $UNIT_DST  (service '$SERVICE', port $PORT)"
+echo "$unit" | sudo tee "$UNIT_DST" >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+sudo systemctl restart "$SERVICE"
 sudo systemctl status "$SERVICE" --no-pager -l || true
-echo "✓ Done."
+echo "✓ '$SERVICE' running on port $PORT  (config: $CFG)"
+echo "  Logs:    journalctl -u $SERVICE -f"
+echo "  Stop:    sudo systemctl stop $SERVICE"

@@ -1,14 +1,14 @@
 [Unit]
-Description=Samizdat server
+Description=Samizdat server (@INSTANCE@)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=symunona
-Environment=HOME=/home/symunona
-ExecStart=/usr/local/bin/samizdat serve
-WorkingDirectory=/home/symunona/.samizdat
+User=@USER@
+Environment=HOME=@HOME@
+ExecStart=@BIN@ serve --config @CFG@ --webdir @WEBDIR@
+WorkingDirectory=@REPO@
 Restart=on-failure
 RestartSec=3
 # Bind :443 without running as root (needed for TLS post-M1):
