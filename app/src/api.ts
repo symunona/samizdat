@@ -45,6 +45,19 @@ export async function me(url: string, token: string): Promise<Me> {
   return json<Me>(res, '/api/v1/me')
 }
 
+export type ExtensionToken = { device_token: string; device_id: string }
+
+// Mint a fresh device token for the browser extension, authed by this device's
+// own Bearer token. The web settings page postMessages the result to the
+// extension's content script during auto-pair.
+export async function mintExtensionToken(url: string, token: string): Promise<ExtensionToken> {
+  const res = await fetch(`${base(url)}/api/v1/devices/extension-token`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<ExtensionToken>(res, 'mint extension token')
+}
+
 export async function updateDeviceName(url: string, token: string, name: string): Promise<Me> {
   const res = await fetch(`${base(url)}/api/v1/me`, {
     method: 'PATCH',

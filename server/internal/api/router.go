@@ -18,7 +18,7 @@ import (
 
 // New returns the root HTTP handler. webDir may be empty (API-only mode).
 // serverURLs is the ordered list of reachable base URLs for this server.
-func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, cacheDir string, extractorDir string, ytdlp config.YTDLPSection, llmCfg ...config.LLMSection) http.Handler {
+func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, serverURLs []string, cacheDir string, extractorDir string, ytdlp config.YTDLPSection, llmCfg ...config.LLMSection) http.Handler {
 	q := store.New(db)
 
 	var llmClient llm.Client
@@ -37,6 +37,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("PATCH /api/v1/me", handlePatchMe(q))
 	mux.HandleFunc("GET /api/v1/devices", handleListDevices(q))
 	mux.HandleFunc("DELETE /api/v1/devices/{id}", handleRevokeDevice(q))
+	mux.HandleFunc("POST /api/v1/devices/extension-token", handleMintExtensionToken(q, serverURLs))
 	mux.HandleFunc("POST /api/v1/admin/pair/new", localhostOnly((&adminPairHandler{q: q, serverURLs: serverURLs}).ServeHTTP))
 
 	devH := &adminDevicesHandler{q: q}
@@ -146,6 +147,19 @@ func New(ctx context.Context, db *sql.DB, webDir string, serverURLs []string, ca
 	mux.HandleFunc("GET /api/v1/highlights/{id}/tags", bearerAuth(q, hlTagsH.list))
 	mux.HandleFunc("POST /api/v1/highlights/{id}/tags", bearerAuth(q, hlTagsH.add))
 	mux.HandleFunc("DELETE /api/v1/highlights/{id}/tags/{tag_id}", bearerAuth(q, hlTagsH.remove))
+
+	if extensionZip != "" {
+		mux.HandleFunc("GET /extension/sam-chrome.zip", func(w http.ResponseWriter, r *http.Request) {
+			if _, err := os.Stat(extensionZip); err != nil {
+				writeErr(w, http.StatusNotFound, "extension bundle not built")
+				return
+			}
+			w.Header().Set("Content-Type", "application/zip")
+			w.Header().Set("Content-Disposition", `attachment; filename="sam-chrome.zip"`)
+			http.ServeFile(w, r, extensionZip)
+		})
+		logAPI.Printf("serving extension bundle from %s", extensionZip)
+	}
 
 	if webDir != "" {
 		if _, err := os.Stat(webDir); err == nil {

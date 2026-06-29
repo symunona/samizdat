@@ -102,9 +102,9 @@ webview-build:
 
 [group('dev')]
 [doc('Build app + server, restart background server (dev mode, HTTP)')]
-dev: _check-no-service webview-build build-server build-cli build-app-web
+dev: _check-no-service webview-build build-server build-cli build-app-web build-clipper
     @rm -rf /tmp/playwright_chromiumdev_profile-* /tmp/playwright-artifacts-* 2>/dev/null || true
-    nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist > /tmp/samizdat-{{_dev_port}}.log 2>&1 &
+    nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist --extension-zip clipper/dist/sam-chrome.zip > /tmp/samizdat-{{_dev_port}}.log 2>&1 &
     @PORT={{_dev_port}}; for i in $(seq 1 20); do ss -tlnp | grep -q ":$PORT" && break; sleep 0.5; done && echo "server started on :{{_dev_port}}, log: /tmp/samizdat-{{_dev_port}}.log"
     @./cli/bin/sam {{_config_flag}} connect
 
@@ -119,9 +119,9 @@ app:
     cd app && npx expo start 2>/dev/null || echo "app/ not initialized yet"
 
 [group('dev')]
-[doc('Build & load the clipper extension (dev)')]
-clipper:
-    cd clipper && npm run dev 2>/dev/null || echo "clipper/ not initialized yet"
+[doc('Build the clipper extension, print the load-unpacked path')]
+clipper: build-clipper
+    @echo "Load unpacked in Chrome → chrome://extensions → 'Load unpacked' → $(pwd)/clipper/dist/unpacked"
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
@@ -145,9 +145,9 @@ build-app-web:
     cd app && pnpm expo export --platform web --output-dir dist --clear
 
 [group('build')]
-[doc('Package the clipper extension')]
+[doc('Package the clipper extension (dist/unpacked + dist/sam-chrome.zip)')]
 build-clipper:
-    cd clipper && npm run build 2>/dev/null || echo "clipper/ not initialized yet"
+    cd clipper && npm run build
 
 # ── Quality ───────────────────────────────────────────────────────────────────
 

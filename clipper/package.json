@@ -1,0 +1,11 @@
+{
+  "name": "samizdat-clipper",
+  "version": "0.1.0",
+  "description": "Save to Sam — Chrome MV3 extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "icons": "node gen-icons.js",
+    "build": "node build.js"
+  }
+}

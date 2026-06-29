@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
+import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, ApiError } from '../../src/api'
+import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, mintExtensionToken, ApiError } from '../../src/api'
 import type { DeviceInfo, AppSettings } from '../../src/api'
 import { fetchYtdlpProxyStatus } from '../../src/proxyStatus'
 import type { YtdlpProxyStatus } from '../../src/proxyStatus'
@@ -68,6 +68,9 @@ export default function SettingsScreen() {
   const [deviceNameSaved, setDeviceNameSaved] = useState(false)
   const deviceNameTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const deviceNameInitialized = useRef(false)
+  const isWeb = Platform.OS === 'web'
+  const [extStatus, setExtStatus] = useState<'not_installed' | 'unpaired' | 'connected'>('not_installed')
+  const [extConnecting, setExtConnecting] = useState(false)
 
   const handleUnauthorized = useCallback(async () => {
     await logout()
@@ -137,6 +140,23 @@ export default function SettingsScreen() {
       loadUrlLastUsedMap().then(setUrlLastUsed)
     }
   }, [status, loadDevices, loadSettings])
+
+  // Extension install/pair status comes from a data-attr the content script
+  // injects on this page (web only). Poll it and react to the pair ack.
+  useEffect(() => {
+    if (!isWeb) return
+    const read = () => {
+      const m = (document?.documentElement?.dataset as { samExt?: string })?.samExt
+      setExtStatus(!m ? 'not_installed' : m.endsWith(':paired') ? 'connected' : 'unpaired')
+    }
+    read()
+    const id = setInterval(read, 1500)
+    const onMsg = (e: MessageEvent) => {
+      if ((e?.data as { type?: string })?.type === 'samizdat-extension-paired') read()
+    }
+    window.addEventListener('message', onMsg)
+    return () => { clearInterval(id); window.removeEventListener('message', onMsg) }
+  }, [isWeb])
 
   useEffect(() => {
     if (serverInfo?.name && !deviceNameInitialized.current) {
@@ -239,7 +259,27 @@ export default function SettingsScreen() {
     }
   }
 
+  function handleInstallExtension() {
+    if (activeUrl) Linking.openURL(`${activeUrl}/extension/sam-chrome.zip`)
+  }
+
+  async function handleConnectExtension() {
+    if (!activeUrl || !token) return
+    setExtConnecting(true)
+    try {
+      const { device_token } = await mintExtensionToken(activeUrl, token)
+      // Content script (isolated world, same origin) receives this and stores it.
+      window.postMessage({ type: 'samizdat-extension-token', token: device_token }, window.location.origin)
+      toast('Connecting extension…', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to connect extension', 'error')
+    } finally {
+      setTimeout(() => setExtConnecting(false), 1200)
+    }
+  }
+
   const dotColor = status === 'connected' ? theme.colors.online : status === 'disconnected' ? theme.colors.error : theme.colors.placeholder
+  const extDotColor = extStatus === 'connected' ? theme.colors.online : extStatus === 'unpaired' ? theme.colors.accent : theme.colors.placeholder
 
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.content}>
@@ -448,6 +488,49 @@ export default function SettingsScreen() {
         )}
       </View>
 
+      {/* Browser Extension (web only) */}
+      {isWeb && (
+        <View style={s.card}>
+          <Text style={s.cardTitle}>Browser Extension</Text>
+          <Text style={s.cardSubtitle}>“Save to Sam” — save the current page from your Chrome toolbar</Text>
+          <View style={s.statusRow}>
+            <View style={[s.dot, { backgroundColor: extDotColor }]} />
+            <Text style={[s.statusText, { fontSize: 14, color: extDotColor }]}>
+              {extStatus === 'connected' ? 'Installed & connected' : extStatus === 'unpaired' ? 'Installed — not connected' : 'Not installed'}
+            </Text>
+          </View>
+
+          {extStatus === 'unpaired' && (
+            <Pressable
+              onPress={handleConnectExtension}
+              disabled={extConnecting}
+              style={({ pressed }) => [s.refreshBtn, { alignSelf: 'flex-start' }, pressed && s.refreshBtnPressed, extConnecting && s.refreshBtnDisabled]}
+            >
+              {extConnecting
+                ? <ActivityIndicator size="small" color={theme.colors.accent} />
+                : <Text style={s.refreshBtnText}>Connect extension</Text>}
+            </Pressable>
+          )}
+
+          {extStatus !== 'connected' && (
+            <>
+              <Pressable
+                onPress={handleInstallExtension}
+                style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
+              >
+                <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download extension (.zip)</Text>
+              </Pressable>
+              <Text style={s.extSteps}>
+                1. Unzip the download.{'\n'}
+                2. Open chrome://extensions and turn on Developer mode.{'\n'}
+                3. “Load unpacked” → select the unzipped folder.{'\n'}
+                4. Come back here and click “Connect extension”.
+              </Text>
+            </>
+          )}
+        </View>
+      )}
+
       {/* This Device */}
       <View style={s.card}>
         <Text style={s.cardTitle}>This Device</Text>
@@ -632,5 +715,6 @@ function buildStyles(t: Theme) {
     deviceNameIndicator: { marginLeft: 4 },
     deviceNameSaved: { color: t.colors.online, fontSize: 14, fontWeight: '700', marginLeft: 4 },
     llmCostValue: { color: t.colors.accent, fontWeight: '700' },
+    extSteps: { color: t.colors.muted, fontSize: 12, lineHeight: 18, marginTop: t.spacing.xs },
   })
 }

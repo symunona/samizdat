@@ -5,8 +5,56 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/symunona/samizdat/server/internal/auth"
 	"github.com/symunona/samizdat/server/internal/store"
 )
+
+// handleMintExtensionToken mints a fresh device token for the browser extension.
+// Authed by an existing device's Bearer token (the web app's): any paired device
+// is the owner (single-user model), so it may provision the extension's device.
+func handleMintExtensionToken(q *store.Queries, serverURLs []string) http.HandlerFunc {
+	return bearerAuth(q, func(w http.ResponseWriter, r *http.Request) {
+		plain, hash, err := auth.NewToken()
+		if err != nil {
+			logDevs.Errorf("new token: %v", err)
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		maxRev, err := q.MaxDeviceRev(r.Context())
+		if err != nil {
+			logDevs.Errorf("max device rev: %v", err)
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		var nextRev int64 = 1
+		if v, ok := maxRev.(int64); ok {
+			nextRev = v + 1
+		}
+
+		devID := uuid.New().String()
+		now := time.Now().UTC().Format(time.RFC3339)
+		if _, err := q.InsertDevice(r.Context(), store.InsertDeviceParams{
+			ID:        devID,
+			Name:      "Chrome extension",
+			TokenHash: hash,
+			CreatedAt: now,
+			UpdatedAt: now,
+			Rev:       nextRev,
+		}); err != nil {
+			logDevs.Errorf("insert extension device: %v", err)
+			writeErr(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"device_token": plain,
+			"device_id":    devID,
+			"server_urls":  serverURLs,
+		})
+	})
+}
 
 func handleListDevices(q *store.Queries) http.HandlerFunc {
 	return bearerAuth(q, func(w http.ResponseWriter, r *http.Request) {

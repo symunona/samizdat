@@ -30,8 +30,9 @@ type YTDLPSection struct {
 }
 
 type ServerSection struct {
-	Port   int    `toml:"port"`
-	WebDir string `toml:"web_dir"`
+	Port         int    `toml:"port"`
+	WebDir       string `toml:"web_dir"`
+	ExtensionZip string `toml:"extension_zip"`
 }
 
 type LLMSection struct {

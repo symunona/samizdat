@@ -2,7 +2,7 @@
 created: 2026-06-29
 topic: Browser extension — "Save to Sam" (MV3)
 excerpt: Minimal MV3 extension. Toolbar button saves current tab to Sam via scrape_url job; checks dedup on page load and flips icon to a checkmark; click on saved page opens the Sam document in a new tab.
-status: spec — not started
+status: done 2026-06-29 — server + extension + app settings shipped on branch feat/clipper-save-to-sam. Mint endpoint corrected to Bearer auth (no cookie sessions exist); zip served from disk. Server contract curl-verified; app card/auto-pair verified via agent-browser. Extension runtime not browser-tested (headless --load-extension unreliable) — verified by code review + endpoint tests.
 ---
 
 # Browser extension — "Save to Sam" (minimal)
