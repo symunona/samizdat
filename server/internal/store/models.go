@@ -134,6 +134,7 @@ type Job struct {
 	RunAfter    string  `json:"run_after"`
 	LastError   string  `json:"last_error"`
 	Result      string  `json:"result"`
+	DurationMs  int64   `json:"duration_ms"`
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
 	Rev         int64   `json:"rev"`

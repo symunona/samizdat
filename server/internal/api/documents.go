@@ -82,7 +82,17 @@ func (h *documentsHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	writeJSON(w, http.StatusOK, doc)
+	// Attach the originating scrape job's execution time (capture time). 0 when
+	// no scrape job is recorded (e.g. older documents or feed imports).
+	captureMs, err := h.q.GetScrapeDurationByDocument(r.Context(), doc.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		store.Document
+		CaptureMs int64 `json:"capture_ms"`
+	}{Document: doc, CaptureMs: captureMs})
 }
 
 func (h *documentsHandler) delete(w http.ResponseWriter, r *http.Request) {

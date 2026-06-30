@@ -61,10 +61,18 @@ WHERE id = (
 RETURNING *;
 
 -- name: MarkJobDone :exec
-UPDATE jobs SET status = 'done', result = ?, updated_at = ? WHERE id = ?;
+UPDATE jobs SET status = 'done', result = ?, duration_ms = ?, updated_at = ? WHERE id = ?;
 
 -- name: MarkJobFailed :exec
-UPDATE jobs SET status = ?, attempts = ?, run_after = ?, updated_at = ? WHERE id = ?;
+UPDATE jobs SET status = ?, attempts = ?, run_after = ?, duration_ms = ?, updated_at = ? WHERE id = ?;
+
+-- name: GetScrapeDurationByDocument :one
+-- Execution time of the most recent (non-deleted) scrape_url job that produced
+-- this document. Used to show "Capture time" on the document metadata panel.
+SELECT duration_ms FROM jobs
+WHERE kind = 'scrape_url' AND deleted_at IS NULL
+  AND json_valid(result) AND json_extract(result, '$.document_id') = ?
+ORDER BY updated_at DESC LIMIT 1;
 
 -- name: ResetStuckJobs :exec
 -- Reset jobs stuck in 'running' for longer than the given cutoff time back to 'queued'

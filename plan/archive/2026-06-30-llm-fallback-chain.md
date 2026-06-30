@@ -2,7 +2,7 @@
 created: 2026-06-30
 topic: LLM transport-only fallback chain (primary → ordered fallbacks)
 excerpt: Wrap the provider-agnostic llm.Client in an ordered fallback chain. When the primary provider (e.g. a local Ollama that dies) fails at the transport level — connection refused, timeout, DNS, or 5xx — try the next configured provider (e.g. Anthropic Haiku). Real API errors (4xx) propagate immediately without burning fallbacks.
-status: in-progress
+status: implemented — awaiting user check (left on branch feat/llm-fallback-chain, not merged)
 ---
 
 # LLM transport-only fallback chain
@@ -91,3 +91,7 @@ or a `fallbackClient` when `Fallback` is non-empty.
 
 ## Status log
 - 2026-06-30: plan written.
+- 2026-06-30: implemented on `feat/llm-fallback-chain` (commit f941fff). `go test ./internal/llm/...`
+  green (fall-through, propagate-on-4xx, all-fail). `just build` green; no new lint issues from
+  these files (global linter pre-broken on main). Redeployed: `just build` + `just restart`
+  (user systemd `samizdat-sam`); service healthy (HTTP 200, stable). Left unmerged for user review.

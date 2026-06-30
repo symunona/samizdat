@@ -113,6 +113,7 @@ export type Document = {
   transcript?: string
   annotation_count?: number
   highlight_count?: number
+  capture_ms?: number
   created_at: string
   updated_at: string
   rev: number
@@ -369,6 +370,7 @@ export type Job = {
   run_after: string
   last_error: string
   result: string
+  duration_ms: number
   created_at: string
   updated_at: string
   deleted_at?: string | null

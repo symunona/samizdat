@@ -626,6 +626,18 @@ export default function DocumentViewer() {
               <Text style={s.metaLabel}>Scraped</Text>
               <Text style={s.metaValue}>{new Date(doc.fetched_at).toLocaleString()}</Text>
             </View>
+            {!!doc.capture_ms && doc.capture_ms > 0 ? (
+              <View style={s.metaRow}>
+                <Text style={s.metaLabel}>Capture time</Text>
+                <Text style={s.metaValue}>
+                  {doc.capture_ms < 1000
+                    ? `${doc.capture_ms}ms`
+                    : doc.capture_ms < 60000
+                      ? `${(doc.capture_ms / 1000).toFixed(1)}s`
+                      : `${Math.floor(doc.capture_ms / 60000)}m${Math.round((doc.capture_ms % 60000) / 1000)}s`}
+                </Text>
+              </View>
+            ) : null}
             <View style={s.metaRow}>
               <Text style={s.metaLabel}>Source</Text>
               {sourceFeed ? (

@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     run_after   TEXT    NOT NULL,
     last_error  TEXT    NOT NULL DEFAULT '',
     result      TEXT    NOT NULL DEFAULT '',
+    duration_ms INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,
     rev         INTEGER NOT NULL DEFAULT 0,
@@ -371,6 +372,8 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE documents ADD COLUMN media_metadata TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE documents ADD COLUMN transcript TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE annotations ADD COLUMN media_ts_ms INTEGER NOT NULL DEFAULT 0`,
+		// per-attempt execution time (capture/download/pipeline-step), milliseconds
+		`ALTER TABLE jobs ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {

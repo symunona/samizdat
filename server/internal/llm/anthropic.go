@@ -45,12 +45,16 @@ func (c *anthropicClient) Complete(ctx context.Context, model string, messages [
 
 	resp, err := llmHTTPClient.Do(req)
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("anthropic request: %w", err)
+		return "", Usage{}, transportErr(fmt.Errorf("anthropic request: %w", err))
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", Usage{}, fmt.Errorf("anthropic %d: %s", resp.StatusCode, string(data))
+		err := fmt.Errorf("anthropic %d: %s", resp.StatusCode, string(data))
+		if resp.StatusCode >= 500 {
+			return "", Usage{}, transportErr(err)
+		}
+		return "", Usage{}, err
 	}
 
 	var out struct {

@@ -48,12 +48,16 @@ func (c *openAICompatClient) Complete(ctx context.Context, model string, message
 
 	resp, err := llmHTTPClient.Do(req)
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("openai_compat request: %w", err)
+		return "", Usage{}, transportErr(fmt.Errorf("openai_compat request: %w", err))
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", Usage{}, fmt.Errorf("openai_compat %d: %s", resp.StatusCode, string(data))
+		err := fmt.Errorf("openai_compat %d: %s", resp.StatusCode, string(data))
+		if resp.StatusCode >= 500 {
+			return "", Usage{}, transportErr(err)
+		}
+		return "", Usage{}, err
 	}
 
 	var out struct {

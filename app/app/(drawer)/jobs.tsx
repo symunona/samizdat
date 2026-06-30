@@ -53,6 +53,16 @@ function kindLabel(kind: string): string {
   return kind.replace(/_/g, ' ')
 }
 
+// Human-readable execution time: 1.2s, 850ms, 2m3s.
+function formatDuration(ms: number): string {
+  if (ms <= 0) return ''
+  if (ms < 1000) return `${ms}ms`
+  const s = ms / 1000
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)}s`
+  const m = Math.floor(s / 60)
+  return `${m}m${Math.round(s % 60)}s`
+}
+
 // shortModel collapses a model id to a compact badge label.
 // claude-opus-4-8 → opus · claude-haiku-4-5-20251001 → haiku · others → first segment.
 function shortModel(model: string): string {
@@ -500,6 +510,9 @@ export default function JobsScreen() {
           {!!job.llm_cost_usd && job.llm_cost_usd > 0 && (
             <Text style={s.costText}>${job.llm_cost_usd < 0.01 ? '<0.01' : job.llm_cost_usd.toFixed(2)}</Text>
           )}
+          {job.duration_ms > 0 && (job.status === 'done' || job.status === 'dead') && (
+            <Text style={s.durationText}>⏱ {formatDuration(job.duration_ms)}</Text>
+          )}
           <Text style={s.ageText}>{formatAge(job.updated_at)}</Text>
           {job.status === 'queued' && queuePos != null && (
             <Text style={s.queueLabel}>#{queuePos} queued</Text>
@@ -860,6 +873,7 @@ function buildStyles(t: Theme) {
     modelBadge: { backgroundColor: t.colors.accent + '22', borderRadius: t.radius.sm, paddingHorizontal: 6, paddingVertical: 1, flexShrink: 0 },
     modelBadgeText: { color: t.colors.accent, fontSize: 10, fontWeight: '700', fontFamily: 'monospace' },
     costText: { color: t.colors.placeholder, fontSize: 11, fontFamily: 'monospace', flexShrink: 0 },
+    durationText: { color: t.colors.placeholder, fontSize: 11, fontFamily: 'monospace', flexShrink: 0 },
     ageText: { color: t.colors.placeholder, fontSize: 11 },
     queueLabel: { color: t.colors.placeholder, fontSize: 10, fontFamily: 'monospace' },
     collapseBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingLeft: 4 },

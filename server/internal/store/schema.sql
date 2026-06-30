@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     run_after      TEXT    NOT NULL,
     last_error     TEXT    NOT NULL DEFAULT '',
     result         TEXT    NOT NULL DEFAULT '',
+    duration_ms    INTEGER NOT NULL DEFAULT 0,
     created_at     TEXT    NOT NULL,
     updated_at     TEXT    NOT NULL,
     rev            INTEGER NOT NULL DEFAULT 0,

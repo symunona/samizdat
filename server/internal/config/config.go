@@ -40,6 +40,13 @@ type LLMSection struct {
 	APIKey       string `toml:"api_key"`
 	BaseURL      string `toml:"base_url"`      // for openai_compat: e.g. "http://localhost:11434/v1"
 	DefaultModel string `toml:"default_model"` // fallback when step config omits model
+
+	// Fallback providers tried in order when the primary fails at the transport
+	// level (connection refused, timeout, DNS, 5xx) — e.g. a local Ollama that
+	// dies → Anthropic Haiku. Real API errors (4xx) propagate without falling
+	// through. Each fallback entry's DefaultModel is the model it serves with,
+	// since the caller's tier model won't exist on a different provider.
+	Fallback []LLMSection `toml:"fallback"`
 }
 
 func DefaultPath() (string, error) {

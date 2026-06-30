@@ -5,10 +5,26 @@ host = "samizdat.example.com"   # or "<ip>.sslip.io" — CertMagic certs this ho
 data_dir = "/var/lib/samizdat"  # holds app.db + vault/ + certs/
 dev = false                     # true = plain HTTP on localhost:8787, no cert
 
-# LLM providers (wired in M2) — prefer environment variables for keys:
-# [providers]
-# anthropic_api_key = ""        # or env ANTHROPIC_API_KEY
-# openai_base_url   = ""        # e.g. http://localhost:11434/v1 (Ollama)
+# LLM provider — prefer environment variables for keys (ANTHROPIC_API_KEY / OPENAI_API_KEY).
+# [llm]
+# provider      = "anthropic"                 # or "openai_compat" (OpenAI cloud / Ollama / LM Studio)
+# api_key       = ""                           # or env ANTHROPIC_API_KEY / OPENAI_API_KEY
+# base_url      = "http://localhost:11434/v1"  # openai_compat only (Ollama default)
+# default_model = "claude-haiku-4-5-20251001"
+
+# Fallback chain: when the primary fails at the TRANSPORT level (connection refused,
+# timeout, DNS, or 5xx) the next provider is tried in order. Real API errors (4xx) do
+# NOT fall through. Use it to run a local Ollama as primary and fall back to Haiku when
+# the box is down. Set the primary's step/default model to an Ollama model name; each
+# fallback serves with its own `default_model`.
+# [llm]
+# provider      = "openai_compat"
+# base_url      = "http://localhost:11434/v1"
+# default_model = "llama3.1"
+#
+# [[llm.fallback]]
+# provider      = "anthropic"                  # api_key from ANTHROPIC_API_KEY env
+# default_model = "claude-haiku-4-5-20251001"
 
 # YouTube / podcast ingestion via yt-dlp. A datacenter VPS IP is bot-blocked by
 # YouTube, so set `proxy` to a residential proxy (e.g. a home node over Tailscale

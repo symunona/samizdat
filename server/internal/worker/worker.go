@@ -199,7 +199,7 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	elapsed := time.Since(start).Round(time.Millisecond)
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err == nil {
-		if e := w.q.MarkJobDone(ctx, store.MarkJobDoneParams{Result: result, UpdatedAt: now, ID: job.ID}); e != nil {
+		if e := w.q.MarkJobDone(ctx, store.MarkJobDoneParams{Result: result, DurationMs: elapsed.Milliseconds(), UpdatedAt: now, ID: job.ID}); e != nil {
 			logWorker.Errorf("mark done: %v", e)
 		}
 		logWorker.Printf("job %s (%s) done in %s  result=%s", job.ID[:8], job.Kind, elapsed, result)
@@ -228,11 +228,12 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 		job.ID[:8], job.Kind, status, backoff.Round(time.Second), runAfter)
 
 	if e := w.q.MarkJobFailed(ctx, store.MarkJobFailedParams{
-		Status:    status,
-		Attempts:  job.Attempts,
-		RunAfter:  runAfter,
-		UpdatedAt: now,
-		ID:        job.ID,
+		Status:     status,
+		Attempts:   job.Attempts,
+		RunAfter:   runAfter,
+		DurationMs: elapsed.Milliseconds(),
+		UpdatedAt:  now,
+		ID:         job.ID,
 	}); e != nil {
 		logWorker.Errorf("mark failed: %v", e)
 	}

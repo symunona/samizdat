@@ -87,8 +87,7 @@ export default function AnnotationPanel({ visible, mode, existing, onSave, onDel
             value={note}
             onChangeText={setNote}
             autoFocus
-            returnKeyType="done"
-            blurOnSubmit
+            blurOnSubmit={false}
           />
 
           {/* Footer row */}
