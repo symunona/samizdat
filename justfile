@@ -347,6 +347,35 @@ save-debug-session:
     echo "Session saved: $STATE"
 
 [group('debug')]
+[doc('Mint/reuse the single robot-automated-ui-tester device; cache token + agent-browser state for UI tests')]
+test-device:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PORT="{{_dev_port}}"
+    URL="http://localhost:$PORT"
+    OUT="{{justfile_directory()}}/tmp/sessions/robot-ui-tester.json"
+    STATE="{{justfile_directory()}}/tmp/sessions/robot-ui-tester.state.json"
+    mkdir -p "{{justfile_directory()}}/tmp/sessions"
+    RESP=$(curl -fsS -X POST "$URL/api/v1/admin/test-device") || { echo "Is 'just dev' running on :$PORT?" >&2; exit 1; }
+    echo "$RESP" > "$OUT"
+    # Build a minimal agent-browser state preloading the robot token into localStorage,
+    # so `just robot-browser` boots already connected — no pairing, no new device row.
+    OUT="$OUT" STATE="$STATE" URL="$URL" python3 -c 'import json,os; resp=json.load(open(os.environ["OUT"])); url=os.environ["URL"]; conn={"token":resp["device_token"],"deviceId":resp["device_id"],"serverUrls":resp.get("server_urls") or [url]}; state={"cookies":[],"origins":[{"origin":url,"localStorage":[{"name":"samizdat_connection","value":json.dumps(conn)},{"name":"samizdat_last_url","value":url}]}]}; json.dump(state,open(os.environ["STATE"],"w"),indent=2); print("device_id =",resp["device_id"])'
+    echo "Token cached: $OUT"
+    echo "Browser state: $STATE  →  just robot-browser"
+
+[group('debug')]
+[doc('Open app in agent-browser as the robot-automated-ui-tester device (runs just test-device first)')]
+robot-browser: test-device
+    #!/usr/bin/env bash
+    set -euo pipefail
+    STATE="{{justfile_directory()}}/tmp/sessions/robot-ui-tester.state.json"
+    URL="${URL:-http://localhost:{{_dev_port}}}"
+    export AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:---no-sandbox}"
+    agent-browser close --all 2>/dev/null || true
+    agent-browser --state "$STATE" open "$URL"
+
+[group('debug')]
 [doc('Launch Chrome with a named session from tmp/sessions/<name>.json (creates tmp/ if missing)')]
 browser-session name="default":
     #!/usr/bin/env bash

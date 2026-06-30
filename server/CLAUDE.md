@@ -38,6 +38,7 @@ server/
       pair.go               # POST /api/v1/pair            (public, code→token)
       me.go                 # GET  /api/v1/me              (bearer-authed)
       admin_pair.go         # POST /api/v1/admin/pair/new  (passphrase + loopback only)
+      admin_test_device.go  # POST /api/v1/admin/test-device (loopback only) — idempotent: one reusable robot device, rotates its token
       media.go              # GET  /api/v1/media/{id}      (asset serving)
                             # GET  /api/v1/documents/{id}/audio (audio streaming)
       ytdlp_status.go       # GET  /api/v1/ytdlp/status    (bearer-authed, proxy health)

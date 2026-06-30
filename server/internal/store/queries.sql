@@ -12,6 +12,16 @@ LIMIT 1;
 SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at FROM devices
 WHERE id = ? AND deleted_at IS NULL;
 
+-- name: GetDeviceByName :one
+SELECT * FROM devices
+WHERE name = ? AND deleted_at IS NULL
+ORDER BY created_at
+LIMIT 1;
+
+-- name: UpdateDeviceToken :exec
+UPDATE devices SET token_hash = ?, updated_at = ?, rev = ?
+WHERE id = ? AND deleted_at IS NULL;
+
 -- name: ListDevices :many
 SELECT * FROM devices WHERE deleted_at IS NULL ORDER BY created_at;
 

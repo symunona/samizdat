@@ -53,6 +53,10 @@ When feature is larger commit plan to main, then branch off, do smaller commits,
 ## Testing
 Craft one time E2E self-tests before starting - how you will make sure the feature works when the work is done!
 ALWAYS TEST YOURSELF VIA agent-browser!
+**Never pair a fresh device for UI tests** — it spams the dev DB. Run `just robot-browser`
+(or `just test-device`) which mints/reuses the single `robot-automated-ui-tester` device via
+the idempotent `POST /api/v1/admin/test-device` endpoint and preloads its token into the
+browser state. One row, reused forever.
 If there are inconsistencies in the specs, raise it to the user, before starting to implement.
 Always run linter before you finish a job and fix anything that comes up..
 Maintain the global linter.

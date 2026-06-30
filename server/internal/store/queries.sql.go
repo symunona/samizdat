@@ -431,6 +431,29 @@ func (q *Queries) GetDevice(ctx context.Context, id string) (GetDeviceRow, error
 	return i, err
 }
 
+const getDeviceByName = `-- name: GetDeviceByName :one
+SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at, last_seen_at FROM devices
+WHERE name = ? AND deleted_at IS NULL
+ORDER BY created_at
+LIMIT 1
+`
+
+func (q *Queries) GetDeviceByName(ctx context.Context, name string) (Device, error) {
+	row := q.db.QueryRowContext(ctx, getDeviceByName, name)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.TokenHash,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+		&i.LastSeenAt,
+	)
+	return i, err
+}
+
 const getDeviceByTokenHash = `-- name: GetDeviceByTokenHash :one
 SELECT id, name, token_hash, created_at, updated_at, rev, deleted_at, last_seen_at FROM devices
 WHERE token_hash = ? AND deleted_at IS NULL
@@ -3986,6 +4009,28 @@ type UpdateDeviceNameParams struct {
 
 func (q *Queries) UpdateDeviceName(ctx context.Context, arg UpdateDeviceNameParams) error {
 	_, err := q.db.ExecContext(ctx, updateDeviceName, arg.Name, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const updateDeviceToken = `-- name: UpdateDeviceToken :exec
+UPDATE devices SET token_hash = ?, updated_at = ?, rev = ?
+WHERE id = ? AND deleted_at IS NULL
+`
+
+type UpdateDeviceTokenParams struct {
+	TokenHash string `json:"token_hash"`
+	UpdatedAt string `json:"updated_at"`
+	Rev       int64  `json:"rev"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) UpdateDeviceToken(ctx context.Context, arg UpdateDeviceTokenParams) error {
+	_, err := q.db.ExecContext(ctx, updateDeviceToken,
+		arg.TokenHash,
+		arg.UpdatedAt,
+		arg.Rev,
+		arg.ID,
+	)
 	return err
 }
 

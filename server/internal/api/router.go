@@ -39,6 +39,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, se
 	mux.HandleFunc("DELETE /api/v1/devices/{id}", handleRevokeDevice(q))
 	mux.HandleFunc("POST /api/v1/devices/extension-token", handleMintExtensionToken(q, serverURLs))
 	mux.HandleFunc("POST /api/v1/admin/pair/new", localhostOnly((&adminPairHandler{q: q, serverURLs: serverURLs}).ServeHTTP))
+	mux.HandleFunc("POST /api/v1/admin/test-device", localhostOnly((&adminTestDeviceHandler{q: q, serverURLs: serverURLs}).ServeHTTP))
 
 	devH := &adminDevicesHandler{q: q}
 	mux.HandleFunc("GET /api/v1/admin/devices", localhostOnly(devH.list))
