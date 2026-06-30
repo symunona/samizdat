@@ -1,18 +1,21 @@
 [Unit]
 Description=Samizdat server (@INSTANCE@)
 After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=simple
-User=@USER@
-Environment=HOME=@HOME@
 ExecStart=@BIN@ serve --config @CFG@ --webdir @WEBDIR@@EXTZIP@
 WorkingDirectory=@REPO@
 Restart=on-failure
 RestartSec=3
-# Bind :443 without running as root (needed for TLS post-M1):
-AmbientCapabilities=CAP_NET_BIND_SERVICE
+# User service (systemctl --user) so restarts need no sudo. Lingering keeps it
+# running across logout/reboot (loginctl enable-linger). Runs as the login user.
+#
+# TLS/:443 is post-M1; the server currently binds an unprivileged port over
+# plain HTTP. When TLS lands, a user service cannot hold CAP_NET_BIND_SERVICE —
+# grant low-port binding once with either:
+#   sudo sysctl -w net.ipv4.ip_unprivileged_port_start=443   (+ /etc/sysctl.d)
+#   or sudo setcap cap_net_bind_service=+ep @BIN@             (re-run after each build)
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

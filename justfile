@@ -68,7 +68,10 @@ _check-just:
 _check-no-service:
     @PORT={{_dev_port}}; \
     if ss -tlnp 2>/dev/null | grep -q ":$PORT"; then \
-        if systemctl is-active --quiet samizdat 2>/dev/null; then \
+        if systemctl --user is-active --quiet samizdat-{{_instance}} 2>/dev/null; then \
+            echo "samizdat-{{_instance}} user service running — stopping for dev mode..."; \
+            systemctl --user stop samizdat-{{_instance}} && echo "Service stopped."; \
+        elif systemctl is-active --quiet samizdat 2>/dev/null; then \
             echo "samizdat service running — stopping for dev mode..."; \
             sudo systemctl stop samizdat && echo "Service stopped."; \
         elif systemctl is-active --quiet samizdat-{{_instance}} 2>/dev/null; then \
@@ -91,6 +94,7 @@ _check-no-service:
 _check-no-dev:
     @PORT={{_dev_port}}; \
     if ss -tlnp 2>/dev/null | grep -q ":$PORT" \
+        && ! systemctl --user is-active --quiet samizdat-{{_instance}} 2>/dev/null \
         && ! systemctl is-active --quiet samizdat 2>/dev/null \
         && ! systemctl is-active --quiet samizdat-{{_instance}} 2>/dev/null; then \
         echo "ERROR: dev server already running on :$PORT — stop it before installing the service"; \
@@ -245,7 +249,7 @@ update-landing:
 # ── Deploy ────────────────────────────────────────────────────────────────────
 
 [group('deploy')]
-[doc('Build (server+cli+web+extension), symlink CLIs, install/start a per-instance systemd service (needs sudo)')]
+[doc('Build (server+cli+web+extension), symlink CLIs, install/start a per-instance user systemd service (CLI symlinks need sudo)')]
 install: _check-no-dev build-app-web build-clipper install-bins
     @echo ""
     bash scripts/install-service.sh
@@ -254,8 +258,8 @@ install: _check-no-dev build-app-web build-clipper install-bins
     @echo "  sam      → $(readlink /usr/local/bin/sam)"
     @echo "  samizdat → $(readlink /usr/local/bin/samizdat)"
     @echo ""
-    @echo "Multiple checkouts run as separate services (samizdat-<dir>) on their own ports."
-    @echo "Rebuild anytime: just build   (then: sudo systemctl restart samizdat-$(basename {{justfile_directory()}}))"
+    @echo "Multiple checkouts run as separate user services (samizdat-<dir>) on their own ports."
+    @echo "Rebuild anytime: just build   (then: systemctl --user restart samizdat-$(basename {{justfile_directory()}}))"
 
 [group('deploy')]
 [doc('Build + symlink the sam/samizdat CLIs to /usr/local/bin (no service, needs sudo)')]
@@ -271,14 +275,20 @@ install-bins: build
     @echo "  samizdat -> $(readlink /usr/local/bin/samizdat)"
 
 [group('deploy')]
+[doc('Restart the installed user service (no sudo) — picks up a fresh build/config')]
+restart:
+    systemctl --user restart samizdat-{{_instance}}
+    systemctl --user --no-pager status samizdat-{{_instance}} | head -5
+
+[group('deploy')]
 [doc('Configure public HTTPS reachability (domain or sslip.io)')]
 setup-public:
     bash scripts/setup-public.sh
 
 [group('deploy')]
-[doc('Tail the service logs')]
+[doc('Follow the installed user service logs')]
 service-logs:
-    journalctl -u samizdat -f --no-pager
+    journalctl --user -u samizdat-{{_instance}} -f --no-pager
 
 # ── Tooling ───────────────────────────────────────────────────────────────────
 
