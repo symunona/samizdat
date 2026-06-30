@@ -6,6 +6,8 @@ set shell := ["bash", "-uc"]
 # Port + config path read from repo-local config.toml if present, else global ~/.samizdat/config.toml
 _dev_port := `if [ -f config.toml ]; then grep -E '^\s*port\s*=' config.toml | grep -oE '[0-9]+' | head -1; else echo 8765; fi`
 _config_flag := if path_exists("config.toml") == "true" { "--config " + justfile_directory() + "/config.toml" } else { "" }
+# Per-instance service name (multi-checkout installs): samizdat-<repo dir name>
+_instance := file_name(justfile_directory())
 
 # List available recipes
 default:
@@ -69,6 +71,9 @@ _check-no-service:
         if systemctl is-active --quiet samizdat 2>/dev/null; then \
             echo "samizdat service running — stopping for dev mode..."; \
             sudo systemctl stop samizdat && echo "Service stopped."; \
+        elif systemctl is-active --quiet samizdat-{{_instance}} 2>/dev/null; then \
+            echo "samizdat-{{_instance}} service running — stopping for dev mode..."; \
+            sudo systemctl stop samizdat-{{_instance}} && echo "Service stopped."; \
         else \
             PID=$(ss -tlnp | grep ":$PORT" | grep -oP 'pid=\K[0-9]+' | head -1); \
             if [ -n "$PID" ]; then \
@@ -82,9 +87,12 @@ _check-no-service:
     fi
 
 # Fails if configured port is occupied by a non-service process (i.e. a dev server is running).
+# Our own service (legacy `samizdat` or per-instance `samizdat-<dir>`) is fine — install restarts it.
 _check-no-dev:
     @PORT={{_dev_port}}; \
-    if ss -tlnp 2>/dev/null | grep -q ":$PORT" && ! systemctl is-active --quiet samizdat 2>/dev/null; then \
+    if ss -tlnp 2>/dev/null | grep -q ":$PORT" \
+        && ! systemctl is-active --quiet samizdat 2>/dev/null \
+        && ! systemctl is-active --quiet samizdat-{{_instance}} 2>/dev/null; then \
         echo "ERROR: dev server already running on :$PORT — stop it before installing the service"; \
         exit 1; \
     fi
@@ -237,8 +245,8 @@ update-landing:
 # ── Deploy ────────────────────────────────────────────────────────────────────
 
 [group('deploy')]
-[doc('Build, symlink CLIs, install/start a per-instance systemd service (needs sudo)')]
-install: _check-no-dev install-bins
+[doc('Build (server+cli+web+extension), symlink CLIs, install/start a per-instance systemd service (needs sudo)')]
+install: _check-no-dev build-app-web build-clipper install-bins
     @echo ""
     bash scripts/install-service.sh
     @echo ""

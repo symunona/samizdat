@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=@USER@
 Environment=HOME=@HOME@
-ExecStart=@BIN@ serve --config @CFG@ --webdir @WEBDIR@
+ExecStart=@BIN@ serve --config @CFG@ --webdir @WEBDIR@@EXTZIP@
 WorkingDirectory=@REPO@
 Restart=on-failure
 RestartSec=3

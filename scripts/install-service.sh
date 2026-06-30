@@ -19,6 +19,7 @@ TMPL="$REPO_ROOT/deploy/samizdat.service.tmpl"
 BIN="$REPO_ROOT/server/bin/samizdat"
 CFG="$REPO_ROOT/config.toml"
 WEBDIR="$REPO_ROOT/app/dist"
+EXTZIP_PATH="$REPO_ROOT/clipper/dist/sam-chrome.zip"
 LEGACY_UNIT="/etc/systemd/system/samizdat.service"
 
 SERVICE="samizdat-${INSTANCE}"
@@ -66,6 +67,14 @@ if [[ ! -d "$WEBDIR" ]]; then
   echo "  (no app/dist — run 'just build-app-web'; service will run API-only until then)"
 fi
 
+# Serve the browser extension zip if it's been built (just build-clipper).
+EXTZIP=""
+if [[ -f "$EXTZIP_PATH" ]]; then
+  EXTZIP=" --extension-zip $EXTZIP_PATH"
+else
+  echo "  (no clipper/dist/sam-chrome.zip — run 'just build-clipper'; extension download disabled)"
+fi
+
 # Render the unit from the template.
 unit="$(sed \
   -e "s|@USER@|$USER_NAME|g" \
@@ -74,6 +83,7 @@ unit="$(sed \
   -e "s|@BIN@|$BIN|g" \
   -e "s|@CFG@|$CFG|g" \
   -e "s|@WEBDIR@|$WEBDIR|g" \
+  -e "s|@EXTZIP@|$EXTZIP|g" \
   -e "s|@INSTANCE@|$INSTANCE|g" \
   "$TMPL")"
 
