@@ -145,17 +145,14 @@ export default function DocumentsScreen() {
     }
   }, [activeUrl, token])
 
-  // Initial load once connected.
+  // Cheap background poll so externally-added jobs (e.g. from the clipper)
+  // surface without a reload: slow when idle, faster while jobs are pending.
   useEffect(() => {
-    if (status === 'connected' && showPending) loadPendingJobs()
-  }, [status, showPending, loadPendingJobs])
-
-  // Poll while there are pending jobs; stops once the queue drains.
-  useEffect(() => {
-    if (!showPending || pendingJobs.length === 0) return
-    const id = setInterval(loadPendingJobs, 3000)
+    if (status !== 'connected' || !showPending) return
+    loadPendingJobs()
+    const id = setInterval(loadPendingJobs, pendingJobs.length > 0 ? 3000 : 10000)
     return () => clearInterval(id)
-  }, [showPending, pendingJobs.length, loadPendingJobs])
+  }, [status, showPending, pendingJobs.length, loadPendingJobs])
 
   async function handleSubmitUrl() {
     if (!activeUrl || !token) return
