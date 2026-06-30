@@ -92,9 +92,14 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 #doc-title{font-size:1.6em;font-weight:700;color:var(--fg);margin:0 0 1em;line-height:1.3}
 
 /* Transcript segments (video/podcast documents) */
-.seg{cursor:pointer;border-radius:4px;padding:2px 6px;margin:0 -6px 0.35em;transition:background 0.2s,color 0.2s;color:var(--mu)}
+.seg{position:relative;cursor:pointer;border-radius:4px;padding:2px 6px;margin:0 -6px 0.35em;transition:background 0.2s,color 0.2s;color:var(--mu)}
 .seg:hover{background:var(--su);color:var(--fg)}
 .seg.active{background:rgba(232,116,59,0.16);color:var(--fg)}
+/* Faded per-line timestamp, revealed on hover (desktop / pointer devices only) */
+@media (hover:hover){
+.seg[data-ts]::after{content:attr(data-ts);position:absolute;top:2px;right:6px;font-size:0.78em;font-variant-numeric:tabular-nums;color:var(--mu);background:var(--su);padding:0 4px;border-radius:3px;opacity:0;transition:opacity 0.15s;pointer-events:none}
+.seg[data-ts]:hover::after{opacity:0.65}
+}
 
 /* Highlight section */
 #hl-section{border:1px solid var(--bo);border-radius:8px;margin-bottom:1.5em;overflow:hidden;background:var(--su)}

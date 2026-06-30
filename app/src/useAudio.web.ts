@@ -10,11 +10,14 @@ export function useAudio(source: string): AudioControl {
   const [playing, setPlaying] = useState(false)
   const [positionMs, setPositionMs] = useState(0)
   const [durationMs, setDurationMs] = useState(0)
+  const [rate, setRate] = useState(1)
+  const rateRef = useRef(1)
 
   useEffect(() => {
     if (!source) return
     const a = new Audio(source)
     a.preload = 'metadata'
+    a.playbackRate = rateRef.current // carry the chosen speed across source swaps
     ref.current = a
     const onTime = () => setPositionMs(a.currentTime * 1000)
     const onDur = () => setDurationMs((isFinite(a.duration) ? a.duration : 0) * 1000)
@@ -43,6 +46,7 @@ export function useAudio(source: string): AudioControl {
     playing,
     positionMs,
     durationMs,
+    rate,
     play: () => { ref.current?.play().catch(() => {}) },
     pause: () => ref.current?.pause(),
     seek: (ms: number) => {
@@ -51,6 +55,11 @@ export function useAudio(source: string): AudioControl {
       const dur = Number.isFinite(a.duration) ? a.duration : 0
       if (dur <= 0) return // metadata not loaded yet — avoid a non-finite currentTime
       a.currentTime = Math.max(0, Math.min(ms / 1000, dur))
+    },
+    setRate: (r: number) => {
+      rateRef.current = r
+      if (ref.current) ref.current.playbackRate = r
+      setRate(r)
     },
   }
 }

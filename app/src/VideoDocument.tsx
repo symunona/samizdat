@@ -50,6 +50,9 @@ type ParsedMsg = {
 // in-window fullscreen button to go bigger.
 const PLAYER_MAX_W = 720
 
+// Podcast playback speeds; tapping the speed pill cycles through them.
+const RATES = [1, 1.25, 1.5, 1.75, 2, 0.75]
+
 function fmtTime(ms: number): string {
   const total = Math.floor(ms / 1000)
   const m = Math.floor(total / 60)
@@ -80,7 +83,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
   // Audio — local file if synced, else stream from the server (public route).
   const remoteUrl = activeUrl ? audioDocUrl(activeUrl, doc.id) : ''
-  const { playing, positionMs, durationMs: audioDurMs, play, pause, seek } = useAudio(localUri ?? remoteUrl)
+  const { playing, positionMs, durationMs: audioDurMs, rate, play, pause, seek, setRate } = useAudio(localUri ?? remoteUrl)
   // Prefer the real audio duration; fall back to the metadata estimate.
   const durationMs = audioDurMs > 0 ? audioDurMs : (meta.duration_ms ?? 0)
 
@@ -248,6 +251,11 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     play()
   }, [playing, play, pause, showVideo])
 
+  const cycleRate = useCallback(() => {
+    const i = RATES.indexOf(rate)
+    setRate(RATES[(i + 1) % RATES.length])
+  }, [rate, setRate])
+
   const handleAddNote = useCallback(() => {
     pendingMediaTsRef.current = positionMs
     sendToWebView({ type: 'requestSegmentWindow', ms: positionMs })
@@ -386,6 +394,9 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
           <View style={[s.trackFill, { width: `${progressPct}%` as `${number}%` }]} />
         </Pressable>
         <Text style={s.time}>{fmtTime(durationMs)}</Text>
+        <Pressable onPress={cycleRate} style={s.speedPill} hitSlop={8}>
+          <Text style={s.speedText}>{rate}×</Text>
+        </Pressable>
         <Pressable onPress={handleAddNote} style={s.iconBtn} hitSlop={8}>
           <Ionicons name="create-outline" size={20} color={theme.colors.accent} />
         </Pressable>
@@ -447,5 +458,10 @@ function buildStyles(t: Theme) {
     trackBg: { position: 'absolute', left: 0, right: 0, height: 4, borderRadius: 2, backgroundColor: t.colors.border },
     trackFill: { position: 'absolute', left: 0, height: 4, borderRadius: 2, backgroundColor: t.colors.accent },
     iconBtn: { padding: 6, flexShrink: 0 },
+    speedPill: {
+      flexShrink: 0, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 10,
+      borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.background,
+    },
+    speedText: { color: t.colors.accent, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
   })
 }
