@@ -12,11 +12,19 @@ import {
 } from 'react-native'
 import { Link, useLocalSearchParams } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { submitScrapeJob, deleteDocument, fetchPipelineDocuments } from '../../src/api'
-import type { Document } from '../../src/api'
+import { submitScrapeJob, deleteDocument, fetchPipelineDocuments, fetchJobs } from '../../src/api'
+import type { Document, Job } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
 import { useDocuments, useSyncStatus } from '../../src/store/hooks'
 import { forceSync, requestSync } from '../../src/store/syncEngine'
+
+function jobUrl(job: Job): string {
+  try {
+    return (JSON.parse(job.payload || '{}') as { url?: string }).url ?? ''
+  } catch {
+    return ''
+  }
+}
 
 function formatDate(iso: string): string {
   try {
@@ -117,9 +125,37 @@ export default function DocumentsScreen() {
   )
 
   const [urlInput, setUrlInput] = useState('')
-  const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'queued' | 'error'>('idle')
+  const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'error'>('idle')
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const queuedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Queued / running scrape jobs, shown as pinned rows above the document list.
+  const [pendingJobs, setPendingJobs] = useState<Job[]>([])
+  const showPending = !pipelineIdParam && !feedIdParam
+
+  const loadPendingJobs = useCallback(async () => {
+    if (!activeUrl || !token) return
+    try {
+      const [running, queued] = await Promise.all([
+        fetchJobs(activeUrl, token, { status: 'running', kind: 'scrape_url' }),
+        fetchJobs(activeUrl, token, { status: 'queued', kind: 'scrape_url' }),
+      ])
+      setPendingJobs([...running, ...queued])
+    } catch {
+      // transient — keep current state, next poll retries
+    }
+  }, [activeUrl, token])
+
+  // Initial load once connected.
+  useEffect(() => {
+    if (status === 'connected' && showPending) loadPendingJobs()
+  }, [status, showPending, loadPendingJobs])
+
+  // Poll while there are pending jobs; stops once the queue drains.
+  useEffect(() => {
+    if (!showPending || pendingJobs.length === 0) return
+    const id = setInterval(loadPendingJobs, 3000)
+    return () => clearInterval(id)
+  }, [showPending, pendingJobs.length, loadPendingJobs])
 
   async function handleSubmitUrl() {
     if (!activeUrl || !token) return
@@ -128,11 +164,18 @@ export default function DocumentsScreen() {
     setSubmitState('submitting')
     setSubmitError(null)
     try {
-      await submitScrapeJob(activeUrl, token, trimmed)
+      const { job_id } = await submitScrapeJob(activeUrl, token, trimmed)
       setUrlInput('')
-      setSubmitState('queued')
-      if (queuedTimerRef.current) clearTimeout(queuedTimerRef.current)
-      queuedTimerRef.current = setTimeout(() => setSubmitState('idle'), 3000)
+      setSubmitState('idle')
+      // Show the URL immediately, before the poll round-trips.
+      const now = new Date().toISOString()
+      const optimistic: Job = {
+        id: job_id, kind: 'scrape_url', payload: JSON.stringify({ url: trimmed }),
+        status: 'queued', attempts: 0, run_after: now, last_error: '', result: '',
+        created_at: now, updated_at: now, parent_job_id: null,
+      }
+      setPendingJobs((prev) => [optimistic, ...prev.filter((j) => j.id !== job_id)])
+      loadPendingJobs()
     } catch (e: unknown) {
       setSubmitError(e instanceof Error ? e.message : 'Failed to queue job')
       setSubmitState('error')
@@ -147,6 +190,26 @@ export default function DocumentsScreen() {
     } finally {
       setRefreshing(false)
     }
+  }
+
+  function renderPendingHeader() {
+    if (!showPending || pendingJobs.length === 0) return null
+    return (
+      <View style={s.pendingSection}>
+        {pendingJobs.map((job) => {
+          const url = jobUrl(job)
+          return (
+            <View key={job.id} style={s.pendingRow}>
+              <ActivityIndicator size="small" color={theme.colors.accent} />
+              <View style={s.pendingBody}>
+                <Text style={s.pendingUrl} numberOfLines={1}>{url || '(queued URL)'}</Text>
+                <Text style={s.pendingLabel}>{job.status === 'running' ? 'Reading…' : 'Queued'}</Text>
+              </View>
+            </View>
+          )
+        })}
+      </View>
+    )
   }
 
   function renderItem({ item }: { item: Document }) {
@@ -256,11 +319,6 @@ export default function DocumentsScreen() {
       </View>
 
       {/* Feedback row */}
-      {submitState === 'queued' && (
-        <View style={s.feedbackRow}>
-          <Text style={s.feedbackQueued}>Queued!</Text>
-        </View>
-      )}
       {submitState === 'error' && submitError && (
         <View style={s.feedbackRow}>
           <Text style={s.feedbackError}>{submitError}</Text>
@@ -281,7 +339,7 @@ export default function DocumentsScreen() {
         <View style={s.centered}>
           <ActivityIndicator color={theme.colors.accent} size="large" />
         </View>
-      ) : syncStatus === 'syncing' && documents.length === 0 ? (
+      ) : syncStatus === 'syncing' && documents.length === 0 && pendingJobs.length === 0 ? (
         <View style={s.centered}>
           <ActivityIndicator color={theme.colors.accent} size="large" />
         </View>
@@ -290,6 +348,7 @@ export default function DocumentsScreen() {
           data={documents}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
+          ListHeaderComponent={renderPendingHeader()}
           contentContainerStyle={documents.length === 0 ? s.emptyContainer : s.listContent}
           refreshControl={
             <RefreshControl
@@ -360,8 +419,22 @@ function buildStyles(t: Theme) {
       paddingVertical: t.spacing.xs,
       backgroundColor: t.colors.surface,
     },
-    feedbackQueued: { color: t.colors.online, fontSize: 13, fontWeight: '600' },
     feedbackError: { color: t.colors.error, fontSize: 13 },
+    pendingSection: {
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.border,
+    },
+    pendingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.spacing.sm,
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.sm,
+      backgroundColor: t.colors.accent + '14',
+    },
+    pendingBody: { flex: 1, minWidth: 0 },
+    pendingUrl: { color: t.colors.text, fontSize: 12, fontFamily: 'monospace' },
+    pendingLabel: { color: t.colors.muted, fontSize: 11, marginTop: 1 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
     errorText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
