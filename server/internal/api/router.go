@@ -158,6 +158,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, se
 			w.Header().Set("Content-Disposition", `attachment; filename="sam-chrome.zip"`)
 			http.ServeFile(w, r, extensionZip)
 		})
+		mux.HandleFunc("GET /api/v1/extension/version", extensionVersionHandler(extensionZip))
 		logAPI.Printf("serving extension bundle from %s", extensionZip)
 	}
 

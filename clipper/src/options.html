@@ -7,19 +7,31 @@
       :root { color-scheme: light dark; }
       body {
         font: 14px/1.5 system-ui, sans-serif;
-        max-width: 460px;
+        max-width: 480px;
         margin: 2rem auto;
         padding: 0 1rem;
       }
       h1 { font-size: 18px; }
+      h2 { font-size: 14px; margin-top: 1.6rem; }
       label { display: block; margin: 1rem 0 0.25rem; font-weight: 600; }
       input { width: 100%; padding: 0.5rem; box-sizing: border-box; font: inherit; }
       button {
-        margin-top: 1rem; padding: 0.5rem 1rem; font: inherit;
+        padding: 0.45rem 0.9rem; font: inherit;
         border: 0; border-radius: 6px; background: #d64541; color: #fff; cursor: pointer;
       }
-      .status { margin-top: 1rem; padding: 0.5rem 0.75rem; border-radius: 6px; background: rgba(127,127,127,0.12); }
+      button.ghost { background: rgba(127,127,127,0.18); color: inherit; }
+      .row {
+        display: flex; align-items: center; gap: 10px;
+        padding: 0.6rem 0.75rem; border-radius: 8px; background: rgba(127,127,127,0.10);
+        margin-top: 0.5rem;
+      }
+      .row .name { font-weight: 600; }
+      .row .meta { flex: 1; }
+      .row .st { font-size: 12px; opacity: 0.75; }
       .ok { color: #2ecc71; }
+      .bad { color: #d64541; }
+      .add { display: flex; gap: 8px; margin-top: 0.5rem; }
+      .add input { flex: 1; }
       .muted { opacity: 0.7; font-size: 13px; }
       code { background: rgba(127,127,127,0.18); padding: 0 4px; border-radius: 3px; }
     </style>
@@ -27,16 +39,22 @@
   <body>
     <h1>Save to Sam</h1>
     <p class="muted">
-      Open your Samizdat instance in a tab and the extension connects
-      automatically. Use this page only to set the server URL by hand.
+      Connect one or more Samizdat instances. Open an instance in a tab and click
+      <b>Connect extension</b> in its Settings to pair — each instance is
+      identified by its hostname.
     </p>
 
-    <label for="server">Server URL</label>
-    <input id="server" type="url" placeholder="https://sam.example.com" />
-    <button id="save">Save</button>
+    <h2>Connected instances</h2>
+    <div id="list"><p class="muted">None yet.</p></div>
 
-    <div class="status" id="status">Checking…</div>
+    <h2>Connect another</h2>
+    <p class="muted">Open a Samizdat instance to pair it:</p>
+    <div class="add">
+      <input id="server" type="url" placeholder="https://sam.example.com" />
+      <button id="open">Open</button>
+    </div>
 
+    <script src="instances.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Save to Sam",
-  "version": "0.1.0",
-  "description": "Save the current page to your Samizdat instance, and jump back to it once saved.",
+  "version": "0.2.0",
+  "description": "Save the current page to your Samizdat instance(s), and jump back to it once saved.",
   "action": {
     "default_title": "Save to Sam",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/sam-off-16.png",
       "32": "icons/sam-off-32.png",
@@ -18,7 +19,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["instances.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

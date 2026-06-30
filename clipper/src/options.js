@@ -1,41 +1,63 @@
-// Save to Sam — options page. Manual server URL fallback + connection status.
+// Save to Sam — options page. Manage connected instances + manual connect.
 
+const { getInstances, removeInstance } = globalThis.SamInstances
+const listEl = document.getElementById('list')
 const serverInput = document.getElementById('server')
-const statusEl = document.getElementById('status')
 
 function normalize(url) {
   return url.trim().replace(/\/+$/, '')
 }
 
-async function render() {
-  const { serverBase, deviceToken } = await chrome.storage.local.get(['serverBase', 'deviceToken'])
-  if (serverBase && !serverInput.value) serverInput.value = serverBase
-
-  if (!serverBase) {
-    statusEl.textContent = 'No server set. Open your Sam, or enter its URL above.'
-    return
-  }
-  if (!deviceToken) {
-    statusEl.innerHTML = `Server set, not paired. Open <code>${serverBase}</code> and click “Connect extension” in Settings.`
-    return
-  }
+async function probe(inst) {
   try {
-    const res = await fetch(`${serverBase}/api/v1/me`, { headers: { Authorization: `Bearer ${deviceToken}` } })
-    if (res.ok) {
-      statusEl.innerHTML = `<span class="ok">Connected</span> to <code>${serverBase}</code>.`
-    } else {
-      statusEl.textContent = `Paired but token rejected (HTTP ${res.status}). Re-connect from Sam Settings.`
-    }
+    const res = await fetch(`${inst.origin}/api/v1/me`, { headers: { Authorization: `Bearer ${inst.token}` } })
+    if (res.ok) return { cls: 'ok', text: 'Connected' }
+    return { cls: 'bad', text: `Token rejected (HTTP ${res.status})` }
   } catch {
-    statusEl.textContent = `Server unreachable at ${serverBase}.`
+    return { cls: 'bad', text: 'Unreachable' }
   }
 }
 
-document.getElementById('save').addEventListener('click', async () => {
+async function render() {
+  const instances = await getInstances()
+  listEl.replaceChildren()
+  if (instances.length === 0) {
+    const p = document.createElement('p')
+    p.className = 'muted'
+    p.textContent = 'None yet.'
+    listEl.appendChild(p)
+    return
+  }
+  for (const inst of instances) {
+    const row = document.createElement('div')
+    row.className = 'row'
+
+    const meta = document.createElement('div')
+    meta.className = 'meta'
+    const name = document.createElement('div')
+    name.className = 'name'
+    name.textContent = inst.hostname
+    const st = document.createElement('div')
+    st.className = 'st'
+    st.textContent = 'Checking…'
+    meta.append(name, st)
+
+    const btn = document.createElement('button')
+    btn.className = 'ghost'
+    btn.textContent = 'Disconnect'
+    btn.addEventListener('click', async () => { await removeInstance(inst.origin); render() })
+
+    row.append(meta, btn)
+    listEl.appendChild(row)
+
+    probe(inst).then((r) => { st.className = `st ${r.cls}`; st.textContent = r.text })
+  }
+}
+
+document.getElementById('open').addEventListener('click', () => {
   const url = normalize(serverInput.value)
   if (!url) return
-  await chrome.storage.local.set({ serverBase: url })
-  render()
+  chrome.tabs.create({ url })
 })
 
 render()

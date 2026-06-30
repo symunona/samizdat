@@ -18,7 +18,10 @@ rmSync(DIST, { recursive: true, force: true })
 mkdirSync(UNPACKED, { recursive: true })
 
 copyFileSync(join(ROOT, 'manifest.json'), join(UNPACKED, 'manifest.json'))
-for (const f of ['background.js', 'content.js', 'options.html', 'options.js']) {
+for (const f of [
+  'background.js', 'content.js', 'instances.js',
+  'popup.html', 'popup.js', 'options.html', 'options.js',
+]) {
   copyFileSync(join(ROOT, 'src', f), join(UNPACKED, f))
 }
 cpSync(join(ROOT, 'src', 'icons'), join(UNPACKED, 'icons'), { recursive: true })

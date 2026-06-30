@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Save to Sam</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 14px/1.4 system-ui, sans-serif;
+        width: 260px;
+        margin: 0;
+        padding: 6px;
+      }
+      .item {
+        display: flex; align-items: center; gap: 8px;
+        width: 100%; box-sizing: border-box;
+        padding: 9px 10px; margin: 0;
+        border: 0; border-radius: 8px; background: transparent;
+        font: inherit; text-align: left; color: inherit; cursor: pointer;
+      }
+      .item:hover { background: rgba(127,127,127,0.14); }
+      .item .ico { width: 18px; text-align: center; flex: none; }
+      .item .sub { display: block; font-size: 12px; opacity: 0.6; }
+      .item.primary { font-weight: 600; }
+      .item.update { color: #2ecc71; }
+      .sep { height: 1px; background: rgba(127,127,127,0.2); margin: 6px 4px; }
+      .group { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+               opacity: 0.5; padding: 6px 10px 2px; }
+      .empty { padding: 12px 10px; opacity: 0.8; }
+    </style>
+  </head>
+  <body>
+    <div id="menu"><div class="empty">Loading…</div></div>
+    <script src="instances.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

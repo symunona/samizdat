@@ -2,7 +2,7 @@
 created: 2026-06-30
 topic: Clipper multi-instance + popup dropdown + toast
 excerpt: Rework the "Save to Sam" extension from single first-origin-wins to multiple connected Sam instances keyed by hostname, with an action popup dropdown, on-page save toast, Sam-origin extra items, and auto-detect/connect of new instances.
-status: planning
+status: implemented — awaiting user check (live MV3 popup render untested per headless constraint)
 ---
 
 # Clipper multi-instance + popup
