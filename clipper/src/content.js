@@ -55,15 +55,11 @@
   if (!origin.startsWith('http')) return
 
   ;(async function () {
-    let health
-    try {
-      const res = await fetch(`${origin}/api/v1/health`, { credentials: 'omit' })
-      if (!res.ok) return
-      health = await res.json()
-    } catch {
-      return
-    }
-    if (!health || health.app !== 'samizdat') return
+    // Recognise a Samizdat origin by the static <meta> the served index.html
+    // carries — present before any JS, so we never touch the network on the
+    // countless non-Sam pages this <all_urls> content script also runs on.
+    const marker = document.querySelector('meta[name="application-name"]')
+    if (!marker || marker.content !== 'samizdat') return
 
     const version = chrome.runtime.getManifest().version
     const mark = async () => {
