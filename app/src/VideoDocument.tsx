@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Image,
+  PanResponder,
   Platform,
   Pressable,
   SafeAreaView,
@@ -50,8 +51,19 @@ type ParsedMsg = {
 // in-window fullscreen button to go bigger.
 const PLAYER_MAX_W = 720
 
-// Podcast playback speeds; tapping the speed pill cycles through them.
-const RATES = [1, 1.25, 1.5, 1.75, 2, 0.75]
+// Podcast playback-speed lever: a continuous 0.8×–2× range at 0.01 steps.
+const RATE_MIN = 0.8
+const RATE_MAX = 2
+const RATE_RANGE = RATE_MAX - RATE_MIN
+const LEVER_H = 132 // px throw of the vertical lever
+const LEVER_THUMB_H = 12
+
+function fmtRate(r: number): string {
+  return `${parseFloat(r.toFixed(2))}×`
+}
+function clampRate(r: number): number {
+  return Math.max(RATE_MIN, Math.min(RATE_MAX, Math.round(r * 100) / 100))
+}
 
 function fmtTime(ms: number): string {
   const total = Math.floor(ms / 1000)
@@ -251,10 +263,19 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     play()
   }, [playing, play, pause, showVideo])
 
-  const cycleRate = useCallback(() => {
-    const i = RATES.indexOf(rate)
-    setRate(RATES[(i + 1) % RATES.length])
-  }, [rate, setRate])
+  // Speed dropup + lever. rateRef always holds the latest rate so the pan
+  // handlers (created once) read a fresh value at grant without re-binding.
+  const [speedOpen, setSpeedOpen] = useState(false)
+  const rateRef = useRef(rate)
+  rateRef.current = rate
+  const dragStartRate = useRef(rate)
+  const leverPan = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: () => { dragStartRate.current = rateRef.current },
+    // Drag up = faster; a full lever throw spans the whole 0.8×–2× range.
+    onPanResponderMove: (_e, g) => setRate(clampRate(dragStartRate.current - (g.dy / LEVER_H) * RATE_RANGE)),
+  }), [setRate])
 
   const handleAddNote = useCallback(() => {
     pendingMediaTsRef.current = positionMs
@@ -383,6 +404,9 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
         )}
       </View>
 
+      {/* Backdrop closes the speed dropup on an outside tap (full-screen, below the seeker). */}
+      {speedOpen ? <Pressable style={s.speedBackdrop} onPress={() => setSpeedOpen(false)} /> : null}
+
       {/* Seeker bar */}
       <View style={s.seeker}>
         <Pressable onPress={togglePlay} style={s.playBtn} hitSlop={8}>
@@ -394,9 +418,20 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
           <View style={[s.trackFill, { width: `${progressPct}%` as `${number}%` }]} />
         </Pressable>
         <Text style={s.time}>{fmtTime(durationMs)}</Text>
-        <Pressable onPress={cycleRate} style={s.speedPill} hitSlop={8}>
-          <Text style={s.speedText}>{rate}×</Text>
-        </Pressable>
+        <View style={s.speedWrap}>
+          {speedOpen ? (
+            <View style={s.speedPanel}>
+              <Text style={s.speedPanelLabel}>{fmtRate(rate)}</Text>
+              <View style={s.leverTrack} {...leverPan.panHandlers}>
+                <View style={[s.leverFill, { height: ((rate - RATE_MIN) / RATE_RANGE) * LEVER_H }]} />
+                <View style={[s.leverThumb, { bottom: ((rate - RATE_MIN) / RATE_RANGE) * (LEVER_H - LEVER_THUMB_H) }]} />
+              </View>
+            </View>
+          ) : null}
+          <Pressable onPress={() => setSpeedOpen(o => !o)} style={s.speedPill} hitSlop={8}>
+            <Text style={s.speedText}>{fmtRate(rate)}</Text>
+          </Pressable>
+        </View>
         <Pressable onPress={handleAddNote} style={s.iconBtn} hitSlop={8}>
           <Ionicons name="create-outline" size={20} color={theme.colors.accent} />
         </Pressable>
@@ -458,10 +493,26 @@ function buildStyles(t: Theme) {
     trackBg: { position: 'absolute', left: 0, right: 0, height: 4, borderRadius: 2, backgroundColor: t.colors.border },
     trackFill: { position: 'absolute', left: 0, height: 4, borderRadius: 2, backgroundColor: t.colors.accent },
     iconBtn: { padding: 6, flexShrink: 0 },
+    speedWrap: { flexShrink: 0, position: 'relative' },
     speedPill: {
-      flexShrink: 0, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 10,
+      paddingHorizontal: 7, paddingVertical: 3, borderRadius: 10, minWidth: 40, alignItems: 'center',
       borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.background,
     },
     speedText: { color: t.colors.accent, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
+    speedBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+    // Dropup floats above the pill (bottom-anchored to the seeker row).
+    speedPanel: {
+      position: 'absolute', bottom: 34, right: 0, alignItems: 'center', gap: 8,
+      paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12,
+      backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+      shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 8,
+    },
+    speedPanelLabel: { color: t.colors.accent, fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
+    leverTrack: {
+      width: 28, height: LEVER_H, borderRadius: 14, overflow: 'hidden',
+      backgroundColor: t.colors.background, borderWidth: 1, borderColor: t.colors.border,
+    },
+    leverFill: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(232,116,59,0.18)' },
+    leverThumb: { position: 'absolute', left: 2, right: 2, height: LEVER_THUMB_H, borderRadius: 5, backgroundColor: t.colors.accent },
   })
 }
