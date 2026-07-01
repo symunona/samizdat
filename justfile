@@ -162,6 +162,17 @@ build-clipper:
     cd clipper && npm run build
 
 [group('build')]
+[doc('Rasterize assets/samizdat.svg → app/assets icon PNG set (icon + adaptive fg/bg/monochrome)')]
+gen-icons:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Isolated toolchain: the Expo app tree can't `npm i sharp` (arborist dedupe
+    # crash on its linked deps), so icongen carries its own node_modules.
+    cd "{{justfile_directory()}}/tools/icongen"
+    [ -d node_modules ] || npm install --no-audit --no-fund
+    node gen.mjs
+
+[group('build')]
 [doc('Build a standalone debug-signed Android APK locally, minimal RAM (JS bundled separately) → dist/samizdat.apk (+ .json)')]
 build-android:
     #!/usr/bin/env bash
@@ -172,6 +183,9 @@ build-android:
     export NODE_OPTIONS="--max-old-space-size=1536"   # cap Metro's node heap
     # Pre-accept SDK licenses so gradle can auto-download compileSdk/build-tools.
     yes | sdkmanager --licenses >/dev/null 2>&1 || true
+    # Rasterize the logo SVG → app/assets/*.png before prebuild reads them, so a
+    # fresh assets/samizdat.svg always flows into the launcher icon.
+    just gen-icons
     # Generate the native android/ project from managed config (idempotent).
     cd "{{justfile_directory()}}/app"
     npx expo prebuild --platform android --no-install
@@ -185,8 +199,10 @@ build-android:
     # skipped, so no node here. Release is debug-signed + not minified (see
     # android/app/build.gradle) → a standalone, installable test APK. Skip
     # lintVitalRelease — it's class-heavy (blows metaspace) and pointless for a
-    # local test build.
-    ./gradlew assembleRelease -x lintVitalRelease
+    # local test build. reactNativeArchitectures=arm64-v8a ships ONE ABI (real
+    # phones) instead of the default four (armeabi-v7a/arm64/x86/x86_64) — the
+    # x86* pair is emulator-only and ~55MB of dead weight. Cuts the APK ~123M→~49M.
+    ./gradlew assembleRelease -x lintVitalRelease -PreactNativeArchitectures=arm64-v8a
     cd "{{justfile_directory()}}"
     mkdir -p dist
     cp app/android/app/build/outputs/apk/release/app-release.apk dist/samizdat.apk

@@ -1,0 +1,8 @@
+{
+  "name": "samizdat-icongen",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Rasterize assets/samizdat.svg into the app icon PNG set",
+  "type": "module",
+  "dependencies": { "sharp": "^0.34.0" }
+}

@@ -10,6 +10,9 @@ Always get the last 5 git commits to gain context!
 - `app/` — Expo / React Native (+ RN Web). The reader/curator client; web build is served by `server/`.
 - `clipper/` — Chrome/WebExtension (MV3). Capture client; posts to the same REST API.
 
+## Branding / app icon
+The app logo source of truth is `assets/samizdat.svg` (repo root). Edit that one SVG; the launcher icon set (`app/assets/icon.png` + adaptive `android-icon-foreground/background/monochrome.png`) is **auto-generated** from it by `just gen-icons`, which `just build-android` runs before `expo prebuild`. Never hand-edit the generated PNGs. The generator (`tools/icongen/`) carries its own isolated `node_modules` — the Expo app tree can't `npm i` sharp (arborist crash).
+
 ## Task runner
 `just` is the entry point. Run `just` to list recipes. Prefer adding a recipe over documenting a raw command. Component recipes are namespaced (`just server::dev`, `just app::start`, etc.) — keep that pattern.
 
