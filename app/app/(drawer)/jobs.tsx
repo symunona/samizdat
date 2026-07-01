@@ -743,44 +743,48 @@ export default function JobsScreen() {
           ))}
         </View>
         <View style={s.bulkActions}>
-          <Pressable
-            style={({ pressed }) => [s.clearBtn, pressed && s.clearBtnPressed]}
-            onPress={() => setShowHistory(v => !v)}
-          >
-            <Text style={[s.historyBtnText, showHistory && s.historyBtnActive]}>
-              {showHistory ? '✓ history' : 'history'}
-            </Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [s.clearBtn, (resumingAll || pressed) && s.clearBtnPressed]}
-            onPress={handleResumeAll}
-            disabled={resumingAll}
-          >
-            {resumingAll
-              ? <ActivityIndicator size="small" color="#a78bfa" />
-              : <Text style={s.resumeAllBtnText}>resume all</Text>
-            }
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [s.clearBtn, (clearingQueue || pressed) && s.clearBtnPressed]}
-            onPress={handleClearQueue}
-            disabled={clearingQueue}
-          >
-            {clearingQueue
-              ? <ActivityIndicator size="small" color="#facc15" />
-              : <Text style={s.clearQueueBtnText}>clr queue</Text>
-            }
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [s.clearBtn, (clearing || pressed) && s.clearBtnPressed]}
-            onPress={handleClear}
-            disabled={clearing}
-          >
-            {clearing
-              ? <ActivityIndicator size="small" color="#f87171" />
-              : <Text style={s.clearBtnText}>clear done</Text>
-            }
-          </Pressable>
+          <View style={s.bulkRow}>
+            <Pressable
+              style={({ pressed }) => [s.clearBtn, pressed && s.clearBtnPressed]}
+              onPress={() => setShowHistory(v => !v)}
+            >
+              <Text style={[s.historyBtnText, showHistory && s.historyBtnActive]}>
+                {showHistory ? '✓ history' : 'history'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [s.clearBtn, (resumingAll || pressed) && s.clearBtnPressed]}
+              onPress={handleResumeAll}
+              disabled={resumingAll}
+            >
+              {resumingAll
+                ? <ActivityIndicator size="small" color="#a78bfa" />
+                : <Text style={s.resumeAllBtnText}>resume all</Text>
+              }
+            </Pressable>
+          </View>
+          <View style={s.bulkRow}>
+            <Pressable
+              style={({ pressed }) => [s.clearBtn, (clearingQueue || pressed) && s.clearBtnPressed]}
+              onPress={handleClearQueue}
+              disabled={clearingQueue}
+            >
+              {clearingQueue
+                ? <ActivityIndicator size="small" color="#facc15" />
+                : <Text style={s.clearQueueBtnText}>clr queue</Text>
+              }
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [s.clearBtn, (clearing || pressed) && s.clearBtnPressed]}
+              onPress={handleClear}
+              disabled={clearing}
+            >
+              {clearing
+                ? <ActivityIndicator size="small" color="#f87171" />
+                : <Text style={s.clearBtnText}>clear done</Text>
+              }
+            </Pressable>
+          </View>
         </View>
       </View>
 
@@ -904,7 +908,8 @@ function buildStyles(t: Theme) {
     deletePausedBtn: { borderWidth: 1, borderColor: t.colors.error, borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 5, minWidth: 64, alignItems: 'center' },
     deletePausedBtnPressed: { opacity: 0.75 },
     deletePausedBtnText: { color: t.colors.error, fontSize: 12, fontWeight: '600' },
-    bulkActions: { flexDirection: 'row', alignItems: 'center' },
+    bulkActions: { flexDirection: 'column', alignItems: 'flex-end' },
+    bulkRow: { flexDirection: 'row', alignItems: 'center' },
     resumeAllBtnText: { color: '#a78bfa', fontSize: 12, fontFamily: 'monospace', fontWeight: '600' },
     clearQueueBtnText: { color: '#facc15', fontSize: 12, fontFamily: 'monospace', fontWeight: '600' },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
