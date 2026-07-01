@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert, useWindowDimensions } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
-import { useRouter } from 'expo-router'
+import { useRouter, useNavigation } from 'expo-router'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
 import type { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import { useConnection } from '../../src/ConnectionContext'
-import { fetchHighlights, deleteHighlight, pinHighlight, archiveHighlight, createAnnotation, HighlightWithDoc } from '../../src/api'
+import { fetchHighlights, deleteHighlight, pinHighlight, archiveHighlight, createAnnotation, fetchSettings, updateSettings, HighlightWithDoc } from '../../src/api'
 import HighlightCard from '../../src/HighlightCard'
+import IconButton from '../../src/IconButton'
 import TagSelectorModal from '../../src/TagSelectorModal'
 import AnnotationPanel from '../../src/AnnotationPanel'
 import LinkActionSheet from '../../src/LinkActionSheet'
@@ -16,6 +17,7 @@ export default function FeedScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const router = useRouter()
+  const navigation = useNavigation()
   const { activeUrl, token, status } = useConnection()
   const { height: windowHeight } = useWindowDimensions()
   const { startScrape } = useScrapeQueue()
@@ -32,6 +34,40 @@ export default function FeedScreen() {
 
   const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set())
   const [showUnreadAll, setShowUnreadAll] = useState(false)
+
+  // Sticky "auto mark as read" toggle (server-persisted user prop). Gates the
+  // scroll-past auto-archive below. Default true (preserves prior always-on).
+  const [autoMarkRead, setAutoMarkRead] = useState(true)
+
+  useEffect(() => {
+    if (status !== 'connected' || !activeUrl || !token) return
+    fetchSettings(activeUrl, token)
+      .then(cfg => setAutoMarkRead(cfg.auto_mark_read))
+      .catch(() => {})
+  }, [status, activeUrl, token])
+
+  const toggleAutoMarkRead = useCallback(() => {
+    if (!activeUrl || !token) return
+    const next = !autoMarkRead
+    setAutoMarkRead(next) // optimistic
+    updateSettings(activeUrl, token, { auto_mark_read: next }).catch(() => {
+      setAutoMarkRead(!next) // revert on failure
+      Alert.alert('Error', 'Failed to update setting')
+    })
+  }, [activeUrl, token, autoMarkRead])
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <IconButton
+          name={autoMarkRead ? 'eye' : 'eye-off-outline'}
+          onPress={toggleAutoMarkRead}
+          size={22}
+          color={autoMarkRead ? theme.colors.accent : theme.colors.muted}
+        />
+      ),
+    })
+  }, [navigation, autoMarkRead, toggleAutoMarkRead, theme])
 
   const handleUnarchive = useCallback(async (id: string) => {
     if (!activeUrl || !token) return
@@ -297,6 +333,7 @@ export default function FeedScreen() {
         onScroll={(e) => {
           const y = e.nativeEvent.contentOffset.y
           scrollYRef.current = y
+          if (!autoMarkRead) return // auto-mark-as-read off → never scroll-archive
           // velocity (px/ms); fast downward scroll mass-archives — offer bulk undo
           const now = Date.now()
           const last = lastScrollRef.current

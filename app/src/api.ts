@@ -898,6 +898,7 @@ export type LLMUsageSummary = {
 
 export type AppSettings = {
   polling_enabled: boolean
+  auto_mark_read: boolean
   llm_usage: LLMUsageSummary
 }
 
