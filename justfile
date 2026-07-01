@@ -116,7 +116,7 @@ webview-build:
 [doc('Build app + server, restart background server (dev mode, HTTP)')]
 dev: _check-no-service webview-build build-server build-cli build-app-web build-clipper
     @rm -rf /tmp/playwright_chromiumdev_profile-* /tmp/playwright-artifacts-* 2>/dev/null || true
-    nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist --extension-zip clipper/dist/sam-chrome.zip > /tmp/samizdat-{{_dev_port}}.log 2>&1 &
+    nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist --extension-zip clipper/dist/sam-chrome.zip --apk dist/samizdat.apk > /tmp/samizdat-{{_dev_port}}.log 2>&1 &
     @PORT={{_dev_port}}; for i in $(seq 1 20); do ss -tlnp | grep -q ":$PORT" && break; sleep 0.5; done && echo "server started on :{{_dev_port}}, log: /tmp/samizdat-{{_dev_port}}.log"
     @./cli/bin/sam {{_config_flag}} connect
 
@@ -160,6 +160,40 @@ build-app-web:
 [doc('Package the clipper extension (dist/unpacked + dist/sam-chrome.zip)')]
 build-clipper:
     cd clipper && npm run build
+
+[group('build')]
+[doc('Build a standalone debug-signed Android APK locally, minimal RAM (JS bundled separately) → dist/samizdat.apk (+ .json)')]
+build-android:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
+    export ANDROID_SDK_ROOT="$ANDROID_HOME"
+    export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+    export NODE_OPTIONS="--max-old-space-size=1536"   # cap Metro's node heap
+    # Pre-accept SDK licenses so gradle can auto-download compileSdk/build-tools.
+    yes | sdkmanager --licenses >/dev/null 2>&1 || true
+    # Generate the native android/ project from managed config (idempotent).
+    cd "{{justfile_directory()}}/app"
+    npx expo prebuild --platform android --no-install
+    cd android
+    # Memory caps live in ~/.gradle/gradle.properties (one JVM, in-process Kotlin,
+    # small heap) — this VPS has 4GB RAM and also serves live sites.
+    # Phase 1 — JS bundle + Hermes bytecode ONLY. Runs Metro (node) while the
+    # gradle JVM is idle, so node never coexists with the Kotlin/dex compile.
+    ./gradlew :app:createBundleReleaseJsAndAssets
+    # Phase 2 — compile + dex + package. The bundle above is up-to-date and gets
+    # skipped, so no node here. Release is debug-signed + not minified (see
+    # android/app/build.gradle) → a standalone, installable test APK. Skip
+    # lintVitalRelease — it's class-heavy (blows metaspace) and pointless for a
+    # local test build.
+    ./gradlew assembleRelease -x lintVitalRelease
+    cd "{{justfile_directory()}}"
+    mkdir -p dist
+    cp app/android/app/build/outputs/apk/release/app-release.apk dist/samizdat.apk
+    # Sidecar manifest (version + versionCode from app.json), written atomically
+    # with the copy so the served version never drifts from the served artifact.
+    node -e 'const a=require("./app/app.json").expo,fs=require("fs");const st=fs.statSync("dist/samizdat.apk");fs.writeFileSync("dist/samizdat.apk.json",JSON.stringify({version:a.version,version_code:a.android.versionCode,size:st.size,built_at:new Date().toISOString()})+"\n")'
+    echo "APK → dist/samizdat.apk ($(du -h dist/samizdat.apk | cut -f1))"
 
 # ── Quality ───────────────────────────────────────────────────────────────────
 

@@ -45,6 +45,24 @@ export async function me(url: string, token: string): Promise<Me> {
   return json<Me>(res, '/api/v1/me')
 }
 
+// Latest hosted Android APK, from the build's sidecar manifest. version_code is
+// the comparable integer; the app offers a download when it exceeds the running
+// build's APP_VERSION_CODE.
+export type AndroidBuild = { version: string; version_code: number; size: number; built_at: string }
+
+export async function fetchLatestAndroidBuild(url: string, token: string): Promise<AndroidBuild> {
+  const res = await fetch(`${base(url)}/api/v1/app/android/version`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(5000),
+  })
+  return json<AndroidBuild>(res, '/api/v1/app/android/version')
+}
+
+// Direct download URL for the hosted debug APK (opened via Linking / window.open).
+export function androidApkUrl(url: string): string {
+  return `${base(url)}/download/samizdat.apk`
+}
+
 export type ExtensionToken = { device_token: string; device_id: string }
 
 // Mint a fresh device token for the browser extension, authed by this device's

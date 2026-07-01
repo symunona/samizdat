@@ -28,6 +28,7 @@ var (
 	flagPort         int
 	flagWebDir       string
 	flagExtensionZip string
+	flagAPK          string
 )
 
 var rootCmd = &cobra.Command{
@@ -48,6 +49,7 @@ func init() {
 	rootCmd.PersistentFlags().IntVar(&flagPort, "port", 0, "override listen port")
 	rootCmd.PersistentFlags().StringVar(&flagWebDir, "webdir", "", "path to Expo web build")
 	rootCmd.PersistentFlags().StringVar(&flagExtensionZip, "extension-zip", "", "path to built Chrome extension zip (served at /extension/sam-chrome.zip)")
+	rootCmd.PersistentFlags().StringVar(&flagAPK, "apk", "", "path to built Android APK (served at /download/samizdat.apk)")
 	rootCmd.AddCommand(serveCmd)
 }
 
@@ -69,6 +71,10 @@ func runServe(_ *cobra.Command, _ []string) error {
 	if flagExtensionZip != "" {
 		extensionZip = flagExtensionZip
 	}
+	apkPath := c.Server.APKPath
+	if flagAPK != "" {
+		apkPath = flagAPK
+	}
 
 	db, err := store.Open(c.DBPath)
 	if err != nil {
@@ -83,7 +89,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	urls := network.DetectURLs(port)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	handler := api.New(context.Background(), db, webDir, extensionZip, urls, c.CacheDir, c.ExtractorsDir, c.YTDLP, c.LLM)
+	handler := api.New(context.Background(), db, webDir, extensionZip, apkPath, urls, c.CacheDir, c.ExtractorsDir, c.YTDLP, c.LLM)
 
 	logServer.Printf("samizdat %s listening on %s", api.Version(), addr)
 	logServer.Printf("reachable at:\n  %s", strings.Join(urls, "\n  "))

@@ -18,7 +18,7 @@ import (
 
 // New returns the root HTTP handler. webDir may be empty (API-only mode).
 // serverURLs is the ordered list of reachable base URLs for this server.
-func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, serverURLs []string, cacheDir string, extractorDir string, ytdlp config.YTDLPSection, llmCfg ...config.LLMSection) http.Handler {
+func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, apkPath string, serverURLs []string, cacheDir string, extractorDir string, ytdlp config.YTDLPSection, llmCfg ...config.LLMSection) http.Handler {
 	q := store.New(db)
 
 	var llmClient llm.Client
@@ -161,6 +161,12 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, se
 		})
 		mux.HandleFunc("GET /api/v1/extension/version", extensionVersionHandler(extensionZip))
 		logAPI.Printf("serving extension bundle from %s", extensionZip)
+	}
+
+	if apkPath != "" {
+		mux.HandleFunc("GET /download/samizdat.apk", appDownloadHandler(apkPath))
+		mux.HandleFunc("GET /api/v1/app/android/version", appVersionHandler(apkPath))
+		logAPI.Printf("serving Android APK from %s", apkPath)
 	}
 
 	if webDir != "" {

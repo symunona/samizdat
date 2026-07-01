@@ -11,6 +11,8 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "sam.tmpx.space",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#0b0b0c",
         "foregroundImage": "./assets/android-icon-foreground.png",

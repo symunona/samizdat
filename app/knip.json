@@ -4,7 +4,8 @@
     "expo-updates",
     "expo-system-ui",
     "@expo/metro-config",
-    "react-native-worklets"
+    "react-native-worklets",
+    "babel-preset-expo"
   ],
   "ignoreFiles": ["babel.config.js", "src/useAudio.web.ts"],
   "ignoreExportsUsedInFile": true

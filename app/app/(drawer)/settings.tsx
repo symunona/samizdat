@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, mintExtensionToken, ApiError } from '../../src/api'
-import type { DeviceInfo, AppSettings } from '../../src/api'
+import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, mintExtensionToken, fetchLatestAndroidBuild, androidApkUrl, ApiError } from '../../src/api'
+import type { DeviceInfo, AppSettings, AndroidBuild } from '../../src/api'
+import { APP_VERSION, APP_VERSION_CODE } from '../../src/appVersion'
 import { fetchYtdlpProxyStatus } from '../../src/proxyStatus'
 import type { YtdlpProxyStatus } from '../../src/proxyStatus'
 import { clearConnection, removeServerUrl, loadUrlLastUsedMap } from '../../src/storage'
@@ -71,6 +72,7 @@ export default function SettingsScreen() {
   const isWeb = Platform.OS === 'web'
   const [extStatus, setExtStatus] = useState<'not_installed' | 'unpaired' | 'connected'>('not_installed')
   const [extConnecting, setExtConnecting] = useState(false)
+  const [latestBuild, setLatestBuild] = useState<AndroidBuild | null>(null)
 
   const handleUnauthorized = useCallback(async () => {
     await logout()
@@ -133,13 +135,21 @@ export default function SettingsScreen() {
     return () => clearInterval(id)
   }, [status, loadProxyStatus])
 
+  const loadLatestBuild = useCallback(async () => {
+    if (!activeUrl || !token) return
+    try {
+      setLatestBuild(await fetchLatestAndroidBuild(activeUrl, token))
+    } catch { /* best-effort; no APK hosted or offline */ }
+  }, [activeUrl, token])
+
   useEffect(() => {
     if (status === 'connected') {
       loadDevices()
       loadSettings()
+      loadLatestBuild()
       loadUrlLastUsedMap().then(setUrlLastUsed)
     }
-  }, [status, loadDevices, loadSettings])
+  }, [status, loadDevices, loadSettings, loadLatestBuild])
 
   // Extension install/pair status comes from a data-attr the content script
   // injects on this page (web only). Poll it and react to the pair ack.
@@ -263,6 +273,10 @@ export default function SettingsScreen() {
     if (activeUrl) Linking.openURL(`${activeUrl}/extension/sam-chrome.zip`)
   }
 
+  function handleDownloadApk() {
+    if (activeUrl) Linking.openURL(androidApkUrl(activeUrl))
+  }
+
   async function handleConnectExtension() {
     if (!activeUrl || !token) return
     setExtConnecting(true)
@@ -365,6 +379,44 @@ export default function SettingsScreen() {
           </View>
         </View>
       )}
+
+      {/* App version + Android APK */}
+      <View style={s.card}>
+        <Text style={s.cardTitle}>App Version</Text>
+        <View style={s.infoRow}>
+          <Text style={s.infoLabel}>Installed</Text>
+          <Text style={s.infoValue}>v{APP_VERSION}</Text>
+        </View>
+        {latestBuild && latestBuild.version_code > APP_VERSION_CODE ? (
+          <>
+            <View style={s.statusRow}>
+              <View style={[s.dot, { backgroundColor: theme.colors.accent }]} />
+              <Text style={[s.statusText, { fontSize: 14, color: theme.colors.accent }]}>
+                Update available — v{latestBuild.version}
+              </Text>
+            </View>
+            <Pressable
+              onPress={handleDownloadApk}
+              style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
+            >
+              <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download update (.apk)</Text>
+            </Pressable>
+          </>
+        ) : isWeb && latestBuild ? (
+          // Desktop web: no update to force, but offer the APK for sideloading to a phone.
+          <Pressable
+            onPress={handleDownloadApk}
+            style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
+          >
+            <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download Android app (v{latestBuild.version})</Text>
+          </Pressable>
+        ) : latestBuild ? (
+          <View style={s.statusRow}>
+            <View style={[s.dot, { backgroundColor: theme.colors.online }]} />
+            <Text style={[s.statusText, { fontSize: 14, color: theme.colors.online }]}>Up to date</Text>
+          </View>
+        ) : null}
+      </View>
 
       {/* Polling */}
       <View style={s.card}>

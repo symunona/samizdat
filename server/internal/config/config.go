@@ -33,6 +33,7 @@ type ServerSection struct {
 	Port         int    `toml:"port"`
 	WebDir       string `toml:"web_dir"`
 	ExtensionZip string `toml:"extension_zip"`
+	APKPath      string `toml:"apk_path"` // debug Android APK served at /download/samizdat.apk
 }
 
 type LLMSection struct {

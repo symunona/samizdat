@@ -280,7 +280,7 @@ export default function ConnectScreen() {
                     source={
                         Platform.OS === "web"
                             ? { uri: "/favicon.svg" }
-                            : require("../assets/favicon.png")
+                            : require("../assets/icon.png")
                     }
                     style={s.logo}
                     resizeMode="contain"
