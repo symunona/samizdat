@@ -5,6 +5,14 @@ host = "samizdat.example.com"   # or "<ip>.sslip.io" — CertMagic certs this ho
 data_dir = "/var/lib/samizdat"  # holds app.db + vault/ + certs/
 dev = false                     # true = plain HTTP on localhost:8787, no cert
 
+# [server]
+# port     = 8765                 # listen port
+# apk_path = "dist/samizdat.apk"  # self-hosted Android APK served at /download/samizdat.apk
+#                                 # and /api/v1/app/android/version (the in-app updater reads it).
+#                                 # `just build-android` writes it; `just deploy-android` (auto-run
+#                                 # at the end of the build) picks it up. Path is relative to the
+#                                 # service WorkingDirectory (repo root). Omit to disable the routes.
+
 # LLM provider — prefer environment variables for keys (ANTHROPIC_API_KEY / OPENAI_API_KEY).
 # [llm]
 # provider      = "anthropic"                 # or "openai_compat" (OpenAI cloud / Ollama / LM Studio)

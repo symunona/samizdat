@@ -210,6 +210,40 @@ build-android:
     # with the copy so the served version never drifts from the served artifact.
     node -e 'const a=require("./app/app.json").expo,fs=require("fs");const st=fs.statSync("dist/samizdat.apk");fs.writeFileSync("dist/samizdat.apk.json",JSON.stringify({version:a.version,version_code:a.android.versionCode,size:st.size,built_at:new Date().toISOString()})+"\n")'
     echo "APK → dist/samizdat.apk ($(du -h dist/samizdat.apk | cut -f1))"
+    # Auto-deploy so the fresh build is what the live server (and in-app updater) sees.
+    just deploy-android
+
+[group('build')]
+[doc('Deploy dist/samizdat.apk to the live server so the in-app updater sees it (auto-run by build-android)')]
+deploy-android:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    test -f dist/samizdat.apk && test -f dist/samizdat.apk.json || { echo "✗ no APK in dist/ — run 'just build-android' first"; exit 1; }
+    # The server reads the APK + its sidecar per request, so a running instance serves
+    # the fresh build with no copy step. The one thing that needs a restart is ROUTE
+    # registration: the /download + version routes are only wired at startup when
+    # apk_path is set — so restart the installed service if it's active to (re)register.
+    if systemctl --user is-active --quiet samizdat-sam; then
+      systemctl --user restart samizdat-sam && echo "↻ restarted samizdat-sam service (re-registers /download routes)"
+    fi
+    # Verify: the live server should now advertise app.json's version to the updater.
+    want=$(node -e 'const a=require("./app/app.json").expo;process.stdout.write(a.version+" / code "+a.android.versionCode)')
+    resp=$(curl -fsS "http://localhost:{{_dev_port}}/api/v1/app/android/version" 2>/dev/null || true)
+    if [ -n "$resp" ]; then
+      got=$(node -e "const d=JSON.parse(process.argv[1]);process.stdout.write(d.version+' / code '+d.version_code)" "$resp" 2>/dev/null || echo "(unparseable /api/v1/app/android/version)")
+    else
+      got="(server not reachable on :{{_dev_port}})"
+    fi
+    echo "app.json : $want"
+    echo "served   : $got"
+    if [ "$want" = "$got" ]; then
+      echo "✓ deployed — the in-app updater will offer $want"
+    elif [ -n "$resp" ]; then
+      echo "⚠ the server is serving an OLDER apk ($got) than app.json ($want) — rebuild: 'just build-android'."
+    else
+      echo "⚠ the server isn't serving an apk. Set apk_path in config.toml [server] (or run with --apk) and restart it (just dev)."
+    fi
 
 # ── Quality ───────────────────────────────────────────────────────────────────
 
