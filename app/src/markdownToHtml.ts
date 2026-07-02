@@ -32,11 +32,11 @@ export function buildDocumentHtml(
 // segment is a `.seg` paragraph carrying its `data-start-ms`, so the WebView can
 // highlight/seek by playback time while reusing the same annotation machinery.
 export function buildTranscriptHtml(
-  segments: { start_ms: number; text: string }[],
+  segments: { start_ms: number; end_ms?: number; text: string }[],
   title: string,
 ): string {
   const body = segments
-    .map(s => `<p class="seg" data-start-ms="${s.start_ms}" data-ts="${fmtSegTime(s.start_ms)}">${escapeHtmlText(s.text)}</p>`)
+    .map(s => `<p class="seg" data-start-ms="${s.start_ms}" data-end-ms="${s.end_ms ?? ''}" data-ts="${fmtSegTime(s.start_ms)}">${escapeHtmlText(s.text)}</p>`)
     .join('\n')
   return wrapViewerHtml(title, body)
 }

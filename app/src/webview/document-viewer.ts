@@ -32,6 +32,9 @@ type AnnData = {
   note: string
   pos_start: number
   pos_end: number
+  // For video transcripts: playback time (ms) the note is anchored to. 0/undefined
+  // for plain article annotations. Drives the per-line ✏ badge on the transcript.
+  media_ts_ms?: number
 }
 
 type SelectionData = {
@@ -95,6 +98,10 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 .seg{position:relative;cursor:pointer;border-radius:4px;padding:2px 6px;margin:0 -6px 0.35em;transition:background 0.2s,color 0.2s;color:var(--mu)}
 .seg:hover{background:var(--su);color:var(--fg)}
 .seg.active{background:rgba(232,116,59,0.16);color:var(--fg)}
+/* A transcript line carrying a time-anchored annotation — tap reopens the note */
+.seg.has-ann{background:rgba(167,139,250,0.12)}
+.seg.has-ann:hover{background:rgba(167,139,250,0.2)}
+.seg-ann-badge{color:#a78bfa;font-size:0.85em;margin-right:4px;user-select:none}
 /* Faded per-line timestamp, revealed on hover (desktop / pointer devices only) */
 @media (hover:hover){
 .seg[data-ts]::after{content:attr(data-ts);position:absolute;top:2px;right:6px;font-size:0.78em;font-variant-numeric:tabular-nums;color:var(--mu);background:var(--su);padding:0 4px;border-radius:3px;opacity:0;transition:opacity 0.15s;pointer-events:none}
@@ -392,6 +399,7 @@ function applyMark(a: AnnData): void {
 
 function addMark(a: AnnData): void {
   applyMark(a)
+  markSegAnnotation(a)
   setTimeout(updateGutter, 50)
 }
 
@@ -402,7 +410,24 @@ function removeMark(id: string): void {
     while (m.firstChild) p.insertBefore(m.firstChild, m)
     p.removeChild(m)
   })
+  unmarkSegAnnotation(id)
   updateGutter()
+}
+
+// Replace the full annotation set (used when annotations load/refresh after the
+// initial render — e.g. the video transcript, whose async fetch can land after
+// the WebView is already up). Clears every existing mark/badge, then re-applies.
+function setAnnotations(anns: AnnData[]): void {
+  document.querySelectorAll<HTMLElement>('mark[data-ann-id]').forEach(m => {
+    const id = m.dataset.annId
+    if (id) removeMark(id)
+  })
+  document.querySelectorAll<HTMLElement>('.seg[data-ann-id]').forEach(seg => {
+    const id = seg.dataset.annId
+    if (id) unmarkSegAnnotation(id)
+  })
+  for (const a of anns) { applyMark(a); markSegAnnotation(a) }
+  setTimeout(updateGutter, 50)
 }
 
 // ── Transcript (video documents) ───────────────────────────────────────────────
@@ -457,6 +482,45 @@ function segmentWindow(ms: number): SelectionData | null {
   return { exact, prefix, suffix, pos_start: start, pos_end: start + exact.length, media_ts_ms }
 }
 
+// Find the seg a playback time belongs to: the seg whose [start,end) contains it,
+// else the nearest preceding seg (greatest start_ms <= ms). Returns null if none.
+function segForTime(els: HTMLElement[], ms: number): HTMLElement | null {
+  let best: HTMLElement | null = null
+  for (const el of els) {
+    const start = Number(el.dataset.startMs)
+    const end = el.dataset.endMs ? Number(el.dataset.endMs) : NaN
+    if (Number.isFinite(end) && ms >= start && ms < end) return el
+    if (start <= ms) best = el
+    else if (best) break
+  }
+  return best
+}
+
+// Tag the transcript line for a time-anchored annotation with a ✏ badge + its
+// id, so a tap on the whole line reopens the note (see the seg click handler).
+function markSegAnnotation(a: AnnData): void {
+  if (!a.media_ts_ms || a.media_ts_ms <= 0) return
+  const els = segEls()
+  if (els.length === 0) return
+  const seg = segForTime(els, a.media_ts_ms)
+  if (!seg || seg.dataset.annId) return
+  seg.dataset.annId = a.id
+  seg.classList.add('has-ann')
+  const badge = document.createElement('span')
+  badge.className = 'seg-ann-badge'
+  badge.dataset.annBadge = a.id
+  badge.textContent = '✏'
+  seg.insertBefore(badge, seg.firstChild)
+}
+
+function unmarkSegAnnotation(id: string): void {
+  const seg = document.querySelector<HTMLElement>(`.seg[data-ann-id="${id}"]`)
+  if (!seg) return
+  delete seg.dataset.annId
+  seg.classList.remove('has-ann')
+  seg.querySelector(`[data-ann-badge="${id}"]`)?.remove()
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 interface InitMsg {
@@ -498,9 +562,10 @@ function handleInit(msg: InitMsg): void {
     renderHighlights()
   }
 
-  // Apply annotations
+  // Apply annotations: text marks (article body) + per-line ✏ badges (transcript)
   for (const ann of msg.annotations ?? []) {
     applyMark(ann)
+    markSegAnnotation(ann)
   }
   setTimeout(updateGutter, 80)
 
@@ -599,12 +664,14 @@ document.addEventListener('click', (e: MouseEvent) => {
     return
   }
 
-  // Transcript segment — tap (not a text selection) seeks playback to its time
+  // Transcript segment — tap (not a text selection). A line carrying a
+  // time-anchored annotation reopens that note; otherwise seek to its time.
   const seg = target.closest && target.closest<HTMLElement>('.seg[data-start-ms]')
   if (seg) {
     const seln = window.getSelection()
     if (!seln || seln.isCollapsed) {
-      sendMsg({ type: 'seek', ms: Number(seg.dataset.startMs) })
+      if (seg.dataset.annId) sendMsg({ type: 'tap_annotation', id: seg.dataset.annId })
+      else sendMsg({ type: 'seek', ms: Number(seg.dataset.startMs) })
     }
     return
   }
@@ -719,6 +786,10 @@ function handleMessage(event: MessageEvent): void {
 
     case 'removeMark':
       removeMark(msg.id as string)
+      break
+
+    case 'setAnnotations':
+      setAnnotations((msg.annotations as AnnData[]) ?? [])
       break
 
     case 'highlightAnnotation': {

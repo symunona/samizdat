@@ -7,6 +7,6 @@
     "react-native-worklets",
     "babel-preset-expo"
   ],
-  "ignoreFiles": ["babel.config.js", "src/useAudio.web.ts"],
+  "ignoreFiles": ["babel.config.js", "src/useAudio.web.ts", "src/YtPlayer.web.tsx"],
   "ignoreExportsUsedInFile": true
 }

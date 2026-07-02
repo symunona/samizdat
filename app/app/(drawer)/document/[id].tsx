@@ -48,6 +48,7 @@ import { useScrapeQueue } from '../../../src/ScrapeQueueContext'
 import { buildDocumentHtml } from '../../../src/markdownToHtml'
 import { useSyncStore } from '../../../src/store/syncStore'
 import VideoDocument from '../../../src/VideoDocument'
+import PendingPipelineBanner from '../../../src/PendingPipelineBanner'
 
 const DEBOUNCE_MS = 1000
 
@@ -488,6 +489,7 @@ export default function DocumentViewer() {
         </View>
       ) : htmlContent ? (
         <View style={s.contentArea}>
+          <PendingPipelineBanner docId={id} />
           {Platform.OS === 'web' ? (
             <View style={s.webView}>
               <iframe

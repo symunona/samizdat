@@ -167,23 +167,59 @@ Documents with `media_type === 'video'` get a dedicated player screen (`src/Vide
 
 ### VideoDocument layout
 - Header with back button
-- Player area: thumbnail (tappable → expands inline YouTube iframe) OR 16:9 video box
+- Player area: thumbnail (tappable → expands inline YouTube player) OR 16:9 video box
+- "Audio only" button below the video box → collapses to audio, keeps playing
 - Transcript pane (WebView / iframe) — always visible in both audio and video modes
-- Seeker bar: play/pause, time, scrub track, add-note, offline-sync (native only)
+- Seeker bar: play/pause, time, scrub track, speed lever, add-note, offline-sync (native only)
 - AnnotationPanel sheet for creating/editing time-anchored notes
 
-### Audio playback — `useAudio` hook (platform-split)
+### ONE shared timeline — `useMediaTimeline` (video = alternate view, not a separate player)
+The bottom seeker + transcript are driven by **one** playback timeline that reads from
+whichever backend is active. The video is just an alternate VIEW of that same timeline —
+**not** a second, mutually-exclusive player. `src/useMediaTimeline.ts` merges two backends
+behind the existing `AudioControl` shape so the seeker/transcript/rate code is written once
+and never branches on which is playing:
+
+```ts
+const { playing, positionMs, durationMs, rate, play, pause, seek, setRate,
+        videoActive, ytRef, onYtStatus } = useMediaTimeline({ audioUrl, ytId, showVideo })
+```
+
+- **audio backend** — the platform-split `useAudio` hook (below). Audio-only mode + offline files.
+- **youtube backend** — the platform-split `YtPlayer` component (below), driven imperatively via
+  `ytRef` and reporting progress via `onYtStatus`. Active when `videoActive`.
+- `videoActive = showVideo && !!ytId` selects the backend the timeline exposes.
+- **Rate is owned by the timeline** and fanned out to BOTH backends, so speed stays synced across
+  a switch. The speed lever/± buttons just call `setRate`.
+- **Handoff (no double audio):** entering the video pauses the `<audio>` element (YouTube provides
+  the sound); collapsing to audio-only seeks the audio element to the video's position and resumes
+  if it was playing. The two never sound at once.
+
+### Audio backend — `useAudio` hook (platform-split)
 Audio is abstracted behind a single hook with a **platform-split implementation**:
 - `src/useAudio.ts` — **native** backend using `expo-audio` (`useAudioPlayer` + `useAudioPlayerStatus`)
 - `src/useAudio.web.ts` — **web** backend using a plain HTML5 `<audio>` element
 
-Metro resolves `.web.ts` for web builds automatically. **Never import `expo-audio` directly in components** — always go through `useAudio`. The web file is knip-ignored because Metro handles the resolution.
+Metro resolves `.web.ts` for web builds automatically. **Never import `expo-audio` directly in components** — always go through `useAudio` (or `useMediaTimeline`, which wraps it). The web file is knip-ignored because Metro handles the resolution.
 
 ```ts
-const { playing, positionMs, durationMs, play, pause, seek } = useAudio(url)
+const { playing, positionMs, durationMs, rate, play, pause, seek, setRate } = useAudio(url)
 ```
 
 `url` can be a local file URI (offline-synced) or a remote streaming URL. If both exist, prefer the local URI.
+
+### YouTube backend — `YtPlayer` component (platform-split)
+A plain `?src=` iframe is opaque (no `currentTime`, no control), so the video could not share the
+timeline. `YtPlayer` drives the **YouTube IFrame Player API** instead — same imperative contract
+(`YtPlayerHandle`: `play`/`pause`/`seek`/`setRate`) + progress (`YtStatus`) on both platforms:
+- `src/YtPlayer.web.tsx` — **web**: injects `youtube.com/iframe_api`, `new YT.Player` into a host
+  div, `onStateChange` + a 250ms `getCurrentTime` poll → `onStatus`. (knip-ignored; Metro resolves it.)
+- `src/YtPlayer.tsx` — **native**: a WebView hosting the same IFrame API; commands in via
+  `injectJavaScript(window.__cmd)`, status out via `ReactNativeWebView.postMessage`.
+- `src/YtPlayer.types.ts` — the shared `YtPlayerHandle` / `YtStatus` / `YtPlayerProps` contract.
+
+Because `positionMs` now advances from the YouTube player while the video plays, the transcript
+auto-scroll (`mediaTime` message) keeps following with **no** change to the transcript plumbing.
 
 ### Offline audio sync (native only)
 `expo-file-system` (`legacy` import) downloads the audio asset to `FileSystem.documentDirectory`. The local URI is persisted in AsyncStorage under key `video_audio_<docId>` and restored on mount. The sync button is hidden on web (no `expo-file-system` on web).
@@ -200,8 +236,11 @@ const { playing, positionMs, durationMs, play, pause, seek } = useAudio(url)
 ### `parseTranscript` / `parseMediaMetadata` helpers
 Both live in `src/api.ts` and safely parse the JSON string fields `Document.transcript` and `Document.media_metadata`. Always use these helpers — never `JSON.parse` the fields inline.
 
-### YouTube embed
-`meta.external_id` from `parseMediaMetadata` is the YouTube video ID. The embed URL includes `?start=<seconds>&autoplay=1`. Opening the video pauses the bottom audio player first; collapsing the video box stops the iframe. They must never play simultaneously.
+### YouTube video ID
+`meta.external_id` from `parseMediaMetadata` is the YouTube video ID, fed to `YtPlayer` (see
+"YouTube backend" above). The video and the bottom audio bar share ONE timeline — opening the
+video is just a view switch, not a separate player; the handoff in `useMediaTimeline` guarantees
+only one of the two sounds at a time (audio pauses while the video plays, and vice-versa).
 
 ### `proxyStatus.ts` — yt-dlp proxy health
 `src/proxyStatus.ts` exposes `fetchYtdlpProxyStatus` and `YtdlpProxyStatus`. Kept separate from `api.ts` to avoid merge conflicts. The Settings screen polls this every 20s when connected and displays online/offline status with exit IP and last-ok timestamp.

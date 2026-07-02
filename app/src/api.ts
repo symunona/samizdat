@@ -146,6 +146,7 @@ export type MediaMetadata = {
   external_id?: string
   duration_ms?: number
   transcript_status?: 'subs' | 'auto' | 'none'
+  description?: string
 }
 
 // parseTranscript safely parses the Document.transcript JSON string.

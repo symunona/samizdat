@@ -90,6 +90,7 @@ type ytMediaMetadata struct {
 	ExternalID       string `json:"external_id"`
 	DurationMs       int64  `json:"duration_ms"`
 	TranscriptStatus string `json:"transcript_status"` // subs | auto | none
+	Description      string `json:"description,omitempty"`
 }
 
 // handleYouTube ingests a YouTube URL into a video Document: audio-only download
@@ -188,6 +189,7 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 		ExternalID:       videoID,
 		DurationMs:       int64(info.Duration * 1000),
 		TranscriptStatus: status,
+		Description:      strings.TrimSpace(info.Description),
 	}
 	metaJSON, _ := json.Marshal(meta)
 
