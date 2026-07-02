@@ -166,10 +166,21 @@ AGENT_BROWSER_ARGS="--no-sandbox" agent-browser --state tmp/debug-session/state.
 Documents with `media_type === 'video'` get a dedicated player screen (`src/VideoDocument.tsx`) instead of the article WebView. The document viewer (`app/(drawer)/document/[id].tsx`) early-returns `<VideoDocument doc={doc} from={from} />` before building article HTML.
 
 ### VideoDocument layout
+The screen is a flex column with **nothing scrolling the whole page** — the player and
+tab bar are pinned so you never scroll the video away to get back to it:
 - Header with back button
-- Player area: thumbnail (tappable → expands inline YouTube player) OR 16:9 video box
+- **Pinned player** (top): thumbnail (tappable → expands inline YouTube player) OR video box.
+  Sized to a compact 16:9 box bounded to ≤32% of the viewport height (`playerH`/`playerW`
+  computed in the component) so the transcript stays maximized on phone and desktop.
 - "Audio only" button below the video box → collapses to audio, keeps playing
-- Transcript pane (WebView / iframe) — always visible in both audio and video modes
+- **Pinned tab bar** (Transcript · Details · Excerpt · Notes)
+- **Tab content** (`flex:1`) fills the space between the tab bar and footer and scrolls
+  **internally**. The transcript pane (WebView / iframe) stays mounted (hidden on other tabs)
+  so it keeps auto-following playback.
+- **Floating resume button** — a top-right down-arrow shown only while the transcript is up
+  and the currently-playing segment has drifted off-screen. Tap → scrolls to the active line
+  and resumes auto-follow. Driven by the webview's `activeSegVisible` message; the tap posts
+  `scrollToActive` back (see the transcript-rendering notes below).
 - Seeker bar: play/pause, time, scrub track, speed lever, add-note, offline-sync (native only)
 - AnnotationPanel sheet for creating/editing time-anchored notes
 
@@ -227,6 +238,8 @@ auto-scroll (`mediaTime` message) keeps following with **no** change to the tran
 ### Transcript rendering
 `buildTranscriptHtml()` in `src/markdownToHtml.ts` renders `TranscriptSegment[]` as `.seg` paragraphs with `data-start-ms` attributes. The document-viewer WebView bundle handles:
 - `mediaTime` message → highlights the active `.seg` and auto-scrolls (suppressed for 2.5s after user scroll)
+- `activeSegVisible` message (outbound) → reports whether the `.seg.active` is on-screen; the host shows/hides the floating resume button
+- `scrollToActive` message → scrolls the active `.seg` to center and resets the user-scroll timer so auto-follow resumes
 - `seek` message (outbound) → tapping a `.seg` seeks audio to that timestamp
 - `requestSegmentWindow` / `segmentWindow` messages → builds a text-anchor around the active segment for time-stamped annotations
 

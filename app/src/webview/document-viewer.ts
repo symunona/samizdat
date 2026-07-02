@@ -457,6 +457,24 @@ function setActiveSeg(ms: number): void {
   if (idx >= 0 && Date.now() - _lastUserScroll > 2500) {
     els[idx].scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
+  reportActiveVisibility()
+}
+
+// Whether the currently-playing (.active) segment sits within the viewport. Drives
+// the host's floating "scroll to active" button: while the user reads elsewhere the
+// active line drifts off-screen (auto-follow is suppressed) — the button offers a
+// one-tap jump back. Nothing playing yet → treat as visible (button hidden).
+let _lastActiveVisible: boolean | null = null
+function reportActiveVisibility(): void {
+  const el = document.querySelector<HTMLElement>('.seg.active')
+  let visible = true
+  if (el) {
+    const r = el.getBoundingClientRect()
+    visible = r.bottom > 0 && r.top < window.innerHeight
+  }
+  if (visible === _lastActiveVisible) return
+  _lastActiveVisible = visible
+  sendMsg({ type: 'activeSegVisible', visible })
 }
 
 function segCharOffset(el: HTMLElement): number {
@@ -699,6 +717,7 @@ window.addEventListener('scroll', () => {
     _lastFrac = frac
     sendMsg({ type: 'scroll', fraction: frac })
   }
+  reportActiveVisibility()
 }, { passive: true })
 
 // ── Text selection ────────────────────────────────────────────────────────────
@@ -805,6 +824,15 @@ function handleMessage(event: MessageEvent): void {
     case 'mediaTime':
       setActiveSeg(msg.ms as number)
       break
+
+    case 'scrollToActive': {
+      const el = document.querySelector<HTMLElement>('.seg.active')
+      if (el) {
+        _lastUserScroll = 0 // resume auto-follow
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+      break
+    }
 
     case 'requestSegmentWindow': {
       const win = segmentWindow(msg.ms as number)

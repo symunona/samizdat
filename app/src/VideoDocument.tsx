@@ -52,6 +52,7 @@ type ParsedMsg = {
   data?: PendingSelection & { media_ts_ms?: number }
   id?: string
   ms?: number
+  visible?: boolean
 }
 
 // Max on-screen width of the video/thumbnail so a wide desktop window keeps the
@@ -126,12 +127,13 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const { activeUrl, token, status } = useConnection()
   const { toast } = useToast()
   const insets = useSafeAreaInsets()
-  // The scrollable content above the pinned footer needs a concrete height so the
-  // transcript iframe/WebView (which can't grow to fit) gets a real height AND the
-  // page scrolls the video off the top on desktop. Size the active tab panel to
-  // most of the viewport; the video block on top then overflows into scroll.
-  const { height: winH } = useWindowDimensions()
-  const panelH = Math.max(360, Math.round(winH - 160))
+  // The player + tab bar are pinned; the transcript panel below fills the rest and
+  // scrolls internally. Bound the pinned player to a compact 16:9 box (≤32% of the
+  // viewport height) so the transcript stays maximized on both phone and desktop.
+  const { width: winW, height: winH } = useWindowDimensions()
+  const playerH = Math.min(Math.round(Math.min(winW, PLAYER_MAX_W) * 9 / 16), Math.round(winH * 0.32))
+  const playerW = Math.round(playerH * 16 / 9)
+  const playerDims = useMemo(() => ({ width: playerW, height: playerH }), [playerW, playerH])
 
   const segments = useMemo(() => parseTranscript(doc), [doc])
   const meta = useMemo(() => parseMediaMetadata(doc), [doc])
@@ -139,6 +141,9 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [highlights, setHighlights] = useState<HighlightWithDoc[]>([])
   const [tab, setTab] = useState<Tab>('transcript')
+  // Whether the currently-playing transcript segment is on-screen (reported by the
+  // WebView). When false on the transcript tab we float a "scroll to active" button.
+  const [activeSegVisible, setActiveSegVisible] = useState(true)
   const [showVideo, setShowVideo] = useState(false)
   const [localUri, setLocalUri] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
@@ -355,8 +360,15 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     } else if (msg.type === 'tap_annotation' && msg.id) {
       const ann = annotations.find(a => a.id === msg.id)
       if (ann) openAnnotation(ann, true)
+    } else if (msg.type === 'activeSegVisible') {
+      setActiveSegVisible(msg.visible !== false)
     }
   }, [doc.title, annotations, themeMsg, sendToWebView, userSeek, openAnnotation, positionMs])
+
+  // Jump the transcript back to the currently-playing segment and resume auto-follow.
+  const scrollToActive = useCallback(() => {
+    sendToWebView({ type: 'scrollToActive' })
+  }, [sendToWebView])
 
   const handleMessage = useCallback((e: WebViewMessageEvent) => {
     try { handleParsedMessage(JSON.parse(e.nativeEvent.data) as ParsedMsg) } catch { /* ignore */ }
@@ -541,13 +553,10 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
       <PendingPipelineBanner docId={doc.id} isVideo />
 
-      {/* Scrollable region — video + tabs + tab content. On desktop the video
-          scrolls off the top of the screen while the footer stays pinned below. */}
-      <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
-        {/* Player / thumbnail */}
-        <View style={s.player}>
+      {/* Player / thumbnail — pinned to the top (never scrolls away). */}
+      <View style={s.player}>
           {videoActive && ytId ? (
-            <View ref={videoBoxRef} style={s.videoBox}>
+            <View ref={videoBoxRef} style={[s.videoBox, playerDims]}>
               <YtPlayer ref={ytRef} videoId={ytId} startMs={videoStartMs} rate={rate} onStatus={onYtStatus} onError={handleYtError} />
               {embedDisabled ? (
                 <View style={s.ytErrorBox}>
@@ -572,7 +581,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
               </View>
             </View>
           ) : (
-            <Pressable onPress={ytId ? toggleVideo : undefined} style={s.thumbBox}>
+            <Pressable onPress={ytId ? toggleVideo : undefined} style={[s.thumbBox, playerDims]}>
               {doc.hero_image_url ? (
                 <Image source={{ uri: doc.hero_image_url }} style={s.thumb} resizeMode="cover" />
               ) : <View style={[s.thumb, s.thumbPlaceholder]} />}
@@ -610,10 +619,17 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
           })}
         </View>
 
-        {/* Tab content. Transcript stays mounted (hidden) so it keeps auto-following.
-            Fixed height so the transcript iframe/WebView gets a concrete height and
-            the page overflows into scroll (video scrolls off the top). */}
-        <View style={[s.tabContent, { height: panelH }]}>
+        {/* Tab content fills the space between the pinned tab bar and footer, and
+            scrolls internally. Transcript stays mounted (hidden on other tabs) so it
+            keeps auto-following playback. */}
+        <View style={s.tabContent}>
+          {/* Floating "jump to the playing line" button — shown while the transcript
+              is up but the active segment has drifted off-screen. */}
+          {tab === 'transcript' && !activeSegVisible ? (
+            <Pressable onPress={scrollToActive} style={s.resumeBtn} hitSlop={8}>
+              <Ionicons name="arrow-down" size={20} color={theme.colors.background} />
+            </Pressable>
+          ) : null}
           <View style={[s.tabPanel, tab !== 'transcript' && s.tabPanelHidden]}>
           {Platform.OS === 'web' ? (
             <iframe
@@ -690,7 +706,6 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
           </ScrollView>
         ) : null}
         </View>
-      </ScrollView>
 
       {/* Backdrop closes the speed dropup on an outside tap (full-screen). */}
       {speedOpen ? <Pressable style={s.speedBackdrop} onPress={() => setSpeedOpen(false)} /> : null}
@@ -816,12 +831,12 @@ function buildStyles(t: Theme) {
     // Center + cap the player so a wide desktop window never pushes the
     // transcript/seeker off-screen; 16:9 is preserved within the cap.
     player: { backgroundColor: '#000', alignItems: 'center' },
-    thumbBox: { width: '100%', maxWidth: PLAYER_MAX_W, aspectRatio: 16 / 9, justifyContent: 'center', alignItems: 'center' },
+    thumbBox: { justifyContent: 'center', alignItems: 'center' },
     thumb: { width: '100%', height: '100%' },
     thumbPlaceholder: { backgroundColor: t.colors.surface },
     playOverlay: { position: 'absolute', alignItems: 'center', gap: 4 },
     playOverlayText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-    videoBox: { width: '100%', maxWidth: PLAYER_MAX_W, aspectRatio: 16 / 9, backgroundColor: '#000' },
+    videoBox: { backgroundColor: '#000' },
     videoBtns: { position: 'absolute', top: 6, right: 6, flexDirection: 'row', gap: 6 },
     videoBtn: { backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 14, padding: 5 },
     audioOnlyBtn: {
@@ -842,10 +857,6 @@ function buildStyles(t: Theme) {
     },
     ytErrorLinkText: { color: '#fff', fontSize: 13, fontWeight: '700' },
     ytErrorHint: { color: 'rgba(255,255,255,0.7)', fontSize: 11, textAlign: 'center' },
-
-    // ── Scrollable content region (above the pinned footer) ──
-    scroll: { flex: 1, backgroundColor: t.colors.background },
-    scrollContent: { flexGrow: 1 },
 
     // ── Pinned footer control bar ──
     footer: {
@@ -934,12 +945,19 @@ function buildStyles(t: Theme) {
     tabItemActive: { borderBottomColor: t.colors.accent },
     tabLabel: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
     tabLabelActive: { color: t.colors.accent },
-    // Height is set inline (panelH) so the transcript iframe/WebView gets a concrete
-    // height and the page can scroll the video off the top.
-    tabContent: { backgroundColor: t.colors.background },
+    // Fills the space between the pinned tab bar and footer; the panels below
+    // scroll internally. position:relative anchors the floating resume button.
+    tabContent: { flex: 1, position: 'relative', backgroundColor: t.colors.background },
     tabPanel: { flex: 1, backgroundColor: t.colors.background },
     tabPanelHidden: { display: 'none' },
     panelPad: { padding: t.spacing.lg, gap: t.spacing.md },
+    // Floating "scroll to the playing line" button, top-right of the transcript.
+    resumeBtn: {
+      position: 'absolute', top: t.spacing.md, right: t.spacing.md, zIndex: 10,
+      width: 40, height: 40, borderRadius: 20, backgroundColor: t.colors.accent,
+      alignItems: 'center', justifyContent: 'center',
+      shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 6,
+    },
 
     // Details tab
     detailTitle: { color: t.colors.text, fontSize: 18, fontWeight: '700', lineHeight: 24 },
