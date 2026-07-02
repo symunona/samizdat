@@ -10,6 +10,19 @@ just dev
 ```
 Never use raw `pkill`/`go build` manually. `just dev` is the canonical restart command for agents and humans alike.
 
+**Rebuilding the binary ≠ restarting the process.** A running server holds its old
+code in memory until restarted. `just dev` now kills whatever holds the dev port
+first (dev nohup included) and fails loudly if the new process doesn't actually
+bind — so it can't "succeed" while a stale process keeps serving.
+
+**Which server is running, and is it fresh? → `just status`.** It reports the mode
+(dev nohup vs `samizdat-<instance>` systemd service), PID, and compares the live
+server's stamped commit (`GET /api/v1/health` → `commit`, injected via `-ldflags`)
+to `git HEAD` → a FRESH/STALE verdict. Don't trust `/api/v1/app/android/version`
+for server freshness — it reads the APK sidecar per-request and shows fresh even on
+stale server code. Two run modes: **dev nohup** (orphaned to init, from `just dev`)
+vs **systemd service** (`just restart`). `just kill` stops dev servers.
+
 ## Module
 
 `github.com/symunona/samizdat/server` — own `go.mod`. CLI is a separate module; it talks to the server via HTTP (admin endpoints, local trust). No shared `engine/` module for M1; promote later if needed.

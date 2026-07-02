@@ -91,7 +91,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	handler := api.New(context.Background(), db, webDir, extensionZip, apkPath, urls, c.CacheDir, c.ExtractorsDir, c.YTDLP, c.LLM)
 
-	logServer.Printf("samizdat %s listening on %s", api.Version(), addr)
+	logServer.Printf("samizdat %s (%s) listening on %s", api.Version(), api.Build(), addr)
 	logServer.Printf("reachable at:\n  %s", strings.Join(urls, "\n  "))
 	if webDir != "" {
 		logServer.Printf("web app served from %s", webDir)

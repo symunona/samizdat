@@ -115,10 +115,75 @@ webview-build:
 [group('dev')]
 [doc('Build app + server, restart background server (dev mode, HTTP)')]
 dev: _check-no-service webview-build build-server build-cli build-app-web build-clipper
-    @rm -rf /tmp/playwright_chromiumdev_profile-* /tmp/playwright-artifacts-* 2>/dev/null || true
-    nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist --extension-zip clipper/dist/sam-chrome.zip --apk dist/samizdat.apk > /tmp/samizdat-{{_dev_port}}.log 2>&1 &
-    @PORT={{_dev_port}}; for i in $(seq 1 20); do ss -tlnp | grep -q ":$PORT" && break; sleep 0.5; done && echo "server started on :{{_dev_port}}, log: /tmp/samizdat-{{_dev_port}}.log"
-    @./cli/bin/sam {{_config_flag}} connect
+    #!/usr/bin/env bash
+    set -euo pipefail
+    PORT={{_dev_port}}
+    rm -rf /tmp/playwright_chromiumdev_profile-* /tmp/playwright-artifacts-* 2>/dev/null || true
+    # Stop any dev server still holding the port BEFORE starting a new one. Without
+    # this, a second `just dev` starts a process that fails to bind (port in use),
+    # dies, and the readiness check below then "sees" the OLD process still on the
+    # port and falsely reports success — the stale-binary trap. (_check-no-service
+    # already handled the systemd service; this covers the orphaned dev nohup.)
+    old=$(ss -tlnp 2>/dev/null | grep ":${PORT} " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+    if [ -n "${old:-}" ]; then
+      echo "stopping stale dev server (pid ${old}) on :${PORT}"
+      kill "${old}" 2>/dev/null || true
+      for i in $(seq 1 20); do ss -tlnp 2>/dev/null | grep -q ":${PORT} " || break; sleep 0.3; done
+    fi
+    nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist --extension-zip clipper/dist/sam-chrome.zip --apk dist/samizdat.apk > /tmp/samizdat-${PORT}.log 2>&1 &
+    newpid=$!
+    for i in $(seq 1 20); do ss -tlnp 2>/dev/null | grep -q ":${PORT} " && break || true; sleep 0.5; done
+    # Verify OUR process is alive AND is the one bound — not a survivor on the port.
+    if ! kill -0 "${newpid}" 2>/dev/null; then
+      echo "✗ dev server (pid ${newpid}) exited on startup — last log lines:"; tail -8 "/tmp/samizdat-${PORT}.log"; exit 1
+    fi
+    lpid=$(ss -tlnp 2>/dev/null | grep ":${PORT} " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+    if [ "${lpid:-}" != "${newpid}" ]; then
+      echo "✗ :${PORT} is held by pid ${lpid:-none}, not our new server ${newpid} — a stale process survived; kill it and retry."; exit 1
+    fi
+    echo "✓ server started on :${PORT} (pid ${newpid}, commit $(git rev-parse --short HEAD 2>/dev/null || echo '?')), log: /tmp/samizdat-${PORT}.log"
+    ./cli/bin/sam {{_config_flag}} connect
+
+[group('dev')]
+[doc('What server is on the dev port, which mode (dev nohup / systemd), and is it running the latest built code?')]
+status:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    PORT={{_dev_port}}
+    echo "── samizdat runtime (:${PORT}) ──"
+    lpid=$(ss -tlnp 2>/dev/null | grep ":${PORT} " | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+    if [ -z "${lpid:-}" ]; then
+      echo "  listener   : none — nothing serving :${PORT}  (start: 'just dev')"
+    else
+      ppid=$(ps -o ppid= -p "${lpid}" 2>/dev/null | tr -d ' ' || true)
+      started=$(ps -o lstart= -p "${lpid}" 2>/dev/null || true)
+      svc_main=$(systemctl --user show -p MainPID --value samizdat-{{_instance}} 2>/dev/null || echo 0)
+      if [ "${svc_main:-0}" = "${lpid}" ]; then mode="systemd service (samizdat-{{_instance}})";
+      elif [ "${ppid:-}" = "1" ]; then mode="dev nohup (orphaned to init)";
+      else mode="dev (parent pid ${ppid:-?})"; fi
+      echo "  listener   : pid ${lpid}"
+      echo "  mode       : ${mode}"
+      echo "  started    : ${started:-?}"
+    fi
+    echo "  binary     : server/bin/samizdat (built $(stat -c '%y' server/bin/samizdat 2>/dev/null | cut -d. -f1 || echo '?'))"
+    head=$(git rev-parse --short HEAD 2>/dev/null || echo '?')
+    [ -z "$(git status --porcelain 2>/dev/null)" ] || head="${head}-dirty"
+    echo "  git HEAD   : ${head}"
+    resp=$(curl -fsS "http://localhost:${PORT}/api/v1/health" 2>/dev/null || true)
+    if [ -z "${resp}" ]; then
+      echo "  live /health: (unreachable)"
+    else
+      live=$(printf '%s' "${resp}" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j.commit||"?")+" | built "+(j.built_at||"?"))}catch{process.stdout.write("?")}})' 2>/dev/null || echo '?')
+      lc=$(printf '%s' "${resp}" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).commit||"")}catch{process.stdout.write("")}})' 2>/dev/null || echo '')
+      echo "  live /health: ${live}"
+      if [ -z "${lc}" ] || [ "${lc}" = "unknown" ]; then
+        echo "  verdict    : ⚠ running server has NO build stamp (built before this feature) — restart with 'just dev'"
+      elif [ "${lc}" = "${head}" ]; then
+        echo "  verdict    : ✓ FRESH — running code matches git HEAD"
+      else
+        echo "  verdict    : ✗ STALE — running ${lc}, HEAD is ${head}. Restart: 'just dev' (dev) or 'just restart' (service)"
+      fi
+    fi
 
 [group('dev')]
 [doc('Build + run the sam CLI with args (e.g. just sam connect)')]
@@ -152,7 +217,17 @@ build: build-server build-cli
 [group('build')]
 [doc('Build the server static binary')]
 build-server:
-    cd server && CGO_ENABLED=0 go build -o bin/samizdat .
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}/server"
+    # Stamp the running commit + build time into the binary so a live server can
+    # self-report which code it runs (GET /api/v1/health → commit). `just status`
+    # compares it to git HEAD to catch stale processes. `-dirty` = uncommitted tree.
+    commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+    [ -z "$(git status --porcelain 2>/dev/null)" ] || commit="${commit}-dirty"
+    built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    pkg=github.com/symunona/samizdat/server/internal/api
+    CGO_ENABLED=0 go build -ldflags "-X ${pkg}.commit=${commit} -X ${pkg}.buildTime=${built}" -o bin/samizdat .
 
 [group('build')]
 [doc('Build the sam CLI')]
@@ -247,8 +322,16 @@ deploy-android:
     # the fresh build with no copy step. The one thing that needs a restart is ROUTE
     # registration: the /download + version routes are only wired at startup when
     # apk_path is set — so restart the installed service if it's active to (re)register.
-    if systemctl --user is-active --quiet samizdat-sam; then
-      systemctl --user restart samizdat-sam && echo "↻ restarted samizdat-sam service (re-registers /download routes)"
+    if systemctl --user is-active --quiet samizdat-{{_instance}}; then
+      systemctl --user restart samizdat-{{_instance}} && echo "↻ restarted samizdat-{{_instance}} service (re-registers /download routes)"
+    elif ss -tlnp 2>/dev/null | grep -q ":{{_dev_port}} "; then
+      # A DEV server (nohup) holds the port, not the systemd service — it won't
+      # pick up new routes/code on its own. Warn loudly instead of silently skipping
+      # (the old behaviour, which is what made "served old binary" keep happening).
+      echo "⚠ a DEV server is running on :{{_dev_port}} (not the systemd service) — it will NOT pick up new routes/code."
+      echo "  Restart it to serve this build:  just dev     (verify with: just status)"
+    else
+      echo "ℹ no server running on :{{_dev_port}} — start one with 'just dev' (dev) or 'just restart' (service)."
     fi
     # Verify: the live server should now advertise app.json's version to the updater.
     want=$(node -e 'const a=require("./app/app.json").expo;process.stdout.write(a.version+" / code "+a.android.versionCode)')
