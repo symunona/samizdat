@@ -77,6 +77,14 @@ Keep repo CLEAN code.
 Try always everything DRY.
 Always run `just build` before you call a job done.
 
+## Versioning (app)
+`just build-android` **auto-bumps the version every build** — default **PATCH**
+(`0.2.2`→`0.2.3`). Pass `just build-android minor` (feature: `0.2.x`→`0.3.0`) or
+`just build-android major` (`0.x`→`1.0.0`) when the release warrants it. `versionCode`
+always increments by 1 (Android requires strictly-increasing for the in-app updater).
+Bump-only (no build): `just bump [patch|minor|major]`. Logic in `tools/bump-version.mjs`;
+it runs *before* prebuild so the native manifest is stamped. Semver = `MAJOR.MINOR.PATCH`.
+
 ## Design source of truth
 Detailed research + decisions live in the planning vault (outside this repo):
 `~/dropx/org/50-59 pet projects and hobbies/54 samizdat/` — see `plan/003 Plan Decisions.md`, `plan/004 Onboarding Plan.md`, `plan/005 Samizdat Expo App UX.md`, `options/`, and `research/tech/` (009 naming, 019 SQLite, 020 sync/queue/API). When a decision here is ambiguous, that vault is canonical.

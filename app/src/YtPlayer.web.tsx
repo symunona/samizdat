@@ -76,7 +76,10 @@ const YtPlayer = forwardRef<YtPlayerHandle, YtPlayerProps>(function YtPlayer(
           },
           onStateChange: (e: { target: YT }) => emit(e.target),
           // 101 & 150 = embedding disabled by the video owner; host shows a fallback.
-          onError: (e: { data: number }) => onErrorRef.current?.(Number(e.data)),
+          onError: (e: { data: number }) => {
+            log.error('yt iframe error', 'code', e.data, 'videoId', videoId)
+            onErrorRef.current?.(Number(e.data))
+          },
         },
       })
     }).catch(err => log.error('yt api load', err))

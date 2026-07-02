@@ -54,6 +54,7 @@ export async function loadUrlLastUsedMap(): Promise<Record<string, string>> {
 }
 
 const THEME_KEY = 'samizdat_theme'
+const DEBUG_LOG_KEY = 'samizdat_debug_log_stream'
 
 export async function saveTheme(theme: 'dark' | 'light'): Promise<void> {
   await AsyncStorage.setItem(THEME_KEY, theme)
@@ -65,6 +66,20 @@ export async function loadTheme(): Promise<'dark' | 'light'> {
     return raw === 'light' ? 'light' : 'dark'
   } catch {
     return 'dark'
+  }
+}
+
+// Debug-log streaming toggle. Defaults ON — this is a debug-oriented build; the
+// Settings switch lets the user silence it. See src/debugLog.ts.
+export async function saveDebugLogStream(on: boolean): Promise<void> {
+  await AsyncStorage.setItem(DEBUG_LOG_KEY, on ? '1' : '0')
+}
+
+export async function loadDebugLogStream(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(DEBUG_LOG_KEY)) !== '0'
+  } catch {
+    return true
   }
 }
 

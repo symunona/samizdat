@@ -13,6 +13,7 @@ import { useConnection } from '../../src/ConnectionContext'
 import { useConfirm } from '../../src/ConfirmContext'
 import { useToast } from '../../src/ToastContext'
 import { useSyncStore } from '../../src/store/syncStore'
+import { useDebugLogStore } from '../../src/store/debugLogStore'
 
 function hostname(url: string): string {
   try { return new URL(url).hostname } catch { return url }
@@ -52,6 +53,8 @@ export default function SettingsScreen() {
 
   const { toast } = useToast()
   const { confirm } = useConfirm()
+  const debugLogEnabled = useDebugLogStore((st) => st.enabled)
+  const setDebugLogEnabled = useDebugLogStore((st) => st.setEnabled)
 
   const [probing, setProbing] = useState(false)
   const [devices, setDevices] = useState<DeviceInfo[]>([])
@@ -464,6 +467,26 @@ export default function SettingsScreen() {
                 thumbColor={theme.colors.background}
               />
           }
+        </View>
+      </View>
+
+      {/* Debug log streaming */}
+      <View style={s.card}>
+        <View style={s.cardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.cardTitle}>Debug Log Streaming</Text>
+            <Text style={s.cardSubtitle}>
+              {debugLogEnabled
+                ? 'On — this device streams its logs to the server for debugging'
+                : 'Off — logs stay on this device'}
+            </Text>
+          </View>
+          <Switch
+            value={debugLogEnabled}
+            onValueChange={setDebugLogEnabled}
+            trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+            thumbColor={theme.colors.background}
+          />
         </View>
       </View>
 

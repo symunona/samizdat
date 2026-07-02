@@ -8,6 +8,9 @@ import { StyleSheet } from 'react-native'
 import WebView from 'react-native-webview'
 import type { WebViewMessageEvent } from 'react-native-webview'
 import type { YtPlayerHandle, YtPlayerProps } from './YtPlayer.types'
+import { createLogger } from './logger'
+
+const log = createLogger('ytplayer')
 
 // HTML page that embeds the IFrame API, autoplays from `startS`, applies `rate`, and
 // posts a status frame every 250ms (positionMs/durationMs/playing). Values are
@@ -19,12 +22,15 @@ function buildYtHtml(videoId: string, startS: number, rate: number): string {
 </head><body><div id="p"></div><script>
 var player;
 function post(o){window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify(o));}
+// Surface in-WebView JS failures to the RN host (→ device debug-log channel).
+window.onerror=function(m,s,l,c,e){post({t:'jserr',msg:''+m,src:s,line:l,col:c,stack:e&&e.stack});return false;};
+window.addEventListener('unhandledrejection',function(ev){post({t:'jserr',msg:'unhandledrejection: '+((ev.reason&&ev.reason.message)||ev.reason)});});
 function tick(){if(player&&player.getCurrentTime){post({t:'status',playing:player.getPlayerState&&player.getPlayerState()===1,positionMs:Math.floor((player.getCurrentTime()||0)*1000),durationMs:Math.floor((player.getDuration()||0)*1000)});}}
 window.onYouTubeIframeAPIReady=function(){
   player=new YT.Player('p',{videoId:'${videoId}',playerVars:{start:${startS},autoplay:1,playsinline:1,rel:0,enablejsapi:1,origin:'https://www.youtube.com'},events:{
     onReady:function(e){try{e.target.setPlaybackRate(${rate})}catch(x){}post({t:'status',playing:true,positionMs:${startS}*1000,durationMs:Math.floor((e.target.getDuration()||0)*1000)});},
     onStateChange:function(){tick();},
-    onError:function(e){post({t:'error',code:e.data});}
+    onError:function(e){post({t:'error',code:e.data,state:player&&player.getPlayerState?player.getPlayerState():null});}
   }});
   setInterval(tick,250);
 };
@@ -51,7 +57,14 @@ const YtPlayer = forwardRef<YtPlayerHandle, YtPlayerProps>(function YtPlayer(
     try {
       const m = JSON.parse(e.nativeEvent.data)
       if (m.t === 'status') onStatus({ playing: !!m.playing, positionMs: m.positionMs, durationMs: m.durationMs })
-      else if (m.t === 'error') onError?.(Number(m.code))
+      else if (m.t === 'error') {
+        // Ships to the device debug-log channel; the standard iframe codes are
+        // 2/5/100/101/150/153 — anything else points outside the API (overlay/net).
+        log.error('yt iframe error', 'code', m.code, 'playerState', m.state, 'videoId', videoId)
+        onError?.(Number(m.code))
+      } else if (m.t === 'jserr') {
+        log.error('yt webview jserr', m.msg, m.src ? `${m.src}:${m.line}:${m.col}` : '', m.stack ?? '')
+      }
     } catch { /* ignore */ }
   }
 
@@ -62,6 +75,11 @@ const YtPlayer = forwardRef<YtPlayerHandle, YtPlayerProps>(function YtPlayer(
       // rejects the embed with error 153 (no valid HTTP referer).
       source={{ html: buildYtHtml(videoId, Math.floor(startMs / 1000), rate), baseUrl: 'https://www.youtube.com' }}
       onMessage={onMessage}
+      // Native WebView failures (load/HTTP/renderer crash) are otherwise silent —
+      // ship them so a black player box has a diagnosable cause on the device.
+      onError={(e) => log.error('yt webview onError', e.nativeEvent.code, e.nativeEvent.description, e.nativeEvent.url)}
+      onHttpError={(e) => log.error('yt webview httpError', e.nativeEvent.statusCode, e.nativeEvent.url)}
+      onRenderProcessGone={(e) => log.error('yt webview renderProcessGone', e.nativeEvent.didCrash)}
       style={styles.fill}
       allowsInlineMediaPlayback
       allowsFullscreenVideo

@@ -126,6 +126,11 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	ytStatusH := newYtdlpStatusHandler(ctx, q, ytdlp.Proxy)
 	mux.HandleFunc("GET /api/v1/ytdlp/status", bearerAuth(q, ytStatusH.get))
 
+	// Live device debug-log channel: paired devices stream JS/WebView logs here;
+	// appended to tmp/device-logs/<device>.ndjson (tail with `just device-logs`).
+	dbgH := &debugLogsHandler{dir: filepath.Join("tmp", "device-logs")}
+	mux.HandleFunc("POST /api/v1/debug/logs", bearerAuth(q, dbgH.ingest))
+
 	plH := &pipelinesHandler{q: q}
 	mux.HandleFunc("GET /api/v1/pipelines", bearerAuth(q, plH.list))
 	mux.HandleFunc("POST /api/v1/pipelines", bearerAuth(q, plH.create))

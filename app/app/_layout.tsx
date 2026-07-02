@@ -12,6 +12,8 @@ import { ToastProvider } from '../src/ToastContext'
 import { ConfirmProvider } from '../src/ConfirmContext'
 import { ScrapeQueueProvider } from '../src/ScrapeQueueContext'
 import { useSyncEffect } from '../src/store/useSyncEffect'
+import { useDebugLogStore } from '../src/store/debugLogStore'
+import { setDebugLogTarget, logToServer } from '../src/debugLog'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -43,6 +45,48 @@ function SyncEffects() {
   return null
 }
 
+// Streams JS + WebView logs to the server's device-log channel when connected
+// and the toggle is on. Also installs a global uncaught-error handler so crashes
+// reach the channel. See src/debugLog.ts and app/CLAUDE.md.
+function DebugLogBridge() {
+  const { activeUrl, token, deviceId, status } = useConnection()
+  const enabled = useDebugLogStore((s) => s.enabled)
+  const hydrate = useDebugLogStore((s) => s.hydrate)
+
+  useEffect(() => { void hydrate() }, [hydrate])
+
+  useEffect(() => {
+    const on = enabled && status === 'connected'
+    setDebugLogTarget(on ? activeUrl : null, on ? token : null, deviceId, on)
+  }, [activeUrl, token, deviceId, status, enabled])
+
+  // Route uncaught JS errors into the channel. On native, ErrorUtils is the
+  // global handler; on web we listen for window error/rejection events.
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      const onErr = (e: ErrorEvent) => logToServer('error', 'uncaught', e.message, e.error?.stack ?? '')
+      const onRej = (e: PromiseRejectionEvent) => logToServer('error', 'unhandledRejection', e.reason)
+      window.addEventListener('error', onErr)
+      window.addEventListener('unhandledrejection', onRej)
+      return () => {
+        window.removeEventListener('error', onErr)
+        window.removeEventListener('unhandledrejection', onRej)
+      }
+    }
+    const g = globalThis as unknown as {
+      ErrorUtils?: { getGlobalHandler: () => (e: unknown, f: boolean) => void; setGlobalHandler: (h: (e: unknown, f: boolean) => void) => void }
+    }
+    const prev = g.ErrorUtils?.getGlobalHandler()
+    g.ErrorUtils?.setGlobalHandler((e: unknown, isFatal: boolean) => {
+      logToServer('error', 'uncaught', `${isFatal ? 'FATAL ' : ''}`, e)
+      prev?.(e, isFatal)
+    })
+    return () => { if (prev) g.ErrorUtils?.setGlobalHandler(prev) }
+  }, [])
+
+  return null
+}
+
 export default function RootLayout() {
   useEffect(() => {
     loadTheme().then((t) => UnistylesRuntime.setTheme(t))
@@ -63,6 +107,7 @@ export default function RootLayout() {
         <ConnectionProvider>
           <NavigationGuard />
           <SyncEffects />
+          <DebugLogBridge />
           <ToastProvider>
             <ConfirmProvider>
               <ScrapeQueueProvider>

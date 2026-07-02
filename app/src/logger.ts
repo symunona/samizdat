@@ -27,6 +27,16 @@ export function setLoggingEnabled(val: boolean): void {
   enabled = val
 }
 
+// Optional sink: when set (by src/debugLog.ts), every log line is also forwarded
+// here so it can be streamed to the server's device-log channel. Kept as a plain
+// setter to avoid a static import cycle (debugLog imports the API layer).
+export type LogSink = (level: 'log' | 'warn' | 'error', module: string, args: unknown[]) => void
+let sink: LogSink | null = null
+
+export function setLogSink(fn: LogSink | null): void {
+  sink = fn
+}
+
 export interface Logger {
   log(...args: unknown[]): void
   warn(...args: unknown[]): void
@@ -37,20 +47,27 @@ export function createLogger(module: string): Logger {
   const color = hashColor(module)
   const tag = `color:${color};font-weight:bold`
   const label = (level: string) => `%c[${ts()}] [${module}] ${level}`
+  const forward = (level: 'log' | 'warn' | 'error', args: unknown[]) => {
+    // Never let the sink throw into the caller (or recurse if it logs on failure).
+    try { sink?.(level, module, args) } catch { /* ignore */ }
+  }
 
   return {
     log(...args: unknown[]) {
       if (!enabled) return
+      forward('log', args)
       // eslint-disable-next-line no-console
       console.log(label(''), tag, ...args)
     },
     warn(...args: unknown[]) {
       if (!enabled) return
+      forward('warn', args)
       // eslint-disable-next-line no-console
       console.warn(label('WARN'), tag, ...args)
     },
     error(...args: unknown[]) {
       // errors always surface regardless of enabled flag
+      forward('error', args)
       // eslint-disable-next-line no-console
       console.error(label('ERROR'), tag, ...args)
     },

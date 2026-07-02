@@ -135,6 +135,14 @@ app:
 clipper: build-clipper
     @echo "Load unpacked in Chrome → chrome://extensions → 'Load unpacked' → $(pwd)/clipper/dist/unpacked"
 
+[group('dev')]
+[doc('Tail the live debug logs streamed by paired devices (see app Settings → Debug Log Streaming)')]
+device-logs:
+    #!/usr/bin/env bash
+    mkdir -p tmp/device-logs
+    echo "tailing tmp/device-logs/*.ndjson — open a paired device with debug streaming on…"
+    tail -n +1 -F tmp/device-logs/*.ndjson 2>/dev/null || tail -F tmp/device-logs/
+
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 [group('build')]
@@ -173,10 +181,19 @@ gen-icons:
     node gen.mjs
 
 [group('build')]
-[doc('Build a standalone debug-signed Android APK locally, minimal RAM (JS bundled separately) → dist/samizdat.apk (+ .json)')]
-build-android:
+[doc('Bump app/app.json version (level=patch|minor|major) + versionCode +1')]
+bump level="patch":
+    node "{{justfile_directory()}}/tools/bump-version.mjs" {{level}}
+
+[group('build')]
+[doc('Build a standalone debug-signed Android APK locally, minimal RAM (JS bundled separately) → dist/samizdat.apk (+ .json). Auto-bumps version (level=patch|minor|major)')]
+build-android level="patch":
     #!/usr/bin/env bash
     set -euo pipefail
+    # Auto-bump the version FIRST so prebuild stamps the new version/versionCode
+    # into the native manifest. Default patch; `just build-android minor|major`
+    # for the bigger bumps. See tools/bump-version.mjs + CLAUDE.md.
+    node "{{justfile_directory()}}/tools/bump-version.mjs" {{level}}
     export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
     export ANDROID_SDK_ROOT="$ANDROID_HOME"
     export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"

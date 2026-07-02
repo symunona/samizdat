@@ -157,6 +157,39 @@ AGENT_BROWSER_ARGS="--no-sandbox" agent-browser --state tmp/debug-session/state.
 - Screenshots go to `tmp/screenshots/`, not `tmp/` root.
 - State file is gitignored — recreate from the pairing flow if missing.
 
+## Device debug-log channel (live logs off a physical device)
+
+A paired device streams its logs to the server so you can watch a real phone from
+the dev machine — the only window into native-only failures (e.g. the WebView
+YouTube player, which has no reachable console).
+
+**Flow:** `logger.ts` forwards every log/warn/error to a sink; `src/debugLog.ts`
+buffers them and POSTs NDJSON to `POST /api/v1/debug/logs` (bearer auth) — flush
+every ~1s, immediate on `error`, `keepalive: true` so a batch survives page
+navigation. The server appends to `tmp/device-logs/<device>.ndjson`.
+
+**Watch it:** `just device-logs` (tails `tmp/device-logs/*.ndjson`).
+
+**Wiring:**
+- `src/logger.ts` — `setLogSink()` (kept as a setter to avoid an import cycle).
+- `src/debugLog.ts` — the shipper. NEVER call the app logger from here (it loops
+  back through the sink); use `console` directly for its own diagnostics.
+- `app/_layout.tsx` `DebugLogBridge` — supplies the connection target from
+  `useConnection()` and pipes uncaught JS errors (ErrorUtils / window error events).
+- `src/store/debugLogStore.ts` — toggle shared by the bridge + Settings switch
+  ("Debug Log Streaming", **default ON** — this is a debug build; persisted via
+  `storage.ts`). Turn it off to silence a device.
+- `src/YtPlayer.tsx` (native) — the WebView also posts `window.onerror` /
+  unhandledrejection + richer iframe error detail, and the RN side logs
+  `onError`/`onHttpError`/`onRenderProcessGone`. All of it flows to the channel.
+
+**Standard YT IFrame error codes are 2/5/100/101/150/153** — anything else points
+*outside* the API (YouTube's own overlay, or the native WebView/net layer).
+
+The `/api/v1/debug/logs` beacon is fire-and-forget: `e2e/smoke.js` ignores its
+`requestfailed` events (a full-page nav legitimately aborts a send) so a debug
+side-channel can never gate the frontend.
+
 ## "Web vs mobile" = touch vs non-touch, not Platform.OS
 
 `Platform.OS === 'web'` is true for ALL browsers — desktop Chrome and mobile Safari alike. Never use it to mean "desktop". To branch on touch capability use `window.matchMedia('(pointer: coarse').matches`. Mobile web and native app must behave identically; `Platform.OS === 'web'` silently breaks one of them.

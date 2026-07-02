@@ -206,10 +206,12 @@ async function runSmoke() {
       pageErrors.push(`pageerror: ${err.message}`)
     })
 
-    // Capture failed requests
+    // Capture failed requests. The debug-log channel (/api/v1/debug/logs) is a
+    // fire-and-forget beacon; a full-page navigation legitimately aborts an
+    // in-flight send (net::ERR_ABORTED), so it must never gate the frontend.
     page.on('requestfailed', req => {
       const url = req.url()
-      if (url.startsWith(BASE_URL + '/api/')) {
+      if (url.startsWith(BASE_URL + '/api/') && !url.includes('/api/v1/debug/logs')) {
         pageErrors.push(`request failed: ${req.method()} ${url} — ${req.failure()?.errorText}`)
       }
     })
