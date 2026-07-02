@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, mintExtensionToken, fetchLatestAndroidBuild, androidApkUrl, ApiError } from '../../src/api'
@@ -647,6 +648,14 @@ export default function SettingsScreen() {
         <Text style={s.cardTitle}>Local Data</Text>
         <Text style={s.cardSubtitle}>Cached on this device — server copy untouched</Text>
         <Pressable
+          onPress={() => router.push('/offline-cache')}
+          style={({ pressed }) => [s.navRow, pressed && s.navRowPressed]}
+        >
+          <Ionicons name="cloud-offline-outline" size={18} color={theme.colors.accent} />
+          <Text style={s.navRowText}>Offline cache</Text>
+          <Ionicons name="chevron-forward" size={18} color={theme.colors.muted} />
+        </Pressable>
+        <Pressable
           onPress={handleClearLocalCache}
           style={({ pressed }) => [s.disconnectBtn, pressed && s.disconnectBtnPressed]}
         >
@@ -768,5 +777,13 @@ function buildStyles(t: Theme) {
     deviceNameSaved: { color: t.colors.online, fontSize: 14, fontWeight: '700', marginLeft: 4 },
     llmCostValue: { color: t.colors.accent, fontWeight: '700' },
     extSteps: { color: t.colors.muted, fontSize: 12, lineHeight: 18, marginTop: t.spacing.xs },
+    navRow: {
+      flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,
+      paddingVertical: t.spacing.sm, paddingHorizontal: t.spacing.sm,
+      borderRadius: t.radius.sm, borderWidth: 1, borderColor: t.colors.border,
+      backgroundColor: t.colors.background,
+    },
+    navRowPressed: { opacity: 0.7 },
+    navRowText: { flex: 1, color: t.colors.text, fontSize: 14, fontWeight: '600' },
   })
 }

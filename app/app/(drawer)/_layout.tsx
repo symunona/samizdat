@@ -142,6 +142,10 @@ export default function DrawerLayout() {
       <Drawer.Screen name="jobs" options={{ title: 'Jobs' }} />
       <Drawer.Screen name="settings" options={{ title: 'Settings' }} />
       <Drawer.Screen
+        name="offline-cache"
+        options={{ headerShown: false, drawerItemStyle: { display: 'none' } }}
+      />
+      <Drawer.Screen
         name="document/[id]"
         options={{ headerShown: false, drawerItemStyle: { display: 'none' } }}
       />
