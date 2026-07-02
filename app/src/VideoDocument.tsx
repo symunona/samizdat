@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  AppState,
   Image,
   Linking,
   PanResponder,
@@ -154,6 +155,13 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
   const ytId = meta.external_id
 
+  // Now-playing card for the lock screen when audio takes over on background/lock.
+  const nowPlaying = useMemo(() => ({
+    title: doc.title || doc.canonical_url,
+    artist: doc.author || meta.provider || undefined,
+    artworkUrl: doc.hero_image_url || undefined,
+  }), [doc.title, doc.canonical_url, doc.author, doc.hero_image_url, meta.provider])
+
   // One shared timeline for the bottom bar + transcript. The active backend is the
   // <audio> element (offline local file if synced, else the server stream) OR the
   // YouTube player while the video view is open — same interface either way.
@@ -161,7 +169,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const {
     playing, positionMs, durationMs: mediaDurMs, rate,
     play, pause, seek, setRate, videoActive, ytRef, onYtStatus,
-  } = useMediaTimeline({ audioUrl: localUri ?? remoteUrl, ytId, showVideo })
+  } = useMediaTimeline({ audioUrl: localUri ?? remoteUrl, ytId, showVideo, meta: nowPlaying })
   // Prefer the real media duration; fall back to the metadata estimate.
   const durationMs = mediaDurMs > 0 ? mediaDurMs : (meta.duration_ms ?? 0)
 
@@ -443,6 +451,23 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
   // Collapse back to audio-only, continuing from the video's position.
   const switchToAudio = useCallback(() => setShowVideo(false), [])
+
+  // Lock-screen fallback: the YouTube WebView is suspended by the OS when the app
+  // backgrounds/locks, killing playback. On 'background' while the video is the active
+  // (sounding) backend, collapse to audio-only — the useMediaTimeline handoff seeks the
+  // native expo-audio backend to the video's position and resumes, and it holds the OS
+  // media session, so playback continues locked with lock-screen controls. Refs keep the
+  // once-registered listener reading fresh values without re-subscribing.
+  const showVideoRef = useRef(showVideo); showVideoRef.current = showVideo
+  const playingRef = useRef(playing); playingRef.current = playing
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', next => {
+      if (next === 'background' && showVideoRef.current && !!ytId && playingRef.current) {
+        switchToAudio()
+      }
+    })
+    return () => sub.remove()
+  }, [switchToAudio, ytId])
 
   // Web: request native fullscreen on the video container (the iframe fills it).
   // Native: the WebView's allowsFullscreenVideo enables the player's own control.

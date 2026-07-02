@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { useAudio } from './useAudio'
-import type { AudioControl } from './useAudio'
+import type { AudioControl, AudioMeta } from './useAudio'
 import type { YtPlayerHandle, YtStatus } from './YtPlayer.types'
 
 export type MediaTimeline = AudioControl & {
@@ -26,8 +26,10 @@ export function useMediaTimeline(opts: {
   audioUrl: string
   ytId: string | undefined
   showVideo: boolean
+  // Now-playing info for the lock screen while the audio backend is sounding.
+  meta?: AudioMeta
 }): MediaTimeline {
-  const { audioUrl, ytId, showVideo } = opts
+  const { audioUrl, ytId, showVideo, meta } = opts
   const audio = useAudio(audioUrl)
 
   const videoActive = showVideo && !!ytId
@@ -58,7 +60,12 @@ export function useMediaTimeline(opts: {
       if (playing) a.play()
     }
     prevActive.current = videoActive
-  }, [videoActive])
+    // The audio backend owns the OS media session only while it's the sounding one
+    // (audio-only mode). Claiming it here is what lets playback survive a lock — the
+    // AppState listener in VideoDocument flips to audio on background, and this keeps
+    // it alive with lock-screen controls. Released while the video (WebView) sounds.
+    a.setLockScreen(!videoActive && !!audioUrl, meta)
+  }, [videoActive, audioUrl, meta])
 
   if (videoActive) {
     return {
@@ -71,6 +78,7 @@ export function useMediaTimeline(opts: {
       pause: () => ytRef.current?.pause(),
       seek: (ms: number) => ytRef.current?.seek(ms),
       setRate,
+      setLockScreen: audio.setLockScreen,
       videoActive,
       ytRef,
       onYtStatus: setYt,
@@ -85,6 +93,7 @@ export function useMediaTimeline(opts: {
     pause: audio.pause,
     seek: audio.seek,
     setRate,
+    setLockScreen: audio.setLockScreen,
     videoActive,
     ytRef,
     onYtStatus: setYt,

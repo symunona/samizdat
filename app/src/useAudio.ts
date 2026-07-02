@@ -3,6 +3,9 @@
 import { useState } from 'react'
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio'
 
+// Now-playing metadata shown on the OS lock screen / media notification.
+export type AudioMeta = { title?: string; artist?: string; artworkUrl?: string }
+
 export type AudioControl = {
   playing: boolean
   positionMs: number
@@ -12,6 +15,10 @@ export type AudioControl = {
   pause: () => void
   seek: (ms: number) => void
   setRate: (rate: number) => void
+  // Claim (or release) the OS media session so this backend keeps playing when the
+  // app is backgrounded/locked and surfaces lock-screen controls. On Android this is
+  // REQUIRED for background playback beyond ~3 min. No-op on the web backend.
+  setLockScreen: (active: boolean, meta?: AudioMeta) => void
 }
 
 export function useAudio(source: string): AudioControl {
@@ -28,5 +35,7 @@ export function useAudio(source: string): AudioControl {
     seek: (ms: number) => { if (Number.isFinite(ms) && ms >= 0) player.seekTo(ms / 1000) },
     // shouldCorrectPitch keeps voices natural at faster speeds (podcast-friendly).
     setRate: (r: number) => { player.setPlaybackRate(r, 'high'); setRateState(r) },
+    setLockScreen: (active, meta) =>
+      player.setActiveForLockScreen(active, meta, { showSeekForward: true, showSeekBackward: true }),
   }
 }

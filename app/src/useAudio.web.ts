@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AudioControl } from './useAudio'
 
-export type { AudioControl } from './useAudio'
+export type { AudioControl, AudioMeta } from './useAudio'
 
 export function useAudio(source: string): AudioControl {
   const ref = useRef<HTMLAudioElement | null>(null)
@@ -61,5 +61,8 @@ export function useAudio(source: string): AudioControl {
       if (ref.current) ref.current.playbackRate = r
       setRate(r)
     },
+    // Web keeps its own <audio>; the tab stays alive when backgrounded, so no
+    // native media session to claim. No-op to satisfy the shared interface.
+    setLockScreen: () => {},
   }
 }

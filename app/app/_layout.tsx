@@ -1,5 +1,7 @@
 import '../src/theme'
 import { useEffect } from 'react'
+import { Platform } from 'react-native'
+import { setAudioModeAsync } from 'expo-audio'
 import { Slot, useRouter, usePathname } from 'expo-router'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { UnistylesRuntime } from 'react-native-unistyles'
@@ -44,6 +46,15 @@ function SyncEffects() {
 export default function RootLayout() {
   useEffect(() => {
     loadTheme().then((t) => UnistylesRuntime.setTheme(t))
+  }, [])
+
+  // Keep audio playing when the app is backgrounded/locked and surface lock-screen
+  // controls. `doNotMix` is required for those controls; the expo-audio config plugin
+  // supplies the matching native background-audio entitlements at prebuild.
+  useEffect(() => {
+    if (Platform.OS === 'web') return
+    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' })
+      .catch(() => {})
   }, [])
 
   return (
