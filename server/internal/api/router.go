@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -257,14 +258,22 @@ func (g *gzipResponseWriter) Write(b []byte) (int, error) {
 		}
 	}
 	if g.gz != nil {
-		return g.gz.Write(b)
+		n, err := g.gz.Write(b)
+		if err != nil {
+			return n, fmt.Errorf("gzip write: %w", err)
+		}
+		return n, nil
 	}
-	return g.ResponseWriter.Write(b)
+	n, err := g.ResponseWriter.Write(b)
+	if err != nil {
+		return n, fmt.Errorf("write response: %w", err)
+	}
+	return n, nil
 }
 
 func (g *gzipResponseWriter) close() {
 	if g.gz != nil {
-		g.gz.Close()
+		_ = g.gz.Close()
 	}
 }
 

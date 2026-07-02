@@ -110,7 +110,10 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 			CreatedAt:     now,
 			UpdatedAt:     now,
 		})
-		return err
+		if err != nil {
+			return fmt.Errorf("insert summary highlight: %w", err)
+		}
+		return nil
 	}); err != nil {
 		return StepResult{}, fmt.Errorf("llm_summarize: insert highlight: %w", err)
 	}

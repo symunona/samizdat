@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -57,7 +58,7 @@ func insertN(ctx context.Context, q *store.Queries, run store.PipelineRun, n int
 			ID: uuid.NewString(), DocumentID: run.DocumentID, PipelineRunID: run.ID,
 			Kind: "item", Body: "h", Metadata: "{}", CreatedAt: now, UpdatedAt: now,
 		}); err != nil {
-			return err
+			return fmt.Errorf("insert highlight %d: %w", i, err)
 		}
 	}
 	return nil

@@ -86,7 +86,7 @@ func FlattenText(segs []Segment) string {
 
 func cleanText(s string) string {
 	s = tagRe.ReplaceAllString(s, "")
-	s = html.UnescapeString(s)              // &amp; &#39; &nbsp; → real chars
+	s = html.UnescapeString(s) // &amp; &#39; &nbsp; → real chars
 	s = wsRe.ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
 }

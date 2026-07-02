@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/symunona/samizdat/server/internal/extractor"
+	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
 	"github.com/symunona/samizdat/server/internal/worker"
 )
@@ -19,7 +20,7 @@ type subscriptionsHandler struct {
 }
 
 // POST /api/v1/subscriptions
-// Body: {url, interval_h?}
+// Body: {url, interval_h?}.
 func (h *subscriptionsHandler) create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		URL       string `json:"url"`
@@ -109,7 +110,7 @@ func (h *subscriptionsHandler) create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/v1/subscriptions
+// GET /api/v1/subscriptions.
 func (h *subscriptionsHandler) list(w http.ResponseWriter, r *http.Request) {
 	subs, err := h.q.ListSubscriptions(r.Context())
 	if err != nil {
@@ -122,7 +123,7 @@ func (h *subscriptionsHandler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, subs)
 }
 
-// GET /api/v1/feeds/{id}/items
+// GET /api/v1/feeds/{id}/items.
 func (h *subscriptionsHandler) listFeedItems(w http.ResponseWriter, r *http.Request) {
 	feedID := r.PathValue("id")
 	if feedID == "" {
@@ -137,7 +138,7 @@ func (h *subscriptionsHandler) listFeedItems(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, items)
 }
 
-// GET /api/v1/feeds
+// GET /api/v1/feeds.
 func (h *subscriptionsHandler) listFeeds(w http.ResponseWriter, r *http.Request) {
 	feeds, err := h.q.ListFeeds(r.Context())
 	if err != nil {
@@ -199,7 +200,7 @@ func (h *subscriptionsHandler) poll(w http.ResponseWriter, r *http.Request) {
 }
 
 // PATCH /api/v1/subscriptions/{id}
-// Body: {paused: bool}
+// Body: {paused: bool}.
 func (h *subscriptionsHandler) patch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -234,7 +235,7 @@ func (h *subscriptionsHandler) patch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sub)
 }
 
-// GET /api/v1/feeds/{id}
+// GET /api/v1/feeds/{id}.
 func (h *subscriptionsHandler) getFeed(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -249,7 +250,7 @@ func (h *subscriptionsHandler) getFeed(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, feed)
 }
 
-// DELETE /api/v1/subscriptions/{id}
+// DELETE /api/v1/subscriptions/{id}.
 func (h *subscriptionsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -269,8 +270,9 @@ func (h *subscriptionsHandler) delete(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/v1/feeds/{id}/queue-pipelines?hold=true
-// Enqueues run_pipeline jobs (paused if hold=true) for all enabled pipelines × all documents
-// from this feed, skipping pairs that already have an active job.
+// Enqueues run_pipeline jobs (paused if hold=true) for every enabled pipeline
+// whose filter matches × all documents from this feed, skipping pairs that
+// already have an active job. Same match rule as the auto on_new_document trigger.
 func (h *subscriptionsHandler) queuePipelines(w http.ResponseWriter, r *http.Request) {
 	feedID := r.PathValue("id")
 	if feedID == "" {
@@ -289,7 +291,13 @@ func (h *subscriptionsHandler) queuePipelines(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	pipelines, err := h.q.ListPipelines(r.Context())
+	// This feed's URL, for evaluating pipeline feed-url filters.
+	feedURL := ""
+	if feed, err := h.q.GetFeed(r.Context(), feedID); err == nil {
+		feedURL = feed.Url
+	}
+
+	pipelines, err := h.q.ListEnabledPipelines(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
@@ -299,6 +307,10 @@ func (h *subscriptionsHandler) queuePipelines(w http.ResponseWriter, r *http.Req
 	var queued, skipped int
 	for _, doc := range docs {
 		for _, pl := range pipelines {
+			// Honour each pipeline's filter (feed scope / exclusions).
+			if !pipeline.MatchesDocument(pl, doc, feedURL) {
+				continue
+			}
 			count, err := h.q.CountActiveRunPipelineJobsForDoc(r.Context(), store.CountActiveRunPipelineJobsForDocParams{
 				Payload:   doc.ID,
 				Payload_2: pl.ID,

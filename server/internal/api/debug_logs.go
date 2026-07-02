@@ -42,7 +42,7 @@ func (h *debugLogsHandler) ingest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "log write")
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	// O_APPEND makes each write atomic vs. concurrent flushes; ensure a trailing
 	// newline so consecutive batches stay line-delimited even if a client omits it.
 	if !strings.HasSuffix(string(body), "\n") {

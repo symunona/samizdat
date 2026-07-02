@@ -169,15 +169,6 @@ export function audioDocUrl(serverUrl: string, id: string): string {
   return `${base(serverUrl)}/api/v1/documents/${encodeURIComponent(id)}/audio`
 }
 
-export type MediaAsset = {
-  id: string
-  document_id: string
-  original_url: string
-  kind: 'hero' | 'content'
-  width: number | null
-  height: number | null
-}
-
 export async function fetchDocument(serverUrl: string, token: string, id: string): Promise<Document> {
   const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(id)}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -300,14 +291,6 @@ export type Subscription = {
   paused: number
   created_at: string
   updated_at: string
-}
-
-export type FeedItem = {
-  id: string
-  feed_id: string
-  url: string
-  status: 'pending' | 'scraped' | 'skipped'
-  seen_at: string
 }
 
 export async function fetchFeeds(serverUrl: string, token: string): Promise<Feed[]> {
@@ -529,22 +512,6 @@ export async function deleteDocument(serverUrl: string, token: string, id: strin
   if (!res.ok) throw new ApiError(res.status, `delete document failed: HTTP ${res.status}`)
 }
 
-export async function fetchDocumentMedia(
-  serverUrl: string,
-  token: string,
-  docId: string,
-): Promise<MediaAsset[]> {
-  try {
-    const res = await fetch(
-      `${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/media`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    )
-    return json<MediaAsset[]>(res, '/api/v1/documents/:id/media')
-  } catch {
-    return []
-  }
-}
-
 // ── Annotations ──────────────────────────────────────────────────────────────
 
 export type Annotation = {
@@ -636,14 +603,6 @@ export async function createTag(
     body: JSON.stringify(data),
   })
   return json<Tag>(res, '/api/v1/tags POST')
-}
-
-export async function deleteTag(serverUrl: string, token: string, id: string): Promise<void> {
-  const res = await fetch(`${base(serverUrl)}/api/v1/tags/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) throw new ApiError(res.status, `deleteTag failed: HTTP ${res.status}`)
 }
 
 export async function fetchTagDocuments(serverUrl: string, token: string, tagId: string): Promise<Document[]> {
@@ -790,30 +749,6 @@ export async function fetchPipelineJobs(
   return json<JobsPage>(res, `/api/v1/pipelines/${pipelineId}/jobs`)
 }
 
-export async function createPipeline(
-  serverUrl: string, token: string,
-  data: { name: string; filter: string; steps: string; trigger?: string },
-): Promise<Pipeline> {
-  const res = await fetch(`${base(serverUrl)}/api/v1/pipelines`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  return json<Pipeline>(res, '/api/v1/pipelines POST')
-}
-
-export async function runPipelineOnDocument(
-  serverUrl: string, token: string,
-  pipelineId: string, documentId: string,
-): Promise<{ job_id: string }> {
-  const res = await fetch(`${base(serverUrl)}/api/v1/pipelines/${encodeURIComponent(pipelineId)}/run`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ document_id: documentId }),
-  })
-  return json<{ job_id: string }>(res, `/api/v1/pipelines/${pipelineId}/run`)
-}
-
 export type HighlightWithDoc = Highlight & {
   document_title: string
   document_url: string
@@ -861,14 +796,6 @@ export async function deleteHighlight(serverUrl: string, token: string, id: stri
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) throw new ApiError(res.status, `deleteHighlight failed: HTTP ${res.status}`)
-}
-
-export async function deleteDocumentHighlights(serverUrl: string, token: string, docId: string): Promise<void> {
-  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/highlights`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!res.ok) throw new ApiError(res.status, `deleteDocumentHighlights failed: HTTP ${res.status}`)
 }
 
 export async function pinHighlight(serverUrl: string, token: string, id: string, pinned: boolean): Promise<void> {

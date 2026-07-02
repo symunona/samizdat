@@ -34,7 +34,7 @@ func (a *RSSAdapter) Discover(ctx context.Context, feedURL string, cfg Extractor
 	if err != nil {
 		return nil, fmt.Errorf("fetch feed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("http %d fetching %s", resp.StatusCode, target)
 	}
@@ -66,8 +66,8 @@ type rssChannel struct {
 }
 
 type rssItem struct {
-	Link    string `xml:"link"`
-	GUID    string `xml:"guid"`
+	Link string `xml:"link"`
+	GUID string `xml:"guid"`
 }
 
 type atomEntry struct {

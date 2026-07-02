@@ -30,14 +30,14 @@ func (c *anthropicClient) Complete(ctx context.Context, model string, messages [
 
 	msgs := make([]antMsg, len(messages))
 	for i, m := range messages {
-		msgs[i] = antMsg{Role: m.Role, Content: m.Content}
+		msgs[i] = antMsg(m)
 	}
 	body, _ := json.Marshal(reqBody{Model: model, MaxTokens: 4096, Messages: msgs})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		"https://api.anthropic.com/v1/messages", bytes.NewReader(body))
 	if err != nil {
-		return "", Usage{}, err
+		return "", Usage{}, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.apiKey)
@@ -47,7 +47,7 @@ func (c *anthropicClient) Complete(ctx context.Context, model string, messages [
 	if err != nil {
 		return "", Usage{}, transportErr(fmt.Errorf("anthropic request: %w", err))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("anthropic %d: %s", resp.StatusCode, string(data))

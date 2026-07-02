@@ -28,7 +28,7 @@ func TestUnwrapFigureImages(t *testing.T) {
 	idxB := strings.Index(out, "b.jpeg")
 	idx2 := strings.Index(out, "Second paragraph")
 	idx3 := strings.Index(out, "Third and final")
-	if !(idxA >= 0 && idxA < idx2 && idx2 < idxB && idxB < idx3) {
+	if idxA < 0 || idxA >= idx2 || idx2 >= idxB || idxB >= idx3 {
 		t.Errorf("image order not preserved: a=%d second=%d b=%d third=%d", idxA, idx2, idxB, idx3)
 	}
 	// Lazy data-src resolved to a real src.

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -60,9 +61,6 @@ func (h *documentsHandler) list(w http.ResponseWriter, r *http.Request) {
 			AnnotationCount: row.AnnotationCount,
 			HighlightCount:  row.HighlightCount,
 		}
-	}
-	if items == nil {
-		items = []documentListItem{}
 	}
 	writeJSON(w, http.StatusOK, items)
 }
@@ -149,8 +147,10 @@ func (h *documentsHandler) listMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/v1/documents/{id}/queue-pipelines?hold=true
-// Enqueues run_pipeline jobs (paused if hold=true) for all enabled pipelines × this document,
-// skipping any pipeline that already has an active job for this document.
+// Enqueues run_pipeline jobs (paused if hold=true) for every enabled pipeline
+// whose filter matches this document (same rule as the auto on_new_document
+// trigger — see worker.triggerPipelines), skipping any pipeline that already has
+// an active job for this document.
 func (h *documentsHandler) queuePipelines(w http.ResponseWriter, r *http.Request) {
 	docID := r.PathValue("id")
 	if docID == "" {
@@ -169,7 +169,16 @@ func (h *documentsHandler) queuePipelines(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	pipelines, err := h.q.ListPipelines(r.Context())
+	// Resolve the document's feed URL so pipeline filters (feed-id / feed-url
+	// include+exclude) can be evaluated exactly as the scraper does.
+	feedURL := ""
+	if doc.SourceFeedID != nil {
+		if feed, err := h.q.GetFeed(r.Context(), *doc.SourceFeedID); err == nil {
+			feedURL = feed.Url
+		}
+	}
+
+	pipelines, err := h.q.ListEnabledPipelines(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
@@ -178,6 +187,11 @@ func (h *documentsHandler) queuePipelines(w http.ResponseWriter, r *http.Request
 	now := time.Now().UTC().Format(time.RFC3339)
 	var queued, skipped int
 	for _, pl := range pipelines {
+		// Honour each pipeline's filter — a manual "queue pipelines" must not run
+		// pipelines scoped to other feeds (or explicitly excluding this one).
+		if !pipeline.MatchesDocument(pl, doc, feedURL) {
+			continue
+		}
 		count, err := h.q.CountActiveRunPipelineJobsForDoc(r.Context(), store.CountActiveRunPipelineJobsForDocParams{
 			Payload:   docID,
 			Payload_2: pl.ID,

@@ -35,7 +35,7 @@ func hashColor(module string) string {
 
 var (
 	mu      sync.Mutex
-	enabled = true
+	enabled           = true
 	out     io.Writer = os.Stderr
 )
 
@@ -69,9 +69,9 @@ func (l *Logger) emit(level, format string, args ...any) {
 	ts := fmt.Sprintf("%02d:%02d:%02d", t.Hour(), t.Minute(), t.Second())
 	msg := fmt.Sprintf(format, args...)
 	if level == "" {
-		fmt.Fprintf(out, "%s[%s] [%s]%s %s\n", l.color, ts, l.module, reset, msg)
+		_, _ = fmt.Fprintf(out, "%s[%s] [%s]%s %s\n", l.color, ts, l.module, reset, msg)
 	} else {
-		fmt.Fprintf(out, "%s[%s] [%s] [%s]%s %s\n", l.color, ts, l.module, level, reset, msg)
+		_, _ = fmt.Fprintf(out, "%s[%s] [%s] [%s]%s %s\n", l.color, ts, l.module, level, reset, msg)
 	}
 }
 

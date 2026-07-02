@@ -8,7 +8,6 @@ import (
 	"image"
 	"image/jpeg"
 	_ "image/png"
-	_ "golang.org/x/image/webp"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	_ "golang.org/x/image/webp"
 
 	"github.com/symunona/samizdat/server/internal/store"
 	"golang.org/x/image/draw"

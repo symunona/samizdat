@@ -35,18 +35,21 @@ func RunIDsByJobIDs(ctx context.Context, db DBTX, jobIDs []string) ([]string, er
 		`SELECT id FROM pipeline_runs
 		 WHERE job_id IN (SELECT value FROM json_each(?)) AND deleted_at IS NULL`, j)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query runs by job ids: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan run id: %w", err)
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate runs: %w", err)
+	}
+	return ids, nil
 }
 
 // ActiveRunIDsForDoc returns non-deleted pipeline_run ids for a (pipeline, doc).
@@ -55,18 +58,21 @@ func ActiveRunIDsForDoc(ctx context.Context, db DBTX, pipelineID, documentID str
 		`SELECT id FROM pipeline_runs
 		 WHERE pipeline_id = ? AND document_id = ? AND deleted_at IS NULL`, pipelineID, documentID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query active runs for doc: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan run id: %w", err)
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate runs: %w", err)
+	}
+	return ids, nil
 }
 
 // SoftDeleteRegenerableHighlights soft-deletes (tombstone + rev bump) the
@@ -91,9 +97,13 @@ func SoftDeleteRegenerableHighlights(ctx context.Context, db DBTX, runIDs []stri
 		   AND NOT EXISTS (SELECT 1 FROM highlight_tags ht WHERE ht.highlight_id = highlights.id AND ht.deleted_at IS NULL)`,
 		now, now, j)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("soft-delete regenerable highlights: %w", err)
 	}
-	return res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return n, nil
 }
 
 // SupersedeRuns marks the given runs superseded (history marker) without deleting
@@ -110,7 +120,10 @@ func SupersedeRuns(ctx context.Context, db DBTX, runIDs []string, now string) er
 		`UPDATE pipeline_runs SET superseded_at = ?, updated_at = ?, rev = rev + 1
 		 WHERE id IN (SELECT value FROM json_each(?)) AND deleted_at IS NULL AND superseded_at IS NULL`,
 		now, now, j)
-	return err
+	if err != nil {
+		return fmt.Errorf("supersede runs: %w", err)
+	}
+	return nil
 }
 
 // TombstoneEmptyRuns soft-deletes the given runs that have no surviving (non-deleted)
@@ -129,7 +142,10 @@ func TombstoneEmptyRuns(ctx context.Context, db DBTX, runIDs []string, now strin
 		   AND deleted_at IS NULL
 		   AND NOT EXISTS (SELECT 1 FROM highlights h WHERE h.pipeline_run_id = pipeline_runs.id AND h.deleted_at IS NULL)`,
 		now, now, j)
-	return err
+	if err != nil {
+		return fmt.Errorf("tombstone empty runs: %w", err)
+	}
+	return nil
 }
 
 // SoftDeleteJobsByIDs soft-deletes (tombstone + rev bump) the given jobs.
@@ -145,7 +161,10 @@ func SoftDeleteJobsByIDs(ctx context.Context, db DBTX, jobIDs []string, now stri
 		`UPDATE jobs SET deleted_at = ?, updated_at = ?, rev = rev + 1
 		 WHERE id IN (SELECT value FROM json_each(?)) AND deleted_at IS NULL`,
 		now, now, j)
-	return err
+	if err != nil {
+		return fmt.Errorf("soft-delete jobs: %w", err)
+	}
+	return nil
 }
 
 // RegenerateCascade supersedes the given runs and tombstones their regenerable

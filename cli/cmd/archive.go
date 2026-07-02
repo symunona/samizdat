@@ -59,7 +59,11 @@ func loadArchiveCfg() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return config.Load(cfgPath)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	return cfg, nil
 }
 
 func runArchiveCurrent(_ *cobra.Command, _ []string) error {
@@ -201,7 +205,7 @@ func stopServer() error {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return nil
 		}
-		return err
+		return fmt.Errorf("stop server: %w", err)
 	}
 	// Give the server a moment to flush and close the WAL.
 	time.Sleep(500 * time.Millisecond)

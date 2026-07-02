@@ -19,13 +19,13 @@ const ytdlpStatusKey = "ytdlp_proxy_last_ok_at"
 
 // ytdlpStatus is the JSON shape returned by GET /api/v1/ytdlp/status.
 type ytdlpStatus struct {
-	Configured bool   `json:"configured"`         // a proxy is set in config
-	Proxy      string `json:"proxy"`              // the configured proxy string
-	OK         bool   `json:"ok"`                 // last probe succeeded
-	ExitIP     string `json:"exit_ip"`            // public IP the proxy exits from
-	Error      string `json:"error"`              // last probe error, if any
-	CheckedAt  string `json:"checked_at"`         // RFC3339 of last probe
-	LastOkAt   string `json:"last_ok_at"`         // RFC3339 of last success (persisted)
+	Configured bool   `json:"configured"` // a proxy is set in config
+	Proxy      string `json:"proxy"`      // the configured proxy string
+	OK         bool   `json:"ok"`         // last probe succeeded
+	ExitIP     string `json:"exit_ip"`    // public IP the proxy exits from
+	Error      string `json:"error"`      // last probe error, if any
+	CheckedAt  string `json:"checked_at"` // RFC3339 of last probe
+	LastOkAt   string `json:"last_ok_at"` // RFC3339 of last success (persisted)
 }
 
 // ytdlpStatusHandler probes the yt-dlp SOCKS proxy and serves its health. A

@@ -5,8 +5,14 @@
     "expo-system-ui",
     "@expo/metro-config",
     "react-native-worklets",
-    "babel-preset-expo"
+    "babel-preset-expo",
+    "esbuild"
   ],
-  "ignoreFiles": ["babel.config.js", "src/useAudio.web.ts", "src/YtPlayer.web.tsx"],
+  "ignoreFiles": [
+    "babel.config.js",
+    "src/useAudio.web.ts",
+    "src/YtPlayer.web.tsx",
+    "src/webview/document-viewer.ts"
+  ],
   "ignoreExportsUsedInFile": true
 }

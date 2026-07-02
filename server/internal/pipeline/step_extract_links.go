@@ -30,9 +30,9 @@ type extractLinksState struct {
 }
 
 type pendingLinkScrape struct {
-	URL     string `json:"url"`
-	Text    string `json:"text"`
-	JobID   string `json:"job_id"`
+	URL   string `json:"url"`
+	Text  string `json:"text"`
+	JobID string `json:"job_id"`
 }
 
 type doneLink struct {
@@ -195,7 +195,10 @@ func createLinkHighlight(ctx context.Context, q *store.Queries, run store.Pipeli
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("insert link highlight: %w", err)
+	}
+	return nil
 }
 
 type mdLink struct {

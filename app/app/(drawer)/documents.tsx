@@ -169,7 +169,7 @@ export default function DocumentsScreen() {
       const optimistic: Job = {
         id: job_id, kind: 'scrape_url', payload: JSON.stringify({ url: trimmed }),
         status: 'queued', attempts: 0, run_after: now, last_error: '', result: '',
-        created_at: now, updated_at: now, parent_job_id: null,
+        duration_ms: 0, created_at: now, updated_at: now, parent_job_id: null,
       }
       setPendingJobs((prev) => [optimistic, ...prev.filter((j) => j.id !== job_id)])
       loadPendingJobs()

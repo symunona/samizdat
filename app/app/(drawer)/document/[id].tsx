@@ -370,7 +370,7 @@ export default function DocumentViewer() {
       })
     }
   }, [id, activeUrl, token, headerAnim, annotations, highlights, hlExpanded, highlight,
-    doc, bg, fg, su, bo, ac, mu, sendToWebView, toHlData, handleLinkPress, toast])
+    doc, bg, fg, su, bo, ac, mu, sendToWebView, toHlData, handleLinkPress, toast, router])
 
   // Native WebView message handler
   const handleMessage = useCallback((e: WebViewMessageEvent) => {

@@ -51,14 +51,14 @@ func AutoDetectFeedURL(ctx context.Context, rawURL string) (string, error) {
 func detectFeedFromHTML(ctx context.Context, client *http.Client, rawURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Samizdat/1 (+https://github.com/symunona/samizdat)")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("fetch %s: %w", rawURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("http %d", resp.StatusCode)
 	}
@@ -68,7 +68,7 @@ func detectFeedFromHTML(ctx context.Context, client *http.Client, rawURL string)
 
 	doc, err := html.Parse(resp.Body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("parse html: %w", err)
 	}
 
 	base, _ := url.Parse(rawURL)
@@ -108,11 +108,11 @@ func probeFeed(ctx context.Context, client *http.Client, candidate string) bool 
 	resp, err := client.Do(req)
 	if err != nil || resp.StatusCode >= 400 {
 		if resp != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "xml") || strings.Contains(ct, "rss") || strings.Contains(ct, "atom") {

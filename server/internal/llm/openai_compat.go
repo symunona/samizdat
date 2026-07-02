@@ -32,14 +32,14 @@ func (c *openAICompatClient) Complete(ctx context.Context, model string, message
 
 	msgs := make([]oaiMsg, len(messages))
 	for i, m := range messages {
-		msgs[i] = oaiMsg{Role: m.Role, Content: m.Content}
+		msgs[i] = oaiMsg(m)
 	}
 	body, _ := json.Marshal(reqBody{Model: model, Messages: msgs})
 
 	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return "", Usage{}, err
+		return "", Usage{}, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -50,7 +50,7 @@ func (c *openAICompatClient) Complete(ctx context.Context, model string, message
 	if err != nil {
 		return "", Usage{}, transportErr(fmt.Errorf("openai_compat request: %w", err))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("openai_compat %d: %s", resp.StatusCode, string(data))

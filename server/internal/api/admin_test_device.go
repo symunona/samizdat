@@ -44,8 +44,8 @@ func (h *adminTestDeviceHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 
 	existing, err := h.q.GetDeviceByName(r.Context(), robotDeviceName)
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		// Reuse the row — rotate its token in place.
 		if uerr := h.q.UpdateDeviceToken(r.Context(), store.UpdateDeviceTokenParams{
 			TokenHash: hash,
@@ -62,7 +62,7 @@ func (h *adminTestDeviceHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			"device_token": plain,
 			"server_urls":  h.serverURLs,
 		})
-	case err == sql.ErrNoRows:
+	case sql.ErrNoRows:
 		devID := uuid.New().String()
 		if _, ierr := h.q.InsertDevice(r.Context(), store.InsertDeviceParams{
 			ID:        devID,

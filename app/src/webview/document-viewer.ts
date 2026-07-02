@@ -90,7 +90,8 @@ mark.color-green{background-color:rgba(74,222,128,0.3)}
 mark.color-blue{background-color:rgba(96,165,250,0.3)}
 mark.color-pink{background-color:rgba(244,114,182,0.3)}
 mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);transition:filter 0.3s}
-#ann-btn{position:fixed;bottom:80px;right:24px;background:var(--ac);color:var(--bg);border:none;border-radius:20px;padding:8px 16px;font-weight:700;font-size:14px;cursor:pointer;display:none;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.4)}
+/* Anchored to the current text selection (top/left set in JS by positionAnnButton). */
+#ann-btn{position:fixed;top:0;left:0;background:var(--ac);color:var(--bg);border:none;border-radius:20px;padding:8px 16px;font-weight:700;font-size:14px;cursor:pointer;display:none;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.4);white-space:nowrap}
 #ann-gutter{position:fixed;top:0;right:0;width:6px;height:100%;pointer-events:none;z-index:90}
 #doc-title{font-size:1.6em;font-weight:700;color:var(--fg);margin:0 0 1em;line-height:1.3}
 
@@ -117,7 +118,13 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 #hl-list.collapsed{display:none}
 
 /* Highlight cards */
-.hl-card{border:1px solid var(--bo);border-radius:6px;margin-bottom:8px;overflow:hidden;background:var(--bg)}
+.hl-card{border:1px solid var(--bo);border-radius:6px;margin-bottom:8px;overflow:hidden;background:var(--bg);position:relative;transition:transform 0.2s ease;touch-action:pan-y}
+.hl-card.hl-swiping{transition:none;user-select:none}
+/* Floating hint shown while swiping a highlight card left/right (see swipe handlers). */
+#hl-swipe-hint{position:fixed;display:none;align-items:center;gap:6px;padding:6px 12px;border-radius:16px;font-size:13px;font-weight:700;z-index:99;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,0.4)}
+#hl-swipe-hint svg{width:15px;height:15px;display:block}
+#hl-swipe-hint.act-delete{background:#b91c1c;color:#fff}
+#hl-swipe-hint.act-pin{background:var(--ac);color:var(--bg)}
 .hl-card:last-child{margin-bottom:0}
 .hl-card.focused{outline:2px solid var(--ac);box-shadow:0 0 10px rgba(232,116,59,0.45);transition:box-shadow 0.3s}
 .hl-header{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--bo);background:var(--su)}
@@ -759,7 +766,29 @@ function handleSelection(): void {
   const media_ts_ms = seg ? Number(seg.dataset.startMs) || 0 : undefined
   _pendingSel = { exact, prefix: ctx.prefix, suffix: ctx.suffix, pos_start: start, pos_end: start + exact.length, media_ts_ms }
   const annBtn = document.getElementById('ann-btn')
-  if (annBtn) annBtn.style.display = 'block'
+  if (annBtn) positionAnnButton(annBtn, range)
+}
+
+// Place the Annotate button next to the selection instead of pinning it to a
+// far corner — otherwise the user selects text and the button appears
+// bottom-right, out of sight, seemingly "only on scroll". position:fixed keeps
+// it viewport-anchored on both the web iframe (internal scroll) and the native
+// WebView.
+function positionAnnButton(btn: HTMLElement, range: Range): void {
+  btn.style.display = 'block'
+  const rect = range.getBoundingClientRect()
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const bw = btn.offsetWidth
+  const bh = btn.offsetHeight
+  const gap = 8
+  let left = rect.left + rect.width / 2 - bw / 2
+  left = Math.max(gap, Math.min(left, vw - bw - gap))
+  let top = rect.bottom + gap
+  if (top + bh > vh - gap) top = rect.top - bh - gap // flip above when no room below
+  top = Math.max(gap, Math.min(top, vh - bh - gap))
+  btn.style.left = `${Math.round(left)}px`
+  btn.style.top = `${Math.round(top)}px`
 }
 
 document.addEventListener('touchend', () => {
@@ -767,6 +796,101 @@ document.addEventListener('touchend', () => {
 })
 
 document.addEventListener('mouseup', handleSelection)
+
+// ── Highlight card swipe (star / delete) ────────────────────────────────────────
+// Mirrors the RN feed's swipe-triage (src/HighlightCard.tsx): drag a highlight
+// card right → delete, left → pin/star. Raw Pointer Events so it works for both
+// touch and a desktop mouse-drag ("pulling left/right"). A floating hint shows the
+// pending action; past the threshold on release we post the same hl_pin / hl_delete
+// messages the footer buttons use (handled in app/(drawer)/document/[id].tsx).
+const SWIPE_START = 12 // px before a horizontal drag is recognised as a swipe
+const SWIPE_TRIGGER = 80 // px travel that commits the action
+const SWIPE_MAX = 140 // px the card can travel
+
+// Trash glyph mirrors the delete button SVG above (parity with HighlightCard.tsx).
+const TRASH_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true"><path d="M112 112l20 320c.95 18.49 14.4 32 32 32h184c17.67 0 30.87-13.51 32-32l20-320" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="32"/><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="32" d="M80 112h352"/><path d="M192 112V72h0a23.93 23.93 0 0124-24h80a23.93 23.93 0 0124 24h0v40M256 176v224M184 176l8 224M328 176l-8 224" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="32"/></svg>'
+
+let _swipe: { card: HTMLElement; id: string; startX: number; startY: number; active: boolean } | null = null
+
+function swipeHint(): HTMLElement {
+  let hint = document.getElementById('hl-swipe-hint')
+  if (!hint) {
+    hint = document.createElement('div')
+    hint.id = 'hl-swipe-hint'
+    document.body.appendChild(hint)
+  }
+  return hint
+}
+
+function updateSwipeHint(card: HTMLElement, dx: number): void {
+  const hint = swipeHint()
+  const del = dx > 0
+  hint.className = del ? 'act-delete' : 'act-pin'
+  hint.innerHTML = del ? `${TRASH_SVG}<span>Delete</span>` : '<span style="font-size:15px">★</span><span>Star</span>'
+  hint.style.display = 'flex'
+  hint.style.opacity = String(Math.min(1, Math.abs(dx) / SWIPE_TRIGGER))
+  const r = card.getBoundingClientRect()
+  hint.style.top = `${Math.round(r.top + r.height / 2 - 14)}px`
+  // Sit on the edge the card is moving toward.
+  const hw = hint.offsetWidth || 90
+  hint.style.left = del ? `${Math.round(r.left + 8)}px` : `${Math.round(r.right - hw - 8)}px`
+}
+
+function clearSwipe(card: HTMLElement | null): void {
+  const hint = document.getElementById('hl-swipe-hint')
+  if (hint) hint.style.display = 'none'
+  if (card) {
+    card.classList.remove('hl-swiping')
+    card.style.transform = ''
+  }
+}
+
+document.addEventListener('pointerdown', (e: PointerEvent) => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return
+  const target = e.target as HTMLElement
+  const card = target.closest && target.closest<HTMLElement>('.hl-card')
+  if (!card || !card.dataset.id) return
+  // Never hijack a tap on a control (pin/tags/annotate/delete/link).
+  if (target.closest('button, a')) return
+  _swipe = { card, id: card.dataset.id, startX: e.clientX, startY: e.clientY, active: false }
+})
+
+document.addEventListener('pointermove', (e: PointerEvent) => {
+  if (!_swipe) return
+  const dx = e.clientX - _swipe.startX
+  const dy = e.clientY - _swipe.startY
+  if (!_swipe.active) {
+    if (Math.abs(dy) > Math.abs(dx)) { _swipe = null; return } // vertical → let it scroll
+    if (Math.abs(dx) < SWIPE_START) return
+    _swipe.active = true
+    _swipe.card.classList.add('hl-swiping')
+    window.getSelection()?.removeAllRanges()
+    try { _swipe.card.setPointerCapture(e.pointerId) } catch { /* not capturable */ }
+  }
+  e.preventDefault()
+  const clamped = Math.max(-SWIPE_MAX, Math.min(SWIPE_MAX, dx))
+  _swipe.card.style.transform = `translateX(${clamped}px)`
+  updateSwipeHint(_swipe.card, clamped)
+})
+
+function endSwipe(e: PointerEvent): void {
+  if (!_swipe) return
+  const { card, id, active, startX } = _swipe
+  _swipe = null
+  if (!active) return
+  const dx = e.clientX - startX
+  clearSwipe(card)
+  if (dx > SWIPE_TRIGGER) sendMsg({ type: 'hl_delete', id })
+  else if (dx < -SWIPE_TRIGGER) sendMsg({ type: 'hl_pin', id })
+}
+
+document.addEventListener('pointerup', endSwipe)
+document.addEventListener('pointercancel', () => {
+  const card = _swipe?.card ?? null
+  _swipe = null
+  clearSwipe(card)
+})
 
 // ── Resize ────────────────────────────────────────────────────────────────────
 

@@ -21,12 +21,6 @@ function ts(): string {
   return `${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`
 }
 
-let enabled = true
-
-export function setLoggingEnabled(val: boolean): void {
-  enabled = val
-}
-
 // Optional sink: when set (by src/debugLog.ts), every log line is also forwarded
 // here so it can be streamed to the server's device-log channel. Kept as a plain
 // setter to avoid a static import cycle (debugLog imports the API layer).
@@ -54,19 +48,16 @@ export function createLogger(module: string): Logger {
 
   return {
     log(...args: unknown[]) {
-      if (!enabled) return
       forward('log', args)
       // eslint-disable-next-line no-console
       console.log(label(''), tag, ...args)
     },
     warn(...args: unknown[]) {
-      if (!enabled) return
       forward('warn', args)
       // eslint-disable-next-line no-console
       console.warn(label('WARN'), tag, ...args)
     },
     error(...args: unknown[]) {
-      // errors always surface regardless of enabled flag
       forward('error', args)
       // eslint-disable-next-line no-console
       console.error(label('ERROR'), tag, ...args)

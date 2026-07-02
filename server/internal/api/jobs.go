@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -70,7 +71,7 @@ func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string, include
 	}
 	idsJSON, err := json.Marshal(rootIDs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal root ids: %w", err)
 	}
 	delFilter := "AND j.deleted_at IS NULL"
 	if includeDeleted {
@@ -89,9 +90,9 @@ func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string, include
 	`
 	rows, err := h.db.QueryContext(r.Context(), qry, string(idsJSON))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query descendants: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var jobs []store.Job
 	for rows.Next() {
 		var j store.Job
@@ -100,11 +101,14 @@ func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string, include
 			&j.LastError, &j.Result, &j.DurationMs, &j.CreatedAt, &j.UpdatedAt, &j.Rev,
 			&j.DeletedAt, &j.ParentJobID,
 		); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan job: %w", err)
 		}
 		jobs = append(jobs, j)
 	}
-	return jobs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate descendants: %w", err)
+	}
+	return jobs, nil
 }
 
 // subtreeJobIDs returns the rooted subtree of job ids: the node itself plus all
@@ -119,18 +123,21 @@ func (h *jobsHandler) subtreeJobIDs(ctx context.Context, rootID string) ([]strin
 		SELECT id FROM sub`
 	rows, err := h.db.QueryContext(ctx, qry, rootID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query subtree: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan job id: %w", err)
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate subtree: %w", err)
+	}
+	return ids, nil
 }
 
 // rerun tombstones a job node's whole descendant subtree (jobs + their
@@ -233,7 +240,7 @@ func (h *jobsHandler) usageByJobs(r *http.Request, ids []string) (map[string][]j
 	}
 	idsJSON, err := json.Marshal(ids)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal job ids: %w", err)
 	}
 	const qry = `
 		SELECT job_id, provider, model,
@@ -243,19 +250,22 @@ func (h *jobsHandler) usageByJobs(r *http.Request, ids []string) (map[string][]j
 		GROUP BY job_id, provider, model`
 	rows, err := h.db.QueryContext(r.Context(), qry, string(idsJSON))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query llm usages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var jid string
 		var u jobLLMUsage
 		if err := rows.Scan(&jid, &u.Provider, &u.Model, &u.InputTokens, &u.OutputTokens); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan llm usage: %w", err)
 		}
 		u.CostUSD = llm.EstimateCost(u.Model, int(u.InputTokens), int(u.OutputTokens))
 		out[jid] = append(out[jid], u)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate llm usages: %w", err)
+	}
+	return out, nil
 }
 
 // wrapJobs attaches LLM usage + total cost to each job for API responses.

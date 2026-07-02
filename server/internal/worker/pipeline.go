@@ -154,7 +154,7 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 
 	result, err := pipeline.Dispatch(pipeline.WithParentJobID(ctx, job.ID), q, run, pl, llmClient)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("dispatch step: %w", err)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -212,7 +212,10 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 			UpdatedAt:   now,
 			ParentJobID: job.ParentJobID,
 		})
-		return `{"status":"advanced"}`, err
+		if err != nil {
+			return `{"status":"advanced"}`, fmt.Errorf("enqueue next step: %w", err)
+		}
+		return `{"status":"advanced"}`, nil
 	}
 
 	// Step not done — save updated state and re-queue with delay
@@ -249,5 +252,8 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 		UpdatedAt:   now,
 		ParentJobID: job.ParentJobID,
 	})
-	return `{"status":"waiting"}`, err
+	if err != nil {
+		return `{"status":"waiting"}`, fmt.Errorf("requeue step: %w", err)
+	}
+	return `{"status":"waiting"}`, nil
 }

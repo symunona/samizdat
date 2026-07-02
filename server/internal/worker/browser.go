@@ -88,13 +88,13 @@ func (b *BrowserPool) FetchHTML(url string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("new context: %w", err)
 	}
-	defer ctx.Close()
+	defer func() { _ = ctx.Close() }()
 
 	page, err := ctx.NewPage()
 	if err != nil {
 		return "", fmt.Errorf("new page: %w", err)
 	}
-	defer page.Close()
+	defer func() { _ = page.Close() }()
 
 	if _, err := page.Goto(url, playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateLoad,
@@ -104,13 +104,13 @@ func (b *BrowserPool) FetchHTML(url string) (string, error) {
 	}
 
 	// Wait briefly for async consent banners to render before trying to dismiss.
-	_, _ = page.WaitForSelector("[class*='consent'],[id*='consent'],[class*='cookie'],[id*='cookie']",
-		playwright.PageWaitForSelectorOptions{Timeout: playwright.Float(3_000)})
+	_ = page.Locator("[class*='consent'],[id*='consent'],[class*='cookie'],[id*='cookie']").First().
+		WaitFor(playwright.LocatorWaitForOptions{Timeout: playwright.Float(3_000)})
 
 	// Dismiss common cookie/consent banners before scrolling so gated content
 	// becomes visible. Try each selector; first match wins, rest are no-ops.
 	consentSelectors := []string{
-		"button:has-text('Elfogad')",       // Hungarian (Telex, 444, index.hu)
+		"button:has-text('Elfogad')", // Hungarian (Telex, 444, index.hu)
 		"button:has-text('Elfogadom')",
 		"button:has-text('Accept all')",
 		"button:has-text('Accept All')",
@@ -121,18 +121,16 @@ func (b *BrowserPool) FetchHTML(url string) (string, error) {
 		"[class*='accept-all']:visible",
 	}
 	for _, sel := range consentSelectors {
-		btn, err := page.QuerySelector(sel)
-		if err == nil && btn != nil {
-			if visible, _ := btn.IsVisible(); visible {
-				_ = btn.Click()
-				logBrowser.Printf("dismissed consent banner (%s) on %s", sel, url)
-				// brief settle after dismissal
-				_ = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-					State:   playwright.LoadStateNetworkidle,
-					Timeout: playwright.Float(5_000),
-				})
-				break
-			}
+		btn := page.Locator(sel).First()
+		if visible, _ := btn.IsVisible(); visible {
+			_ = btn.Click()
+			logBrowser.Printf("dismissed consent banner (%s) on %s", sel, url)
+			// brief settle after dismissal
+			_ = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+				State:   playwright.LoadStateNetworkidle,
+				Timeout: playwright.Float(5_000),
+			})
+			break
 		}
 	}
 

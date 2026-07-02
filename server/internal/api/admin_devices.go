@@ -21,11 +21,11 @@ func (h *adminDevicesHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type deviceView struct {
-		ID          string  `json:"id"`
-		Name        string  `json:"name"`
-		CreatedAt   string  `json:"created_at"`
-		UpdatedAt   string  `json:"updated_at"`
-		LastSeenAt  *string `json:"last_seen_at"`
+		ID         string  `json:"id"`
+		Name       string  `json:"name"`
+		CreatedAt  string  `json:"created_at"`
+		UpdatedAt  string  `json:"updated_at"`
+		LastSeenAt *string `json:"last_seen_at"`
 	}
 
 	views := make([]deviceView, 0, len(devices))

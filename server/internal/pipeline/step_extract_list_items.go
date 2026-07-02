@@ -216,7 +216,9 @@ func advanceScraping(ctx context.Context, q *store.Queries, item *trackedItem, s
 		}
 		switch job.Status {
 		case "done":
-			var res struct{ DocumentID string `json:"document_id"` }
+			var res struct {
+				DocumentID string `json:"document_id"`
+			}
 			_ = json.Unmarshal([]byte(job.Result), &res)
 			docID = res.DocumentID
 		case "dead":
@@ -325,7 +327,7 @@ func advanceSummarizing(ctx context.Context, q *store.Queries, item *trackedItem
 func findSummarizerPipeline(ctx context.Context, q *store.Queries) (string, error) {
 	pipelines, err := q.ListEnabledPipelines(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("list enabled pipelines: %w", err)
 	}
 	for _, p := range pipelines {
 		if p.Filter != "{}" && p.Filter != "" {

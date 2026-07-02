@@ -107,7 +107,7 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 			return "", fmt.Errorf("render html: %w", err)
 		}
 	}
-	md, err := conv.ConvertString(htmlBuf.String())
+	md, err := conv.ConvertString(fixInlineSpacing(htmlBuf.String()))
 	if err != nil {
 		return "", fmt.Errorf("html→md: %w", err)
 	}
@@ -274,6 +274,25 @@ func renderNode(w io.Writer, n *html.Node) error {
 	return nil
 }
 
+// go-trafilatura strips the boundary whitespace between a text run and an
+// adjacent inline element when it rebuilds the content tree from real pages
+// (Substack/latent.space wrap words in <span>s: `…have to </span><strong>…`),
+// so bold/links come out jammed against neighbouring words (`to**remove…**`,
+// `mixed.[htihle](url)reported`). Re-insert a single space at any word-char↔
+// inline-tag boundary before markdown conversion. Extracted-article code lives
+// in <pre>/<code> as escaped entities (not real <strong>/<a> tags), so these
+// tag-targeted patterns never touch code.
+var (
+	reInlineOpenJam  = regexp.MustCompile(`(\w)(<(?:strong|b|em|i|a|mark|u|code)\b)`)
+	reInlineCloseJam = regexp.MustCompile(`(</(?:strong|b|em|i|a|mark|u|code)>)(\w)`)
+)
+
+func fixInlineSpacing(h string) string {
+	h = reInlineOpenJam.ReplaceAllString(h, "$1 $2")
+	h = reInlineCloseJam.ReplaceAllString(h, "$1 $2")
+	return h
+}
+
 // extractLeadLists recovers link-free bullet/numbered lists from the raw HTML
 // that trafilatura skips (e.g. article summary bullets before the body).
 // Returns markdown list lines not already present in extractedMD.
@@ -381,36 +400,6 @@ func nodeToMarkdown_children(n *html.Node) string {
 		sb.WriteString(nodeToMarkdown(c))
 	}
 	return sb.String()
-}
-
-func hasElement(n *html.Node, tag string) bool {
-	if n.Type == html.ElementNode && n.Data == tag {
-		return true
-	}
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if hasElement(c, tag) {
-			return true
-		}
-	}
-	return false
-}
-
-func nodeText(n *html.Node) string {
-	if n.Type == html.TextNode {
-		return n.Data
-	}
-	var sb strings.Builder
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		sb.WriteString(nodeText(c))
-	}
-	return sb.String()
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // leadListCheckStr extracts a plain-text snippet from a markdown list-item line

@@ -57,7 +57,10 @@ func dbFromCtx(ctx context.Context) *sql.DB {
 // deadlock against the open transaction.
 func InsertTx(ctx context.Context, q *store.Queries, fn func(*store.Queries) error) error {
 	if db := dbFromCtx(ctx); db != nil {
-		return store.InTx(ctx, db, fn)
+		if err := store.InTx(ctx, db, fn); err != nil {
+			return fmt.Errorf("pipeline tx: %w", err)
+		}
+		return nil
 	}
 	return fn(q)
 }
@@ -70,9 +73,9 @@ type StepConfig struct {
 
 // PipelineFilter matches against a Document + its feed URL.
 type PipelineFilter struct {
-	FeedURLContains     string   `json:"feed_url_contains"`
-	SourceFeedID        string   `json:"source_feed_id"`
-	ExcludeFeedURLs     []string `json:"exclude_feed_url_contains"`
+	FeedURLContains      string   `json:"feed_url_contains"`
+	SourceFeedID         string   `json:"source_feed_id"`
+	ExcludeFeedURLs      []string `json:"exclude_feed_url_contains"`
 	ExcludeSourceFeedIDs []string `json:"exclude_source_feed_ids"`
 }
 
@@ -144,5 +147,8 @@ func ParseStepConfig(raw json.RawMessage, dst any) error {
 	if len(raw) == 0 {
 		return nil
 	}
-	return json.Unmarshal(raw, dst)
+	if err := json.Unmarshal(raw, dst); err != nil {
+		return fmt.Errorf("parse step config: %w", err)
+	}
+	return nil
 }
