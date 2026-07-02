@@ -374,6 +374,8 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE annotations ADD COLUMN media_ts_ms INTEGER NOT NULL DEFAULT 0`,
 		// per-attempt execution time (capture/download/pipeline-step), milliseconds
 		`ALTER TABLE jobs ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0`,
+		// last video/audio playback position (ms) — server-backed cross-device resume
+		`ALTER TABLE read_states ADD COLUMN media_pos_ms INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {

@@ -136,6 +136,23 @@ RETURNING *;
 SELECT * FROM read_states
 WHERE device_id = ? AND document_id = ? AND deleted_at IS NULL LIMIT 1;
 
+-- name: UpsertMediaPosition :one
+-- Patch-style: only touches media_pos_ms so an article scroll_y save never
+-- clobbers the playback position (they come from different callers).
+INSERT INTO read_states (id, device_id, document_id, media_pos_ms, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(device_id, document_id) DO UPDATE SET
+    media_pos_ms = excluded.media_pos_ms,
+    updated_at   = excluded.updated_at,
+    rev          = read_states.rev + 1
+RETURNING *;
+
+-- name: GetMediaPosition :one
+-- Latest playback position across ALL devices for the document (cross-device resume).
+SELECT media_pos_ms FROM read_states
+WHERE document_id = ? AND deleted_at IS NULL AND media_pos_ms > 0
+ORDER BY updated_at DESC LIMIT 1;
+
 -- name: UpsertMediaAsset :one
 INSERT INTO media_assets (id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)

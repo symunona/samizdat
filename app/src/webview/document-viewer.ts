@@ -455,7 +455,9 @@ function setActiveSeg(ms: number): void {
   const idx = activeSegIndex(els, ms)
   els.forEach((el, i) => el.classList.toggle('active', i === idx))
   if (idx >= 0 && Date.now() - _lastUserScroll > 2500) {
-    els[idx].scrollIntoView({ behavior: 'smooth', block: 'center' })
+    // Instant, not smooth: transcript follows playback line-by-line — a glide would
+    // still be mid-animation when the next line activates, so it never settles.
+    els[idx].scrollIntoView({ behavior: 'auto', block: 'center' })
   }
   reportActiveVisibility()
 }
@@ -842,7 +844,7 @@ function handleMessage(event: MessageEvent): void {
       const el = document.querySelector<HTMLElement>('.seg.active')
       if (el) {
         _lastUserScroll = 0 // resume auto-follow
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.scrollIntoView({ behavior: 'auto', block: 'center' })
       }
       break
     }

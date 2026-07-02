@@ -207,6 +207,7 @@ type ReadState struct {
 	DeviceID   string  `json:"device_id"`
 	DocumentID string  `json:"document_id"`
 	ScrollY    float64 `json:"scroll_y"`
+	MediaPosMs int64   `json:"media_pos_ms"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
 	Rev        int64   `json:"rev"`

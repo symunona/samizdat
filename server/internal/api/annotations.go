@@ -58,8 +58,11 @@ func (h *annotationsHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if inp.Exact == "" {
-		writeErr(w, http.StatusBadRequest, "exact is required")
+	// A note-only annotation (generic note about the whole document, untimed and
+	// unanchored) has empty exact — allow it as long as it carries a note body.
+	// Only reject an annotation that anchors to nothing AND says nothing.
+	if inp.Exact == "" && inp.Note == "" {
+		writeErr(w, http.StatusBadRequest, "exact or note is required")
 		return
 	}
 	if inp.Color == "" {

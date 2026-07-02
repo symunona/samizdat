@@ -791,6 +791,20 @@ func (q *Queries) GetMediaAssetByOriginalURL(ctx context.Context, originalUrl st
 	return i, err
 }
 
+const getMediaPosition = `-- name: GetMediaPosition :one
+SELECT media_pos_ms FROM read_states
+WHERE document_id = ? AND deleted_at IS NULL AND media_pos_ms > 0
+ORDER BY updated_at DESC LIMIT 1
+`
+
+// Latest playback position across ALL devices for the document (cross-device resume).
+func (q *Queries) GetMediaPosition(ctx context.Context, documentID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getMediaPosition, documentID)
+	var media_pos_ms int64
+	err := row.Scan(&media_pos_ms)
+	return media_pos_ms, err
+}
+
 const getNewsletterFeedByToken = `-- name: GetNewsletterFeedByToken :one
 SELECT id, url, kind, title, config, last_polled_at, created_at, updated_at, rev, deleted_at FROM feeds WHERE kind = 'newsletter' AND config LIKE '%"token":"' || ? || '"%' AND deleted_at IS NULL LIMIT 1
 `
@@ -904,7 +918,7 @@ func (q *Queries) GetPipelineRunByDocumentAndPipeline(ctx context.Context, arg G
 }
 
 const getReadState = `-- name: GetReadState :one
-SELECT id, device_id, document_id, scroll_y, created_at, updated_at, rev, deleted_at FROM read_states
+SELECT id, device_id, document_id, scroll_y, media_pos_ms, created_at, updated_at, rev, deleted_at FROM read_states
 WHERE device_id = ? AND document_id = ? AND deleted_at IS NULL LIMIT 1
 `
 
@@ -921,6 +935,7 @@ func (q *Queries) GetReadState(ctx context.Context, arg GetReadStateParams) (Rea
 		&i.DeviceID,
 		&i.DocumentID,
 		&i.ScrollY,
+		&i.MediaPosMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -4415,6 +4430,51 @@ func (q *Queries) UpsertMediaAsset(ctx context.Context, arg UpsertMediaAssetPara
 	return i, err
 }
 
+const upsertMediaPosition = `-- name: UpsertMediaPosition :one
+INSERT INTO read_states (id, device_id, document_id, media_pos_ms, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, 0)
+ON CONFLICT(device_id, document_id) DO UPDATE SET
+    media_pos_ms = excluded.media_pos_ms,
+    updated_at   = excluded.updated_at,
+    rev          = read_states.rev + 1
+RETURNING id, device_id, document_id, scroll_y, media_pos_ms, created_at, updated_at, rev, deleted_at
+`
+
+type UpsertMediaPositionParams struct {
+	ID         string `json:"id"`
+	DeviceID   string `json:"device_id"`
+	DocumentID string `json:"document_id"`
+	MediaPosMs int64  `json:"media_pos_ms"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+// Patch-style: only touches media_pos_ms so an article scroll_y save never
+// clobbers the playback position (they come from different callers).
+func (q *Queries) UpsertMediaPosition(ctx context.Context, arg UpsertMediaPositionParams) (ReadState, error) {
+	row := q.db.QueryRowContext(ctx, upsertMediaPosition,
+		arg.ID,
+		arg.DeviceID,
+		arg.DocumentID,
+		arg.MediaPosMs,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i ReadState
+	err := row.Scan(
+		&i.ID,
+		&i.DeviceID,
+		&i.DocumentID,
+		&i.ScrollY,
+		&i.MediaPosMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const upsertReadState = `-- name: UpsertReadState :one
 INSERT INTO read_states (id, device_id, document_id, scroll_y, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, ?, 0)
@@ -4422,7 +4482,7 @@ ON CONFLICT(device_id, document_id) DO UPDATE SET
     scroll_y   = excluded.scroll_y,
     updated_at = excluded.updated_at,
     rev        = read_states.rev + 1
-RETURNING id, device_id, document_id, scroll_y, created_at, updated_at, rev, deleted_at
+RETURNING id, device_id, document_id, scroll_y, media_pos_ms, created_at, updated_at, rev, deleted_at
 `
 
 type UpsertReadStateParams struct {
@@ -4449,6 +4509,7 @@ func (q *Queries) UpsertReadState(ctx context.Context, arg UpsertReadStateParams
 		&i.DeviceID,
 		&i.DocumentID,
 		&i.ScrollY,
+		&i.MediaPosMs,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,

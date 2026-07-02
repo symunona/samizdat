@@ -222,13 +222,13 @@ export async function fetchReadingProgress(
   serverUrl: string,
   token: string,
   docId: string,
-): Promise<{ scroll_y: number } | null> {
+): Promise<{ scroll_y: number; media_pos_ms: number } | null> {
   try {
     const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/progress`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (res.status === 404) return null
-    return json<{ scroll_y: number }>(res, '/api/v1/documents/:id/progress')
+    return json<{ scroll_y: number; media_pos_ms: number }>(res, '/api/v1/documents/:id/progress')
   } catch {
     return null
   }
@@ -244,6 +244,22 @@ export async function saveReadingProgress(
     method: 'PUT',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ scroll_y: scrollY }),
+  })
+}
+
+// Server-backed video/audio playback position (ms). Patch-style PUT — sends only
+// media_pos_ms so it never clobbers the article scroll on the same read_states row.
+// Cross-device: any device reads back the freshest position (see server GetMediaPosition).
+export async function saveMediaPosition(
+  serverUrl: string,
+  token: string,
+  docId: string,
+  mediaPosMs: number,
+): Promise<void> {
+  await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/progress`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ media_pos_ms: mediaPosMs }),
   })
 }
 

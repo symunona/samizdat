@@ -32,6 +32,8 @@ import {
   audioDocUrl,
   parseTranscript,
   parseMediaMetadata,
+  fetchReadingProgress,
+  saveMediaPosition,
 } from './api'
 import type { Document, Annotation, HighlightWithDoc } from './api'
 import { useConnection } from './ConnectionContext'
@@ -156,8 +158,8 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   // Playback position captured when the video view opens, so the YouTube player
   // starts exactly where the audio was.
   const [videoStartMs, setVideoStartMs] = useState(0)
-  // Where the user left off last time (from AsyncStorage) — drives the resume seek
-  // and the "where I was" marker on the scrub track. null until read/known.
+  // Where the user left off last time (from the server, cross-device) — drives the
+  // resume seek and the "where I was" marker on the scrub track. null until known.
   const [savedPosMs, setSavedPosMs] = useState<number | null>(null)
   // Position the user most recently jumped FROM — drives the amber "last jumped
   // from" flag. null when there's been no jump this session.
@@ -241,33 +243,38 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   }, [doc.id])
 
   // ── Resume playback position ──
-  // Persist the last position under `video_pos_<docId>` (mirrors the `video_audio_`
-  // pattern) and, on return, resume 10s before where they left off. Read the freshest
-  // position via a ref so the throttled/unmount saves never capture a stale closure.
+  // Server-backed (read_states.media_pos_ms), so resume works across devices — the
+  // same "where were we" the article reader uses for scroll. On return, resume 10s
+  // before where they left off. Read the freshest position via a ref so the
+  // throttled/unmount saves never capture a stale closure.
   const positionRef = useRef(positionMs)
   positionRef.current = positionMs
   const resumedRef = useRef(false)
 
   const savePosition = useCallback(() => {
     const ms = Math.floor(positionRef.current)
-    // Grace window after a jump: don't persist the resume point until playback has
-    // moved JUMP_GRACE_MS forward past where we jumped to — so a reopen during the
-    // window lands back where the user was, not where they skipped to.
+    // Sticky resume anchor while scrubbing (UX): if the user keeps seeking around
+    // to hunt for a specific part, we deliberately do NOT advance the saved resume
+    // point on every jump — we keep the ORIGINAL spot until they COMMIT to a new
+    // one by playing steadily past it. Concretely: after a jump, hold off until
+    // playback has moved JUMP_GRACE_MS forward past where they jumped to. So a
+    // reopen mid-hunt lands back where they actually were, not on a skimmed-past bit.
     const anchor = graceAnchorRef.current
     if (anchor != null) {
       if (ms - anchor >= JUMP_GRACE_MS) graceAnchorRef.current = null
       else return
     }
-    if (ms > 0) AsyncStorage.setItem(`video_pos_${doc.id}`, String(ms)).catch(() => {})
-  }, [doc.id])
+    if (ms > 0 && activeUrl && token) saveMediaPosition(activeUrl, token, doc.id, ms).catch(() => {})
+  }, [doc.id, activeUrl, token])
 
   // Read the saved point once on mount (feeds both the resume seek and the marker).
   useEffect(() => {
-    AsyncStorage.getItem(`video_pos_${doc.id}`).then(v => {
-      const ms = v ? parseInt(v, 10) : NaN
-      if (Number.isFinite(ms) && ms > 0) setSavedPosMs(ms)
+    if (!activeUrl || !token) return
+    fetchReadingProgress(activeUrl, token, doc.id).then(p => {
+      const ms = p?.media_pos_ms ?? 0
+      if (ms > 0) setSavedPosMs(ms)
     }).catch(() => {})
-  }, [doc.id])
+  }, [doc.id, activeUrl, token])
 
   // Auto-resume ONCE, 10s before the saved point, and only once the backend can
   // actually accept a seek — a real media duration (`mediaDurMs > 0`) means the
@@ -281,7 +288,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   }, [savedPosMs, mediaDurMs, seek])
 
   // Throttled save every 5s while playing + a final save on pause/stop; keeps a
-  // fresh resume point without thrashing AsyncStorage or losing it on a crash.
+  // fresh resume point without thrashing the server or losing it on a crash.
   useEffect(() => {
     if (!playing) return
     const id = setInterval(savePosition, 5000)
@@ -402,6 +409,8 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     try {
       if (annMode === 'create') {
         const sel: Selection = pendingSelection ?? { exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0, media_ts_ms: positionMs }
+        // A generic (unanchored) note needs a body — nothing to anchor it to otherwise.
+        if (!sel.exact && !data.note.trim()) return
         const ann = await createAnnotation(activeUrl, token, doc.id, { ...sel, media_ts_ms: sel.media_ts_ms ?? 0, ...data })
         setAnnotations(prev => [...prev, ann])
       } else if (annMode === 'edit' && existingAnnotation) {
@@ -454,6 +463,15 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     pendingMediaTsRef.current = positionMs
     sendToWebView({ type: 'requestSegmentWindow', ms: positionMs })
   }, [positionMs, sendToWebView])
+
+  // Untimed generic note: opens the editor with no transcript anchor and no
+  // timestamp (media_ts_ms 0) — a note about the whole document, not a moment.
+  const handleAddGenericNote = useCallback(() => {
+    setPendingSelection({ exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0, media_ts_ms: 0 })
+    setAnnMode('create')
+    setExistingAnnotation(undefined)
+    setAnnVisible(true)
+  }, [])
 
   const handleTrackPress = useCallback((e: { nativeEvent: { locationX: number } }) => {
     if (trackWidth <= 0 || durationMs <= 0) return
@@ -733,6 +751,10 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
         {tab === 'annotations' ? (
           <ScrollView style={s.tabPanel} contentContainerStyle={s.panelPad}>
+            <Pressable style={s.addNoteBtn} onPress={handleAddGenericNote} hitSlop={6}>
+              <Ionicons name="add" size={16} color={theme.colors.accent} />
+              <Text style={s.addNoteLabel}>Add note</Text>
+            </Pressable>
             {annotations.length === 0 ? (
               <Text style={s.emptyText}>No notes yet</Text>
             ) : [...annotations].sort((a, b) => a.media_ts_ms - b.media_ts_ms).map(a => (
@@ -1037,5 +1059,11 @@ function buildStyles(t: Theme) {
     annTime: { color: MARK_ANN, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
     annQuote: { color: t.colors.muted, fontSize: 13, fontStyle: 'italic' },
     annNote: { color: t.colors.text, fontSize: 14, lineHeight: 20 },
+    addNoteBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+      borderWidth: 1, borderColor: t.colors.border, borderRadius: t.radius.sm,
+      borderStyle: 'dashed', paddingVertical: t.spacing.sm,
+    },
+    addNoteLabel: { color: t.colors.accent, fontSize: 14, fontWeight: '600' },
   })
 }
