@@ -194,7 +194,13 @@ build-android:
     # small heap) — this VPS has 4GB RAM and also serves live sites.
     # Phase 1 — JS bundle + Hermes bytecode ONLY. Runs Metro (node) while the
     # gradle JVM is idle, so node never coexists with the Kotlin/dex compile.
-    ./gradlew :app:createBundleReleaseJsAndAssets
+    # --rerun-tasks + a metro cache wipe force a FRESH bundle every build: gradle's
+    # up-to-date check does NOT track app.json, so a version bump (or any source
+    # change it misses) would otherwise ship a stale Hermes bundle — leaving the
+    # in-app APP_VERSION_CODE behind the native manifest and the served sidecar,
+    # which makes the updater offer an "update" to the version already installed.
+    rm -rf "${TMPDIR:-/tmp}"/metro-* "${TMPDIR:-/tmp}"/haste-map-* app/node_modules/.cache 2>/dev/null || true
+    ./gradlew :app:createBundleReleaseJsAndAssets --rerun-tasks
     # Phase 2 — compile + dex + package. The bundle above is up-to-date and gets
     # skipped, so no node here. Release is debug-signed + not minified (see
     # android/app/build.gradle) → a standalone, installable test APK. Skip
