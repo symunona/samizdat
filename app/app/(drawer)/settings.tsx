@@ -74,6 +74,7 @@ export default function SettingsScreen() {
   const [extStatus, setExtStatus] = useState<'not_installed' | 'unpaired' | 'connected'>('not_installed')
   const [extConnecting, setExtConnecting] = useState(false)
   const [latestBuild, setLatestBuild] = useState<AndroidBuild | null>(null)
+  const [checkingVersion, setCheckingVersion] = useState(false)
 
   const handleUnauthorized = useCallback(async () => {
     await logout()
@@ -142,6 +143,23 @@ export default function SettingsScreen() {
       setLatestBuild(await fetchLatestAndroidBuild(activeUrl, token))
     } catch { /* best-effort; no APK hosted or offline */ }
   }, [activeUrl, token])
+
+  // Tap the installed-version row to check for a newer hosted build on demand.
+  const handleCheckVersion = useCallback(async () => {
+    if (checkingVersion) return
+    if (!activeUrl || !token) { toast('Connect to check for updates', 'info'); return }
+    setCheckingVersion(true)
+    try {
+      const b = await fetchLatestAndroidBuild(activeUrl, token)
+      setLatestBuild(b)
+      if (b && b.version_code > APP_VERSION_CODE) toast(`Update available — v${b.version}`, 'info')
+      else toast('Up to date', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Version check failed', 'error')
+    } finally {
+      setCheckingVersion(false)
+    }
+  }, [activeUrl, token, checkingVersion, toast])
 
   useEffect(() => {
     if (status === 'connected') {
@@ -384,10 +402,16 @@ export default function SettingsScreen() {
       {/* App version + Android APK */}
       <View style={s.card}>
         <Text style={s.cardTitle}>App Version</Text>
-        <View style={s.infoRow}>
-          <Text style={s.infoLabel}>Installed</Text>
-          <Text style={s.infoValue}>v{APP_VERSION}</Text>
-        </View>
+        <Pressable
+          onPress={handleCheckVersion}
+          style={({ pressed }) => [s.infoRow, pressed && { opacity: 0.6 }]}
+          hitSlop={6}
+        >
+          <Text style={s.infoLabel}>Installed{'  '}<Text style={{ color: theme.colors.muted, fontSize: 12 }}>(tap to check)</Text></Text>
+          {checkingVersion
+            ? <ActivityIndicator size="small" color={theme.colors.accent} />
+            : <Text style={s.infoValue}>v{APP_VERSION}</Text>}
+        </Pressable>
         {latestBuild && latestBuild.version_code > APP_VERSION_CODE ? (
           <>
             <View style={s.statusRow}>
