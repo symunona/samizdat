@@ -391,6 +391,20 @@
                 color: var(--accent2);
                 letter-spacing: 0.05em;
                 margin-bottom: 8px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+
+            .badge {
+                font-family: ui-monospace, monospace;
+                font-size: 0.6rem;
+                text-transform: uppercase;
+                letter-spacing: 0.1em;
+                color: var(--muted);
+                border: 1px solid var(--border);
+                border-radius: 3px;
+                padding: 2px 6px;
             }
 
             .component-card .desc {
@@ -547,7 +561,7 @@
                     <li><a href="#components">Components</a></li>
                     <li><a href="#philosophy">Philosophy</a></li>
                     <li>
-                        <a href="https://github.com/symunona/sam2">GitHub</a>
+                        <a href="https://github.com/symunona/samizdat">GitHub</a>
                     </li>
                 </ul>
             </div>
@@ -573,7 +587,7 @@
                 <div class="hero-ctas">
                     <a
                         class="btn btn-primary"
-                        href="https://github.com/symunona/sam2"
+                        href="https://github.com/symunona/samizdat"
                         >View on GitHub</a
                     >
                     <a class="btn btn-ghost" href="#how">See how it works</a>
@@ -668,11 +682,10 @@
                         <div class="step-body">
                             <h4>Scrape once, deduplicate forever</h4>
                             <p>
-                                Each canonical URL is fetched exactly once —
-                                never twice, never for each subscriber. The
-                                result is stored as Markdown in your vault.
-                                Scraping is expensive and ban-prone; Samizdat
-                                respects that.
+                                Each canonical URL is fetched exactly once, not
+                                once per subscriber. The result is stored as
+                                Markdown in your vault. Scraping is expensive and
+                                ban-prone; Samizdat respects that.
                             </p>
                         </div>
                     </div>
@@ -747,19 +760,21 @@
                     <div class="component-card">
                         <div class="name">cli/</div>
                         <p class="desc">
-                            Meet <code>sam</code> the power user's and the
-                            robot's interface. Init, configure providers, manage
-                            jobs, run pipelines, generate digests — all
-                            headless, all scriptable.
+                            <code>sam</code> is the interface for power users
+                            and robots alike. Init, configure providers, manage
+                            jobs, run pipelines, generate digests: all headless,
+                            all scriptable.
                         </p>
                         <div class="stack">Go · shared engine</div>
                     </div>
                     <div class="component-card">
-                        <div class="name">clipper/</div>
+                        <div class="name">
+                            clipper/ <span class="badge">In progress</span>
+                        </div>
                         <p class="desc">
-                            [IN PROGRESS] The browser extension. Clip any page,
-                            highlight text, add it to your pipeline on the fly —
-                            posts to your server's same API.
+                            The browser extension. Clip any page, highlight text,
+                            and add it to your pipeline on the fly. Posts to the
+                            same API as everything else.
                         </p>
                         <div class="stack">
                             Chrome MV3 · Defuddle · Turndown
@@ -791,9 +806,9 @@
                         <div class="principle-icon">🔒</div>
                         <p>
                             <strong>Nothing lives only in a hosted DB.</strong>
-                            Everything has a Markdown path. You own and take
-                            care of backup. Single command archive.
-                            <code>sam archive current</code>
+                            Everything has a Markdown path, and backups are yours
+                            to keep. One command snapshots it all:
+                            <code>sam archive current</code>.
                         </p>
                     </div>
                     <div class="principle">
@@ -844,7 +859,7 @@
 
                 <p>
                     <em>Samizdat</em> — self-published, hand-passed, traceable
-                    writing. Underground, anti-corporate, self rolled.
+                    writing. Underground, anti-corporate, self-rolled.
                 </p>
 
                 <blockquote>
@@ -865,7 +880,7 @@
                     it to do — and the configuration is a text file you own.
                 </p>
 
-                <p>OSS-first. Self hosted, self rolled.</p>
+                <p>OSS-first. Self-hosted, and yours to fork.</p>
             </div>
         </section>
 
@@ -881,18 +896,18 @@
 
                     <div class="cta-shell">
                         <span>$</span> git clone
-                        https://github.com/symunona/sam2 &amp;&amp; just dev
+                        https://github.com/symunona/samizdat &amp;&amp; just dev
                     </div>
 
                     <div class="cta-links">
                         <a
                             class="btn btn-primary"
-                            href="https://github.com/symunona/sam2"
+                            href="https://github.com/symunona/samizdat"
                             >View on GitHub</a
                         >
                         <a
                             class="btn btn-ghost"
-                            href="https://github.com/symunona/sam2/blob/main/ARCHITECTURE.md"
+                            href="https://github.com/symunona/samizdat/blob/main/ARCHITECTURE.md"
                             >Architecture docs</a
                         >
                     </div>
