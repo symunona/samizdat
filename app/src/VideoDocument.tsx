@@ -53,6 +53,7 @@ type ParsedMsg = {
   id?: string
   ms?: number
   visible?: boolean
+  key?: string
 }
 
 // Max on-screen width of the video/thumbnail so a wide desktop window keeps the
@@ -65,6 +66,7 @@ const RATE_MIN = 0.8
 const RATE_MAX = 2
 const RATE_RANGE = RATE_MAX - RATE_MIN
 const RATE_STEP = 0.01 // ± buttons fine-tune by this increment
+const KEY_RATE_STEP = 0.1 // keyboard [ / ] step, coarser than the ± buttons (VLC-style)
 const LEVER_H = 132 // px throw of the vertical lever
 const LEVER_THUMB_H = 12
 
@@ -463,6 +465,46 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const handleSkip = useCallback((delta: number) => {
     userSeek(positionRef.current + delta)
   }, [userSeek])
+
+  // Desktop keyboard shortcuts. ←/→ nudge ±1s, ↑/↓ jump ±10s (up = forward);
+  // [ / ] slow down / speed up and = resets to 1× (VLC-style); n/a add a note.
+  // Returns whether the key was handled so callers can preventDefault.
+  const handleHotkey = useCallback((key: string): boolean => {
+    switch (key) {
+      case 'ArrowLeft': handleSkip(-1000); return true
+      case 'ArrowRight': handleSkip(1000); return true
+      case 'ArrowUp': handleSkip(10000); return true
+      case 'ArrowDown': handleSkip(-10000); return true
+      case '[': stepRate(-KEY_RATE_STEP); return true
+      case ']': stepRate(KEY_RATE_STEP); return true
+      case '=': setRate(1); return true
+      case 'n': case 'N': case 'a': case 'A': handleAddNote(); return true
+      default: return false
+    }
+  }, [handleSkip, stepRate, setRate, handleAddNote])
+
+  // Two entry points, both web: the app shell has focus (window keydown) OR the
+  // transcript iframe has focus and forwards the raw key as a 'hotkey' message
+  // (the iframe's own document swallows the keydown, so the window never sees it).
+  // Keys are ignored while a text field is focused so they never fight note editing.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      if (handleHotkey(e.key)) e.preventDefault()
+    }
+    const onMsg = (e: MessageEvent) => {
+      if (e.source !== transcriptIframeRef.current?.contentWindow) return
+      try {
+        const m = JSON.parse(typeof e.data === 'string' ? e.data : JSON.stringify(e.data)) as ParsedMsg
+        if (m?.type === 'hotkey' && typeof m.key === 'string') handleHotkey(m.key)
+      } catch { /* ignore */ }
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('message', onMsg)
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('message', onMsg) }
+  }, [handleHotkey])
 
   // Show the video view as an alternate VIEW of the same timeline. Capture the
   // current position so the YouTube player starts exactly there; the timeline hook

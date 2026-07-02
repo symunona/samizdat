@@ -184,6 +184,19 @@ tab bar are pinned so you never scroll the video away to get back to it:
 - Seeker bar: play/pause, time, scrub track, speed lever, add-note, offline-sync (native only)
 - AnnotationPanel sheet for creating/editing time-anchored notes
 
+### Keyboard shortcuts (desktop web)
+`handleHotkey` in `VideoDocument` maps keys to the same actions as the buttons:
+- **←/→** seek ±1s, **↑/↓** seek ±10s (up = forward)
+- **[** / **]** slow down / speed up by 0.1× (VLC-style), **=** reset to 1×
+- **n** / **a** add a note (same as the footer note button)
+
+Two entry points, both web-only: a `window` keydown listener (focus in the app shell)
+and the transcript iframe forwarding the raw key as a `hotkey` message (focus in the
+transcript, whose document otherwise swallows the keydown). They're mutually exclusive
+— a key event never crosses the frame boundary — so no double-fire. Keys are ignored
+while a text field is focused. The iframe forwards only for transcript docs, so article
+arrow-scroll is untouched.
+
 ### ONE shared timeline — `useMediaTimeline` (video = alternate view, not a separate player)
 The bottom seeker + transcript are driven by **one** playback timeline that reads from
 whichever backend is active. The video is just an alternate VIEW of that same timeline —
@@ -240,6 +253,7 @@ auto-scroll (`mediaTime` message) keeps following with **no** change to the tran
 - `mediaTime` message → highlights the active `.seg` and auto-scrolls (suppressed for 2.5s after user scroll)
 - `activeSegVisible` message (outbound) → reports whether the `.seg.active` is on-screen; the host shows/hides the floating resume button
 - `scrollToActive` message → scrolls the active `.seg` to center and resets the user-scroll timer so auto-follow resumes
+- `hotkey` message (outbound) → forwards a keyboard shortcut key (arrows / `[` `]` `=` / `n` `a`) to the host when the transcript frame has focus (see keyboard shortcuts above)
 - `seek` message (outbound) → tapping a `.seg` seeks audio to that timestamp
 - `requestSegmentWindow` / `segmentWindow` messages → builds a text-anchor around the active segment for time-stamped annotations
 

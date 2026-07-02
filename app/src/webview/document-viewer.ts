@@ -706,6 +706,19 @@ document.addEventListener('click', (e: MouseEvent) => {
   }
 })
 
+// ── Keyboard shortcuts (transcript only) ────────────────────────────────────────
+// The player's hotkeys must fire even when focus lives in this frame, where the
+// host's own window listener never sees the key. Forward the raw key out and let
+// the RN host map it (see handleHotkey in VideoDocument). Transcript docs only, so
+// article reading keeps normal arrow-scroll.
+const HOTKEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '[', ']', '=', 'n', 'N', 'a', 'A'])
+window.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (!HOTKEYS.has(e.key)) return
+  if (!document.querySelector('.seg[data-start-ms]')) return
+  e.preventDefault()
+  sendMsg({ type: 'hotkey', key: e.key })
+})
+
 // ── Scroll tracking ───────────────────────────────────────────────────────────
 
 let _lastFrac = -1
