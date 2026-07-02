@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
-    Image,
     Platform,
     Pressable,
     SafeAreaView,
@@ -11,6 +10,7 @@ import {
     View,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useUnistyles } from "react-native-unistyles";
 import { health, pair } from "../src/api";
@@ -276,14 +276,11 @@ export default function ConnectScreen() {
         <SafeAreaView style={s.screen}>
             <StatusBar style="light" />
             <View style={s.card}>
-                <Image
-                    source={
-                        Platform.OS === "web"
-                            ? { uri: "/favicon.svg" }
-                            : require("../assets/icon.png")
-                    }
+                <Ionicons
+                    name="library"
+                    size={64}
+                    color={theme.colors.accent}
                     style={s.logo}
-                    resizeMode="contain"
                 />
                 <Text style={s.brand}>samizdat</Text>
                 <Text style={s.sub}>Connect to your server</Text>
@@ -383,7 +380,7 @@ function buildStyles(t: Theme) {
             width: "100%",
             maxWidth: 440,
         },
-        logo: { width: 80, height: 80, marginBottom: 8, alignSelf: "center" },
+        logo: { marginBottom: 8, alignSelf: "center" },
         brand: {
             color: t.colors.text,
             fontSize: 34,

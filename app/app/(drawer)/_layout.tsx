@@ -1,4 +1,5 @@
 import { Text, View, Pressable, ScrollView } from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
 import { Drawer } from 'expo-router/drawer'
 import { Link, useNavigation, usePathname, type Href } from 'expo-router'
 import { UnistylesRuntime, useUnistyles } from 'react-native-unistyles'
@@ -52,9 +53,12 @@ function DrawerContent(_props: any) {
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.surface }}>
       <ScrollView contentContainerStyle={{ paddingTop: 24 }}>
-        <Text style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800', letterSpacing: -0.5, paddingHorizontal: 16, paddingBottom: 8 }}>
-          samizdat
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingBottom: 8 }}>
+          <Ionicons name="library" size={22} color={theme.colors.accent} />
+          <Text style={{ color: theme.colors.text, fontSize: 22, fontWeight: '800', letterSpacing: -0.5 }}>
+            samizdat
+          </Text>
+        </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 16, gap: 6 }}>
           <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: dotColor }} />
           <Text style={{ color: theme.colors.placeholder, fontSize: 12, fontFamily: 'monospace' }} numberOfLines={1}>
