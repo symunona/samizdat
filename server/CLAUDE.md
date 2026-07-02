@@ -199,6 +199,17 @@ The VPS datacenter IP is bot-blocked by YouTube. A residential proxy (e.g. home 
 - Tier routing: triage→Haiku (`claude-haiku-4-5-20251001`), breakdown→Sonnet (`claude-sonnet-4-6`), digest→Opus (`claude-opus-4-8`)
 - Credentialed/paywalled jobs → local provider only, never cloud (enforced in router, not caller)
 
+## Auto-export vault (`internal/export`)
+One-way mirror of Documents + Annotations to a structured plain-markdown Obsidian vault on disk. DB → markdown only; never imports. Config: `[export]` section (`enabled`, `dir`) in TOML — distinct from the reserved (unused) `vault_dir`. Needs `cacheDir` (passed by `api.New`) to source image assets.
+- **Layout:** `documents/<slug>.md` (one per Document, marker `samizdat: export`), `annotations/<slug>.md` (one **separate** note per Annotation, marker `samizdat: export-annotation`), `assets/<id>.<ext>` (copied image assets), `_index.md` (MOC, marker `samizdat: export-index`).
+- **Ownership marker:** every note carries its marker + `id:` in frontmatter. `loadIndex()` scans `documents/` and `annotations/` at startup and only ever writes/renames files carrying the matching marker — **foreign files are never touched**.
+- **Documents:** frontmatter (id, url, title, author, published, fetched, media_type, `hero`, tags); body = markdown with image URLs rewritten to `../assets/…` + a `![hero]` embed; a `## Annotations` section wikilinks its annotation notes. Tombstoned doc → note removed.
+- **Annotations:** own note — frontmatter (id, `document: [[doc]]`, color, media_ts, pos, created) + `> [!quote] From [[doc]]` blockquote + note body. Tombstoned annotation → note removed (handled in the sweep from the changed-annotation list, since `exportDoc` only writes live ones).
+- **Assets:** every image `MediaAsset` (kind ≠ `audio`) is copied `cacheDir/<LocalPath>` → `assets/<basename>` (skips if same size); its `OriginalUrl` is rewritten to `../assets/…` in doc/annotation bodies. Audio is not exported.
+- **Cursor:** incremental by `updated_at` (same cursor `GET /api/v1/sync` uses). A doc re-exports when its row OR any of its annotations changed. `overlap()` steps the cursor back 1s so a same-second commit (RFC3339 is second-resolution) isn't skipped; re-export is idempotent.
+- **Sweeps are serialized** (`sweepMu`) so the 15s ticker and on-demand `Refresh` can't write the same file at once. `GET /api/v1/export/stats` triggers a `Refresh` then returns the snapshot (`{enabled, dir, doc_count, annotation_count, last_export_at, last_error}`) — a UI refresh forces an immediate mirror.
+- Wired in `api.New` (goroutine started only when `enabled`). e2e coverage: `e2e/smoke.js` `runExportChecks`.
+
 ## TLS
 - CertMagic in-binary. `--dev` flag → plain HTTP on localhost (no TLS). Do not add nginx, certbot, or reverse proxy dependencies.
 

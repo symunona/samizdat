@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/symunona/samizdat/server/internal/config"
+	"github.com/symunona/samizdat/server/internal/export"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
 	"github.com/symunona/samizdat/server/internal/worker"
@@ -18,8 +19,14 @@ import (
 
 // New returns the root HTTP handler. webDir may be empty (API-only mode).
 // serverURLs is the ordered list of reachable base URLs for this server.
-func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, apkPath string, serverURLs []string, cacheDir string, extractorDir string, ytdlp config.YTDLPSection, llmCfg ...config.LLMSection) http.Handler {
+func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, apkPath string, serverURLs []string, cacheDir string, extractorDir string, ytdlp config.YTDLPSection, exportCfg config.ExportSection, llmCfg ...config.LLMSection) http.Handler {
 	q := store.New(db)
+
+	var exp *export.Exporter
+	if exportCfg.Enabled && exportCfg.Dir != "" {
+		exp = export.New(q, exportCfg.Dir, cacheDir)
+		go exp.Run(ctx)
+	}
 
 	var llmClient llm.Client
 	if len(llmCfg) > 0 {
@@ -125,6 +132,9 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 
 	ytStatusH := newYtdlpStatusHandler(ctx, q, ytdlp.Proxy)
 	mux.HandleFunc("GET /api/v1/ytdlp/status", bearerAuth(q, ytStatusH.get))
+
+	exportH := &exportHandler{exp: exp}
+	mux.HandleFunc("GET /api/v1/export/stats", bearerAuth(q, exportH.stats))
 
 	// Live device debug-log channel: paired devices stream JS/WebView logs here;
 	// appended to tmp/device-logs/<device>.ndjson (tail with `just device-logs`).

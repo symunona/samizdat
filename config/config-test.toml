@@ -9,3 +9,8 @@ extractors_dir = "/home/symunona/dev/sam/extractors"
 [server]
 port    = 8766
 web_dir = "/home/symunona/dev/sam/app/dist"
+
+# Auto-export mirror — exercised by the smoke test's export-api checks.
+[export]
+enabled = true
+dir     = "/tmp/samizdat-test/export-vault"

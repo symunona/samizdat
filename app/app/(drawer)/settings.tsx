@@ -8,6 +8,8 @@ import type { DeviceInfo, AppSettings, AndroidBuild } from '../../src/api'
 import { APP_VERSION, APP_VERSION_CODE } from '../../src/appVersion'
 import { fetchYtdlpProxyStatus } from '../../src/proxyStatus'
 import type { YtdlpProxyStatus } from '../../src/proxyStatus'
+import { fetchExportStats } from '../../src/exportStats'
+import type { ExportStats } from '../../src/exportStats'
 import { clearConnection, removeServerUrl, loadUrlLastUsedMap } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
 import { useConfirm } from '../../src/ConfirmContext'
@@ -68,6 +70,7 @@ export default function SettingsScreen() {
   const [urlLastUsed, setUrlLastUsed] = useState<Record<string, string>>({})
   const [proxyStatus, setProxyStatus] = useState<YtdlpProxyStatus | null>(null)
   const [proxyChecking, setProxyChecking] = useState(false)
+  const [exportStats, setExportStats] = useState<ExportStats | null>(null)
   const [deviceNameInput, setDeviceNameInput] = useState('')
   const [deviceNameSaving, setDeviceNameSaving] = useState(false)
   const [deviceNameSaved, setDeviceNameSaved] = useState(false)
@@ -140,6 +143,13 @@ export default function SettingsScreen() {
     return () => clearInterval(id)
   }, [status, loadProxyStatus])
 
+  const loadExportStats = useCallback(async () => {
+    if (!activeUrl || !token) return
+    try {
+      setExportStats(await fetchExportStats(activeUrl, token))
+    } catch { /* best-effort; keep prior stats */ }
+  }, [activeUrl, token])
+
   const loadLatestBuild = useCallback(async () => {
     if (!activeUrl || !token) return
     try {
@@ -169,9 +179,10 @@ export default function SettingsScreen() {
       loadDevices()
       loadSettings()
       loadLatestBuild()
+      loadExportStats()
       loadUrlLastUsedMap().then(setUrlLastUsed)
     }
-  }, [status, loadDevices, loadSettings, loadLatestBuild])
+  }, [status, loadDevices, loadSettings, loadLatestBuild, loadExportStats])
 
   // Extension install/pair status comes from a data-attr the content script
   // injects on this page (web only). Poll it and react to the pair ack.
@@ -532,6 +543,55 @@ export default function SettingsScreen() {
           </>
         )}
       </View>
+
+      {/* Auto-export vault */}
+      {exportStats && (
+        <View style={s.card}>
+          <View style={s.cardHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.cardTitle}>Export Vault</Text>
+              <Text style={s.cardSubtitle}>
+                {exportStats.enabled
+                  ? 'One-way mirror → Obsidian markdown'
+                  : 'Off — set [export] in config.toml'}
+              </Text>
+            </View>
+            {exportStats.enabled && (
+              <Pressable onPress={loadExportStats} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
+                <Text style={s.refreshBtnText}>Refresh</Text>
+              </Pressable>
+            )}
+          </View>
+          {exportStats.enabled && (
+            <>
+              <View style={s.statusRow}>
+                <View style={[s.dot, { backgroundColor: exportStats.last_error ? theme.colors.error : theme.colors.online }]} />
+                <Text style={[s.statusText, { fontSize: 14, color: exportStats.last_error ? theme.colors.error : theme.colors.online }]}>
+                  {exportStats.last_error ? 'Error' : 'Active'}
+                </Text>
+              </View>
+              <View style={s.infoRow}>
+                <Text style={s.infoLabel}>Documents</Text>
+                <Text style={s.infoValue}>{exportStats.doc_count.toLocaleString()}</Text>
+              </View>
+              <View style={s.infoRow}>
+                <Text style={s.infoLabel}>Annotations</Text>
+                <Text style={s.infoValue}>{exportStats.annotation_count.toLocaleString()}</Text>
+              </View>
+              <View style={s.infoRow}>
+                <Text style={s.infoLabel}>Last export</Text>
+                <Text style={s.infoValue}>{exportStats.last_export_at ? formatRelative(exportStats.last_export_at) : '—'}</Text>
+              </View>
+              <Text style={s.connectionDetail} numberOfLines={1}>
+                <Text style={s.connectionUrl}>{exportStats.dir}</Text>
+              </Text>
+              {exportStats.last_error ? (
+                <Text style={s.errorText} numberOfLines={3}>{exportStats.last_error}</Text>
+              ) : null}
+            </>
+          )}
+        </View>
+      )}
 
       {/* Devices */}
       <View style={s.card}>

@@ -17,6 +17,16 @@ type Config struct {
 	Server        ServerSection `toml:"server"`
 	LLM           LLMSection    `toml:"llm"`
 	YTDLP         YTDLPSection  `toml:"ytdlp"`
+	Export        ExportSection `toml:"export"`
+}
+
+// ExportSection configures the one-way auto-export of Documents + Annotations
+// to a plain-markdown Obsidian vault on disk. DB → markdown only; files carrying
+// our frontmatter id are overwritten, foreign files are never touched. This is a
+// backup/observation view, distinct from the reserved (unused) VaultDir.
+type ExportSection struct {
+	Enabled bool   `toml:"enabled"` // run the exporter goroutine
+	Dir     string `toml:"dir"`     // output vault folder (created if missing)
 }
 
 // YTDLPSection configures YouTube/podcast ingestion via yt-dlp. The VPS's

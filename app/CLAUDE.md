@@ -304,3 +304,6 @@ only one of the two sounds at a time (audio pauses while the video plays, and vi
 
 ### `proxyStatus.ts` — yt-dlp proxy health
 `src/proxyStatus.ts` exposes `fetchYtdlpProxyStatus` and `YtdlpProxyStatus`. Kept separate from `api.ts` to avoid merge conflicts. The Settings screen polls this every 20s when connected and displays online/offline status with exit IP and last-ok timestamp.
+
+### `exportStats.ts` — auto-export vault status
+`src/exportStats.ts` exposes `fetchExportStats` and `ExportStats`, hitting `GET /api/v1/export/stats` (which also triggers a server-side re-export). Kept separate from `api.ts` like `proxyStatus.ts`. The Settings "Export Vault" card shows doc/annotation counts, last-export time, dir, and any error; its Refresh button re-fetches (forcing a fresh mirror). The card renders only when the endpoint returns (i.e. when export is configured).

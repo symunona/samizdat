@@ -245,7 +245,80 @@ async function runSmoke() {
   // deep cascade semantics are covered by the Go store/pipeline tests).
   errors.push(...await runJobsApiChecks(token))
 
+  // Auto-export: the seeded video Document must land on disk as markdown.
+  errors.push(...await runExportChecks(token))
+
   return errors
+}
+
+// runExportChecks polls the export stats endpoint until the seeded Document is
+// mirrored to disk, then asserts the markdown file exists with our frontmatter.
+async function runExportChecks(token) {
+  const auth = { Authorization: `Bearer ${token}` }
+  const out = []
+
+  // Create an annotation so the note's embedded-callout path is exercised too.
+  const noteText = 'smoke-annotation-note'
+  try {
+    const res = await fetch(`${BASE_URL}/api/v1/documents/${VIDEO_DOC_ID}/annotations`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ exact: 'seeded transcript', note: noteText, media_ts_ms: 1500 }),
+    })
+    if (!res.ok) out.push(`[export] create annotation HTTP ${res.status}`)
+  } catch (e) {
+    out.push(`[export] create annotation threw: ${e.message}`)
+  }
+
+  let stats = null
+  // The exporter sweeps on a ticker; the doc is seeded after startup, so poll.
+  for (let i = 0; i < 30; i++) {
+    try {
+      const res = await fetch(`${BASE_URL}/api/v1/export/stats`, { headers: auth })
+      if (!res.ok) { out.push(`[export] stats HTTP ${res.status}`); return out }
+      stats = await res.json()
+      if (stats.enabled && stats.doc_count >= 1) break
+    } catch (e) {
+      out.push(`[export] stats threw: ${e.message}`); return out
+    }
+    await sleep(1000)
+  }
+
+  if (!stats || !stats.enabled) {
+    out.push('[export] stats not enabled'); return out
+  }
+  if (stats.doc_count < 1) {
+    out.push(`[export] doc_count still 0 after wait (dir ${stats.dir})`); return out
+  }
+  console.log(`  PASS [export] stats: ${stats.doc_count} doc(s) mirrored`)
+
+  // Structured layout: documents/ and annotations/ subfolders + _index.md.
+  try {
+    const readMd = (sub) => {
+      const dir = join(stats.dir, sub)
+      if (!fs.existsSync(dir)) return []
+      return fs.readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => fs.readFileSync(join(dir, f), 'utf8'))
+    }
+
+    const docNote = readMd('documents').find((t) => t.includes('samizdat: export') && t.includes(VIDEO_DOC_ID))
+    if (!docNote) out.push(`[export] no documents/ note with id ${VIDEO_DOC_ID}`)
+    else console.log('  PASS [export] doc note written to documents/')
+
+    // The annotation must be its own note under annotations/, linked from the doc.
+    const annNote = readMd('annotations').find((t) => t.includes('samizdat: export-annotation') && t.includes(noteText))
+    if (!annNote) out.push('[export] annotation note missing from annotations/')
+    else console.log('  PASS [export] annotation written to annotations/')
+    if (stats.annotation_count < 1) out.push(`[export] annotation_count is ${stats.annotation_count}`)
+    if (docNote && !docNote.includes('## Annotations')) out.push('[export] doc note missing annotation links')
+    else if (docNote) console.log('  PASS [export] doc note links its annotations')
+
+    if (!fs.existsSync(join(stats.dir, '_index.md'))) out.push('[export] _index.md missing')
+    else console.log('  PASS [export] _index.md built')
+  } catch (e) {
+    out.push(`[export] disk check threw: ${e.message}`)
+  }
+
+  return out
 }
 
 // runJobsApiChecks validates the rerun + history endpoints end-to-end through the
