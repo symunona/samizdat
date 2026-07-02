@@ -20,4 +20,7 @@ export type YtPlayerProps = {
   startMs: number
   rate: number
   onStatus: (s: YtStatus) => void
+  // YouTube IFrame API error code (2/5/100/101/150). 101 & 150 mean the owner
+  // disabled embedding — the host surfaces a graceful "open in YouTube" fallback.
+  onError?: (code: number) => void
 }

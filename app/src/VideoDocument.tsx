@@ -7,14 +7,15 @@ import {
   PanResponder,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useUnistyles } from 'react-native-unistyles'
 import WebView from 'react-native-webview'
 import type { WebViewMessageEvent } from 'react-native-webview'
@@ -124,6 +125,13 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const s = useMemo(() => buildStyles(theme), [theme])
   const { activeUrl, token, status } = useConnection()
   const { toast } = useToast()
+  const insets = useSafeAreaInsets()
+  // The scrollable content above the pinned footer needs a concrete height so the
+  // transcript iframe/WebView (which can't grow to fit) gets a real height AND the
+  // page scrolls the video off the top on desktop. Size the active tab panel to
+  // most of the viewport; the video block on top then overflows into scroll.
+  const { height: winH } = useWindowDimensions()
+  const panelH = Math.max(360, Math.round(winH - 160))
 
   const segments = useMemo(() => parseTranscript(doc), [doc])
   const meta = useMemo(() => parseMediaMetadata(doc), [doc])
@@ -135,6 +143,9 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const [localUri, setLocalUri] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [trackWidth, setTrackWidth] = useState(0)
+  // YouTube IFrame error code, if any. 101/150 = owner disabled embedding → we
+  // swap the black player box for an "open in YouTube" fallback (see below).
+  const [ytError, setYtError] = useState<number | null>(null)
   // Playback position captured when the video view opens, so the YouTube player
   // starts exactly where the audio was.
   const [videoStartMs, setVideoStartMs] = useState(0)
@@ -445,9 +456,17 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   // current position so the YouTube player starts exactly there; the timeline hook
   // handles the audio↔video handoff (pause the <audio>, resume it on collapse).
   const toggleVideo = useCallback(() => {
-    if (!showVideo) setVideoStartMs(positionMs)
+    if (!showVideo) { setVideoStartMs(positionMs); setYtError(null) }
     setShowVideo(v => !v)
   }, [showVideo, positionMs])
+
+  // YouTube reported an error. Codes 101 & 150 mean the owner disabled embedding —
+  // the video genuinely can't play here, so surface a fallback instead of a black box.
+  const handleYtError = useCallback((code: number) => {
+    log.error('yt player error', code)
+    setYtError(code)
+  }, [])
+  const embedDisabled = ytError === 101 || ytError === 150
 
   // Collapse back to audio-only, continuing from the video's position.
   const switchToAudio = useCallback(() => setShowVideo(false), [])
@@ -511,9 +530,9 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const pct = useCallback((ms: number) => (durationMs > 0 ? Math.min(100, Math.max(0, (ms / durationMs) * 100)) : 0), [durationMs])
 
   return (
-    <SafeAreaView style={s.screen}>
-      {/* Header */}
-      <View style={s.header}>
+    <View style={s.screen}>
+      {/* Header — top safe-area padding clears the status bar / notch on mobile. */}
+      <View style={[s.header, { paddingTop: theme.spacing.sm + insets.top }]}>
         <Pressable onPress={() => router.navigate((from as string) ?? '/documents')} style={s.backBtn} hitSlop={12}>
           <Ionicons name="arrow-back" size={22} color={theme.colors.accent} />
         </Pressable>
@@ -522,151 +541,80 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
       <PendingPipelineBanner docId={doc.id} isVideo />
 
-      {/* Player / thumbnail */}
-      <View style={s.player}>
-        {videoActive && ytId ? (
-          <View ref={videoBoxRef} style={s.videoBox}>
-            <YtPlayer ref={ytRef} videoId={ytId} startMs={videoStartMs} rate={rate} onStatus={onYtStatus} />
-            <View style={s.videoBtns}>
-              {Platform.OS === 'web' ? (
-                <Pressable onPress={handleFullscreen} style={s.videoBtn} hitSlop={10}>
-                  <Ionicons name="expand" size={16} color="#fff" />
-                </Pressable>
+      {/* Scrollable region — video + tabs + tab content. On desktop the video
+          scrolls off the top of the screen while the footer stays pinned below. */}
+      <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
+        {/* Player / thumbnail */}
+        <View style={s.player}>
+          {videoActive && ytId ? (
+            <View ref={videoBoxRef} style={s.videoBox}>
+              <YtPlayer ref={ytRef} videoId={ytId} startMs={videoStartMs} rate={rate} onStatus={onYtStatus} onError={handleYtError} />
+              {embedDisabled ? (
+                <View style={s.ytErrorBox}>
+                  <Ionicons name="alert-circle-outline" size={30} color="#fff" />
+                  <Text style={s.ytErrorText}>This video can’t be embedded.</Text>
+                  <Pressable onPress={() => Linking.openURL(`https://www.youtube.com/watch?v=${ytId}`)} style={s.ytErrorLink} hitSlop={8}>
+                    <Ionicons name="logo-youtube" size={16} color="#fff" />
+                    <Text style={s.ytErrorLinkText}>Open in YouTube</Text>
+                  </Pressable>
+                  <Text style={s.ytErrorHint}>Tap “Audio only” to keep listening here.</Text>
+                </View>
               ) : null}
-              <Pressable onPress={toggleVideo} style={s.videoBtn} hitSlop={10}>
-                <Ionicons name="chevron-up" size={16} color="#fff" />
-              </Pressable>
-            </View>
-          </View>
-        ) : (
-          <Pressable onPress={ytId ? toggleVideo : undefined} style={s.thumbBox}>
-            {doc.hero_image_url ? (
-              <Image source={{ uri: doc.hero_image_url }} style={s.thumb} resizeMode="cover" />
-            ) : <View style={[s.thumb, s.thumbPlaceholder]} />}
-            {ytId ? (
-              <View style={s.playOverlay}>
-                <Ionicons name="logo-youtube" size={44} color="#fff" />
-                <Text style={s.playOverlayText}>Watch video</Text>
-              </View>
-            ) : null}
-          </Pressable>
-        )}
-      </View>
-
-      {/* Collapse the video back to audio-only, continuing from the same position. */}
-      {videoActive ? (
-        <Pressable onPress={switchToAudio} style={s.audioOnlyBtn} hitSlop={8}>
-          <Ionicons name="headset-outline" size={16} color={theme.colors.accent} />
-          <Text style={s.audioOnlyText}>Audio only</Text>
-        </Pressable>
-      ) : null}
-
-      {/* Backdrop closes the speed dropup on an outside tap (full-screen). */}
-      {speedOpen ? <Pressable style={s.speedBackdrop} onPress={() => setSpeedOpen(false)} /> : null}
-
-      {/* ± skip row — its own row above the seeker; each skip is a "jump". */}
-      <View style={s.skipRow}>
-        {SKIPS.map(sk => (
-          <Pressable key={`${sk.icon}${sk.delta}`} onPress={() => handleSkip(sk.delta)} style={s.skipBtn} hitSlop={6}>
-            <Ionicons name={sk.icon} size={13} color={theme.colors.accent} />
-            <Text style={s.skipText}>{sk.delta < 0 ? '−' : '+'}{sk.label}s</Text>
-          </Pressable>
-        ))}
-      </View>
-
-      {/* Seeker bar (always visible, above the tabs) */}
-      <View style={s.seeker}>
-        <Pressable onPress={togglePlay} style={s.playBtn} hitSlop={8}>
-          <Ionicons name={playing ? 'pause' : 'play'} size={22} color={theme.colors.background} />
-        </Pressable>
-        <Text style={s.time}>{fmtTime(positionMs)}</Text>
-        <View style={s.scrub}>
-          {/* Flag labels above the track (resume = green, jump-from = amber). */}
-          <View style={s.flagStrip} pointerEvents="none">
-            {savedPosMs != null && durationMs > 0 ? (
-              <Text style={[s.flagLabel, s.flagResume, { left: `${pct(savedPosMs)}%` as `${number}%` }]} numberOfLines={1}>where I was</Text>
-            ) : null}
-            {jumpFromMs != null && durationMs > 0 ? (
-              <Text style={[s.flagLabel, s.flagJump, { left: `${pct(jumpFromMs)}%` as `${number}%` }]} numberOfLines={1}>last jumped from</Text>
-            ) : null}
-          </View>
-          <View style={s.track} onLayout={e => setTrackWidth(e.nativeEvent.layout.width)}>
-            {/* Seek layer sits at the bottom; decorations above are pointerEvents:none
-                so a tap anywhere reaches it. A responder View (not Pressable) is used
-                because Pressable's onPress omits locationX on RN-Web — the old tap-seek
-                bug; onResponderRelease gives a reliable per-view offset on both runtimes. */}
-            <View
-              style={s.trackHit}
-              onStartShouldSetResponder={() => true}
-              onResponderRelease={handleTrackPress}
-            />
-            <View style={s.trackBg} pointerEvents="none" />
-            <View style={[s.trackFill, { width: `${progressPct}%` as `${number}%` }]} pointerEvents="none" />
-            {savedPosMs != null && durationMs > 0 ? (
-              <View pointerEvents="none" style={[s.markResume, { left: `${pct(savedPosMs)}%` as `${number}%` }]} />
-            ) : null}
-            {jumpFromMs != null && durationMs > 0 ? (
-              <View pointerEvents="none" style={[s.markJump, { left: `${pct(jumpFromMs)}%` as `${number}%` }]} />
-            ) : null}
-            {durationMs > 0 ? annotations.filter(a => a.media_ts_ms > 0).map(a => (
-              <Pressable
-                key={a.id}
-                style={[s.markAnn, { left: `${pct(a.media_ts_ms)}%` as `${number}%` }]}
-                hitSlop={6}
-                onPress={() => openAnnotation(a, true)}
-              />
-            )) : null}
-          </View>
-        </View>
-        <Text style={s.time}>{fmtTime(durationMs)}</Text>
-        <View style={s.speedWrap}>
-          {speedOpen ? (
-            <View style={s.speedPanel}>
-              <Text style={s.speedPanelLabel} selectable={false}>{fmtRate(rate)}</Text>
-              <View style={s.speedStepRow}>
-                <IconButton name="remove" onPress={() => stepRate(-RATE_STEP)} color={theme.colors.accent} />
-                <IconButton name="add" onPress={() => stepRate(RATE_STEP)} color={theme.colors.accent} />
-              </View>
-              <View style={s.leverTrack} {...leverPan.panHandlers}>
-                <View style={[s.leverFill, { height: ((rate - RATE_MIN) / RATE_RANGE) * LEVER_H }]} />
-                <View style={[s.leverThumb, { bottom: ((rate - RATE_MIN) / RATE_RANGE) * (LEVER_H - LEVER_THUMB_H) }]} />
+              <View style={s.videoBtns}>
+                {Platform.OS === 'web' ? (
+                  <Pressable onPress={handleFullscreen} style={s.videoBtn} hitSlop={10}>
+                    <Ionicons name="expand" size={16} color="#fff" />
+                  </Pressable>
+                ) : null}
+                <Pressable onPress={toggleVideo} style={s.videoBtn} hitSlop={10}>
+                  <Ionicons name="chevron-up" size={16} color="#fff" />
+                </Pressable>
               </View>
             </View>
-          ) : null}
-          <Pressable onPress={() => setSpeedOpen(o => !o)} style={s.speedPill} hitSlop={8}>
-            <Text style={s.speedText} selectable={false}>{fmtRate(rate)}</Text>
-          </Pressable>
+          ) : (
+            <Pressable onPress={ytId ? toggleVideo : undefined} style={s.thumbBox}>
+              {doc.hero_image_url ? (
+                <Image source={{ uri: doc.hero_image_url }} style={s.thumb} resizeMode="cover" />
+              ) : <View style={[s.thumb, s.thumbPlaceholder]} />}
+              {ytId ? (
+                <View style={s.playOverlay}>
+                  <Ionicons name="logo-youtube" size={44} color="#fff" />
+                  <Text style={s.playOverlayText}>Watch video</Text>
+                </View>
+              ) : null}
+            </Pressable>
+          )}
         </View>
-        <Pressable onPress={handleAddNote} style={s.iconBtn} hitSlop={8}>
-          <Ionicons name="create-outline" size={20} color={theme.colors.accent} />
-        </Pressable>
-        {Platform.OS !== 'web' ? (
-          <Pressable onPress={handleSync} style={s.iconBtn} hitSlop={8} disabled={syncing}>
-            {syncing ? <ActivityIndicator size="small" color={theme.colors.accent} />
-              : <Ionicons name={localUri ? 'cloud-done-outline' : 'cloud-download-outline'} size={20} color={localUri ? theme.colors.accent : theme.colors.muted} />}
+
+        {/* Collapse the video back to audio-only, continuing from the same position. */}
+        {videoActive ? (
+          <Pressable onPress={switchToAudio} style={s.audioOnlyBtn} hitSlop={8}>
+            <Ionicons name="headset-outline" size={16} color={theme.colors.accent} />
+            <Text style={s.audioOnlyText}>Audio only</Text>
           </Pressable>
         ) : null}
-      </View>
 
-      {/* Tab bar (NewPipe-style) — only the content below switches. */}
-      <View style={s.tabBar}>
-        {TABS.map(t => {
-          const active = tab === t.key
-          const count = t.key === 'annotations' ? annotations.length : t.key === 'excerpt' ? highlights.length : 0
-          return (
-            <Pressable key={t.key} onPress={() => setTab(t.key)} style={[s.tabItem, active && s.tabItemActive]} hitSlop={4}>
-              <Ionicons name={t.icon} size={15} color={active ? theme.colors.accent : theme.colors.muted} />
-              <Text style={[s.tabLabel, active && s.tabLabelActive]} numberOfLines={1}>
-                {t.label}{count > 0 ? ` ${count}` : ''}
-              </Text>
-            </Pressable>
-          )
-        })}
-      </View>
+        {/* Tab bar (NewPipe-style) — only the content below switches. */}
+        <View style={s.tabBar}>
+          {TABS.map(t => {
+            const active = tab === t.key
+            const count = t.key === 'annotations' ? annotations.length : t.key === 'excerpt' ? highlights.length : 0
+            return (
+              <Pressable key={t.key} onPress={() => setTab(t.key)} style={[s.tabItem, active && s.tabItemActive]} hitSlop={4}>
+                <Ionicons name={t.icon} size={15} color={active ? theme.colors.accent : theme.colors.muted} />
+                <Text style={[s.tabLabel, active && s.tabLabelActive]} numberOfLines={1}>
+                  {t.label}{count > 0 ? ` ${count}` : ''}
+                </Text>
+              </Pressable>
+            )
+          })}
+        </View>
 
-      {/* Tab content. Transcript stays mounted (hidden) so it keeps auto-following. */}
-      <View style={s.tabContent}>
-        <View style={[s.tabPanel, tab !== 'transcript' && s.tabPanelHidden]}>
+        {/* Tab content. Transcript stays mounted (hidden) so it keeps auto-following.
+            Fixed height so the transcript iframe/WebView gets a concrete height and
+            the page overflows into scroll (video scrolls off the top). */}
+        <View style={[s.tabContent, { height: panelH }]}>
+          <View style={[s.tabPanel, tab !== 'transcript' && s.tabPanelHidden]}>
           {Platform.OS === 'web' ? (
             <iframe
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -741,6 +689,104 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
             ))}
           </ScrollView>
         ) : null}
+        </View>
+      </ScrollView>
+
+      {/* Backdrop closes the speed dropup on an outside tap (full-screen). */}
+      {speedOpen ? <Pressable style={s.speedBackdrop} onPress={() => setSpeedOpen(false)} /> : null}
+
+      {/* ── Pinned footer control bar (does not scroll) ── */}
+      <View style={[s.footer, { paddingBottom: insets.bottom }]}>
+        {/* Buttons row: skips · big play/pause · skips · note · sync · speed. */}
+        <View style={s.footerBtns}>
+          {SKIPS.slice(0, 2).map(sk => (
+            <Pressable key={`${sk.icon}${sk.delta}`} onPress={() => handleSkip(sk.delta)} style={s.skipBtn} hitSlop={6}>
+              <Ionicons name={sk.icon} size={13} color={theme.colors.accent} />
+              <Text style={s.skipText}>{sk.delta < 0 ? '−' : '+'}{sk.label}s</Text>
+            </Pressable>
+          ))}
+          <Pressable onPress={togglePlay} style={s.playBtnBig} hitSlop={8}>
+            <Ionicons name={playing ? 'pause' : 'play'} size={28} color={theme.colors.background} />
+          </Pressable>
+          {SKIPS.slice(2).map(sk => (
+            <Pressable key={`${sk.icon}${sk.delta}`} onPress={() => handleSkip(sk.delta)} style={s.skipBtn} hitSlop={6}>
+              <Ionicons name={sk.icon} size={13} color={theme.colors.accent} />
+              <Text style={s.skipText}>{sk.delta < 0 ? '−' : '+'}{sk.label}s</Text>
+            </Pressable>
+          ))}
+          <Pressable onPress={handleAddNote} style={s.iconBtn} hitSlop={8}>
+            <Ionicons name="create-outline" size={22} color={theme.colors.accent} />
+          </Pressable>
+          {Platform.OS !== 'web' ? (
+            <Pressable onPress={handleSync} style={s.iconBtn} hitSlop={8} disabled={syncing}>
+              {syncing ? <ActivityIndicator size="small" color={theme.colors.accent} />
+                : <Ionicons name={localUri ? 'cloud-done-outline' : 'cloud-download-outline'} size={22} color={localUri ? theme.colors.accent : theme.colors.muted} />}
+            </Pressable>
+          ) : null}
+          <View style={s.speedWrap}>
+            {/* Dropup opens UPWARD into the room above the footer. */}
+            {speedOpen ? (
+              <View style={s.speedPanel}>
+                <Text style={s.speedPanelLabel} selectable={false}>{fmtRate(rate)}</Text>
+                <View style={s.speedStepRow}>
+                  <IconButton name="remove" onPress={() => stepRate(-RATE_STEP)} color={theme.colors.accent} />
+                  <IconButton name="add" onPress={() => stepRate(RATE_STEP)} color={theme.colors.accent} />
+                </View>
+                <View style={s.leverTrack} {...leverPan.panHandlers}>
+                  <View style={[s.leverFill, { height: ((rate - RATE_MIN) / RATE_RANGE) * LEVER_H }]} />
+                  <View style={[s.leverThumb, { bottom: ((rate - RATE_MIN) / RATE_RANGE) * (LEVER_H - LEVER_THUMB_H) }]} />
+                </View>
+              </View>
+            ) : null}
+            <Pressable onPress={() => setSpeedOpen(o => !o)} style={s.speedPill} hitSlop={8}>
+              <Text style={s.speedText} selectable={false}>{fmtRate(rate)}</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        {/* Seek bar — the very bottom edge. Left time · scrub track · right time. */}
+        <View style={s.footerSeek}>
+          <Text style={s.time}>{fmtTime(positionMs)}</Text>
+          <View style={s.scrub}>
+            {/* Flag labels above the track (resume = green, jump-from = amber). */}
+            <View style={s.flagStrip} pointerEvents="none">
+              {savedPosMs != null && durationMs > 0 ? (
+                <Text style={[s.flagLabel, s.flagResume, { left: `${pct(savedPosMs)}%` as `${number}%` }]} numberOfLines={1}>where I was</Text>
+              ) : null}
+              {jumpFromMs != null && durationMs > 0 ? (
+                <Text style={[s.flagLabel, s.flagJump, { left: `${pct(jumpFromMs)}%` as `${number}%` }]} numberOfLines={1}>last jumped from</Text>
+              ) : null}
+            </View>
+            <View style={s.track} onLayout={e => setTrackWidth(e.nativeEvent.layout.width)}>
+              {/* Seek layer sits at the bottom; decorations above are pointerEvents:none
+                  so a tap anywhere reaches it. A responder View (not Pressable) is used
+                  because Pressable's onPress omits locationX on RN-Web — the old tap-seek
+                  bug; onResponderRelease gives a reliable per-view offset on both runtimes. */}
+              <View
+                style={s.trackHit}
+                onStartShouldSetResponder={() => true}
+                onResponderRelease={handleTrackPress}
+              />
+              <View style={s.trackBg} pointerEvents="none" />
+              <View style={[s.trackFill, { width: `${progressPct}%` as `${number}%` }]} pointerEvents="none" />
+              {savedPosMs != null && durationMs > 0 ? (
+                <View pointerEvents="none" style={[s.markResume, { left: `${pct(savedPosMs)}%` as `${number}%` }]} />
+              ) : null}
+              {jumpFromMs != null && durationMs > 0 ? (
+                <View pointerEvents="none" style={[s.markJump, { left: `${pct(jumpFromMs)}%` as `${number}%` }]} />
+              ) : null}
+              {durationMs > 0 ? annotations.filter(a => a.media_ts_ms > 0).map(a => (
+                <Pressable
+                  key={a.id}
+                  style={[s.markAnn, { left: `${pct(a.media_ts_ms)}%` as `${number}%` }]}
+                  hitSlop={6}
+                  onPress={() => openAnnotation(a, true)}
+                />
+              )) : null}
+            </View>
+          </View>
+          <Text style={s.time}>{fmtTime(durationMs)}</Text>
+        </View>
       </View>
 
       <AnnotationPanel
@@ -751,7 +797,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
         onDelete={annMode === 'edit' ? handleAnnDelete : undefined}
         onCancel={() => setAnnVisible(false)}
       />
-    </SafeAreaView>
+    </View>
   )
 }
 
@@ -784,10 +830,42 @@ function buildStyles(t: Theme) {
       borderBottomWidth: 1, borderBottomColor: t.colors.border,
     },
     audioOnlyText: { color: t.colors.accent, fontSize: 13, fontWeight: '600' },
-    // ± skip row — own row above the seeker.
-    skipRow: {
-      flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: t.spacing.sm,
-      paddingHorizontal: t.spacing.md, paddingTop: t.spacing.sm, backgroundColor: t.colors.surface,
+    ytErrorBox: {
+      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+      alignItems: 'center', justifyContent: 'center',
+      gap: 8, padding: t.spacing.lg, backgroundColor: 'rgba(0,0,0,0.85)',
+    },
+    ytErrorText: { color: '#fff', fontSize: 14, fontWeight: '700', textAlign: 'center' },
+    ytErrorLink: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8, backgroundColor: '#c4302b',
+    },
+    ytErrorLinkText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+    ytErrorHint: { color: 'rgba(255,255,255,0.7)', fontSize: 11, textAlign: 'center' },
+
+    // ── Scrollable content region (above the pinned footer) ──
+    scroll: { flex: 1, backgroundColor: t.colors.background },
+    scrollContent: { flexGrow: 1 },
+
+    // ── Pinned footer control bar ──
+    footer: {
+      backgroundColor: t.colors.surface,
+      borderTopWidth: 1, borderTopColor: t.colors.border,
+    },
+    // Buttons row (top of footer). Wrap so every control shows at narrow widths.
+    footerBtns: {
+      flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center',
+      gap: t.spacing.sm, rowGap: 6,
+      paddingHorizontal: t.spacing.md, paddingTop: t.spacing.sm, paddingBottom: 6,
+    },
+    // Seek bar (bottom edge of footer).
+    footerSeek: {
+      flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,
+      paddingHorizontal: t.spacing.md, paddingBottom: t.spacing.sm,
+    },
+    playBtnBig: {
+      width: 52, height: 52, borderRadius: 26, backgroundColor: t.colors.accent,
+      alignItems: 'center', justifyContent: 'center', flexShrink: 0,
     },
     skipBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 3,
@@ -795,15 +873,6 @@ function buildStyles(t: Theme) {
       borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.background,
     },
     skipText: { color: t.colors.accent, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
-    seeker: {
-      flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,
-      paddingHorizontal: t.spacing.md, paddingVertical: t.spacing.sm,
-      borderTopWidth: 1, borderTopColor: t.colors.border, backgroundColor: t.colors.surface,
-    },
-    playBtn: {
-      width: 36, height: 36, borderRadius: 18, backgroundColor: t.colors.accent,
-      alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-    },
     time: { color: t.colors.muted, fontSize: 11, fontVariant: ['tabular-nums'], minWidth: 32, textAlign: 'center' },
     // Scrub column: a flag-label strip above the 24px track.
     scrub: { flex: 1, justifyContent: 'flex-end' },
@@ -837,7 +906,7 @@ function buildStyles(t: Theme) {
     // Dropup floats above the pill (bottom-anchored to the seeker row).
     // Fixed width keeps the panel stable regardless of the value string.
     speedPanel: {
-      position: 'absolute', bottom: 34, right: 0, width: 96, alignItems: 'center', gap: 8,
+      position: 'absolute', bottom: 46, right: 0, width: 96, alignItems: 'center', gap: 8,
       paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12,
       backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
       shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 8,
@@ -865,7 +934,9 @@ function buildStyles(t: Theme) {
     tabItemActive: { borderBottomColor: t.colors.accent },
     tabLabel: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
     tabLabelActive: { color: t.colors.accent },
-    tabContent: { flex: 1, backgroundColor: t.colors.background },
+    // Height is set inline (panelH) so the transcript iframe/WebView gets a concrete
+    // height and the page can scroll the video off the top.
+    tabContent: { backgroundColor: t.colors.background },
     tabPanel: { flex: 1, backgroundColor: t.colors.background },
     tabPanelHidden: { display: 'none' },
     panelPad: { padding: t.spacing.lg, gap: t.spacing.md },

@@ -32,7 +32,7 @@ function loadYtApi(): Promise<void> {
 }
 
 const YtPlayer = forwardRef<YtPlayerHandle, YtPlayerProps>(function YtPlayer(
-  { videoId, startMs, rate, onStatus }, ref,
+  { videoId, startMs, rate, onStatus, onError }, ref,
 ) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const playerRef = useRef<YT>(null)
@@ -40,6 +40,7 @@ const YtPlayer = forwardRef<YtPlayerHandle, YtPlayerProps>(function YtPlayer(
   // Latest callback/rate without re-running the mount effect (which would tear down
   // and recreate the player on every render).
   const onStatusRef = useRef(onStatus); onStatusRef.current = onStatus
+  const onErrorRef = useRef(onError); onErrorRef.current = onError
   const rateRef = useRef(rate); rateRef.current = rate
   const startRef = useRef(startMs); startRef.current = startMs
 
@@ -74,6 +75,8 @@ const YtPlayer = forwardRef<YtPlayerHandle, YtPlayerProps>(function YtPlayer(
             })
           },
           onStateChange: (e: { target: YT }) => emit(e.target),
+          // 101 & 150 = embedding disabled by the video owner; host shows a fallback.
+          onError: (e: { data: number }) => onErrorRef.current?.(Number(e.data)),
         },
       })
     }).catch(err => log.error('yt api load', err))

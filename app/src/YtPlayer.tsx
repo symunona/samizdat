@@ -21,9 +21,10 @@ var player;
 function post(o){window.ReactNativeWebView&&window.ReactNativeWebView.postMessage(JSON.stringify(o));}
 function tick(){if(player&&player.getCurrentTime){post({t:'status',playing:player.getPlayerState&&player.getPlayerState()===1,positionMs:Math.floor((player.getCurrentTime()||0)*1000),durationMs:Math.floor((player.getDuration()||0)*1000)});}}
 window.onYouTubeIframeAPIReady=function(){
-  player=new YT.Player('p',{videoId:'${videoId}',playerVars:{start:${startS},autoplay:1,playsinline:1,rel:0,enablejsapi:1},events:{
+  player=new YT.Player('p',{videoId:'${videoId}',playerVars:{start:${startS},autoplay:1,playsinline:1,rel:0,enablejsapi:1,origin:'https://www.youtube.com'},events:{
     onReady:function(e){try{e.target.setPlaybackRate(${rate})}catch(x){}post({t:'status',playing:true,positionMs:${startS}*1000,durationMs:Math.floor((e.target.getDuration()||0)*1000)});},
-    onStateChange:function(){tick();}
+    onStateChange:function(){tick();},
+    onError:function(e){post({t:'error',code:e.data});}
   }});
   setInterval(tick,250);
 };
@@ -33,7 +34,7 @@ var s=document.createElement('script');s.src='https://www.youtube.com/iframe_api
 }
 
 const YtPlayer = forwardRef<YtPlayerHandle, YtPlayerProps>(function YtPlayer(
-  { videoId, startMs, rate, onStatus }, ref,
+  { videoId, startMs, rate, onStatus, onError }, ref,
 ) {
   const wv = useRef<WebView>(null)
   const send = (c: object) =>
@@ -50,13 +51,16 @@ const YtPlayer = forwardRef<YtPlayerHandle, YtPlayerProps>(function YtPlayer(
     try {
       const m = JSON.parse(e.nativeEvent.data)
       if (m.t === 'status') onStatus({ playing: !!m.playing, positionMs: m.positionMs, durationMs: m.durationMs })
+      else if (m.t === 'error') onError?.(Number(m.code))
     } catch { /* ignore */ }
   }
 
   return (
     <WebView
       ref={wv}
-      source={{ html: buildYtHtml(videoId, Math.floor(startMs / 1000), rate) }}
+      // baseUrl gives the WebView an https origin/referer; without it YouTube
+      // rejects the embed with error 153 (no valid HTTP referer).
+      source={{ html: buildYtHtml(videoId, Math.floor(startMs / 1000), rate), baseUrl: 'https://www.youtube.com' }}
       onMessage={onMessage}
       style={styles.fill}
       allowsInlineMediaPlayback
