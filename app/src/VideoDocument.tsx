@@ -452,18 +452,30 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   // Collapse back to audio-only, continuing from the video's position.
   const switchToAudio = useCallback(() => setShowVideo(false), [])
 
-  // Lock-screen fallback: the YouTube WebView is suspended by the OS when the app
-  // backgrounds/locks, killing playback. On 'background' while the video is the active
-  // (sounding) backend, collapse to audio-only — the useMediaTimeline handoff seeks the
-  // native expo-audio backend to the video's position and resumes, and it holds the OS
-  // media session, so playback continues locked with lock-screen controls. Refs keep the
-  // once-registered listener reading fresh values without re-subscribing.
+  // ── Lock/unlock playback state machine (see docs/media-playback-lockscreen.md) ──
+  // The YouTube WebView is suspended by the OS on background/lock, which kills its
+  // playback. On 'background' while the video is the sounding backend we REMEMBER that
+  // and collapse to audio-only: the useMediaTimeline handoff seeks the native expo-audio
+  // backend to the video's position, resumes, and claims the OS media session, so sound
+  // survives the lock with lock-screen controls. On 'active' (unlock) we RESTORE the
+  // video view exactly as it was, continuing from wherever audio advanced to while
+  // locked. Audio-only sessions need no handoff (expo-audio already survives the lock),
+  // so there's nothing to remember or restore for them.
+  // Refs keep the once-registered listener reading fresh values without re-subscribing.
   const showVideoRef = useRef(showVideo); showVideoRef.current = showVideo
   const playingRef = useRef(playing); playingRef.current = playing
+  const restoreVideoRef = useRef(false)
   useEffect(() => {
     const sub = AppState.addEventListener('change', next => {
-      if (next === 'background' && showVideoRef.current && !!ytId && playingRef.current) {
-        switchToAudio()
+      if (next === 'background') {
+        if (showVideoRef.current && !!ytId && playingRef.current) {
+          restoreVideoRef.current = true // remember: was showing video → restore on unlock
+          switchToAudio()
+        }
+      } else if (next === 'active' && restoreVideoRef.current) {
+        restoreVideoRef.current = false
+        setVideoStartMs(Math.floor(positionRef.current)) // continue from where audio got to
+        setShowVideo(true)
       }
     })
     return () => sub.remove()
