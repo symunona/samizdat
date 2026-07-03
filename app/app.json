@@ -3,7 +3,7 @@
     "name": "Samizdat",
     "slug": "samizdat",
     "scheme": "samizdat",
-    "version": "0.2.3",
+    "version": "0.2.4",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "sam.tmpx.space",
-      "versionCode": 6,
+      "versionCode": 7,
       "adaptiveIcon": {
         "backgroundColor": "#0b0b0c",
         "foregroundImage": "./assets/android-icon-foreground.png",
