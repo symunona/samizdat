@@ -16,6 +16,8 @@ data/
 certs/
 *.pem
 *.key
+# Scraper login session jars (Playwright storageState cookie jars)
+**/auth/*.json
 
 # --- Go (server/, cli/, tooling/) ---
 /server/bin/

@@ -45,7 +45,7 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 	// For html_links we need to fetch the page via the browser first.
 	var htmlContent string
 	if cfg.Kind == "html_links" {
-		htmlContent, err = browser.FetchHTML(feed.Url)
+		htmlContent, err = browser.FetchHTML(feed.Url, "")
 		if err != nil {
 			return "", fmt.Errorf("browser fetch %s: %w", feed.Url, err)
 		}

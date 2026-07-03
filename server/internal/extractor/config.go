@@ -23,8 +23,25 @@ type ExtractorConfig struct {
 	// rss fields
 	FeedURL string `yaml:"feed_url,omitempty"`
 
+	// Auth, when set, logs in once and reuses a persisted browser session
+	// (storageState cookie jar) so paywalled articles render full-text.
+	Auth *AuthConfig `yaml:"auth,omitempty"`
+
 	// js_script: script loaded separately as ScriptBytes
 	ScriptBytes []byte `yaml:"-"`
+}
+
+// AuthConfig describes a headless form login for a paywalled domain. The login
+// mints a Playwright storageState jar (persisted under <cacheDir>/auth/<domain>.json)
+// that later scrapes reuse. Login and paywall are detected by plain substring
+// markers in the rendered page (robust across the site's markup changes).
+type AuthConfig struct {
+	LoginURL       string `yaml:"login_url"`       // form page; may carry a ?redirect= back to the content domain
+	UserSelector   string `yaml:"user_selector"`   // CSS selector for the username/email field
+	PassSelector   string `yaml:"pass_selector"`   // CSS selector for the password field
+	SubmitSelector string `yaml:"submit_selector"` // CSS selector for the submit control
+	SuccessText    string `yaml:"success_text"`    // appears on the landing page only when logged in
+	PaywallText    string `yaml:"paywall_text"`    // appears in article HTML only while still gated
 }
 
 // Registry maps lowercase domain names to their ExtractorConfig.
@@ -90,6 +107,13 @@ func (r Registry) SaveConfig(extractorsDir, domain string, cfg ExtractorConfig) 
 	}
 	r[domain] = cfg
 	return nil
+}
+
+// AuthStatePath returns the on-disk path of a domain's persisted login session
+// (Playwright storageState jar). Kept out of the git-tracked extractors/ tree —
+// it holds live cookies. chmod 0600 is applied at write time.
+func AuthStatePath(cacheDir, domain string) string {
+	return filepath.Join(cacheDir, "auth", domain+".json")
 }
 
 // LookupByURL resolves the domain from rawURL and looks it up in the registry.

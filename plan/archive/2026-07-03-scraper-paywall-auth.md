@@ -2,7 +2,7 @@
 created: 2026-07-03
 topic: Scraper per-domain paywall authentication (storageState + login)
 excerpt: Log in once per paywalled domain, persist a Playwright storageState cookie jar, feed it into the scrape context so gated articles render full-text. CLI `sam login`, headless form login, and login/paywall success detectors.
-status: in-progress
+status: done — verified E2E: with-session 32.9k chars (no gate), without-session 9.1k chars + stale-session warning logged
 ---
 
 # Scraper paywall auth

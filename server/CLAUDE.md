@@ -157,6 +157,32 @@ Banned: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`
   - `transcript`: JSON `[{start_ms, end_ms, text}]` segments (empty array `[]` when none).
   - `markdown`: flattened transcript text (one segment per line); falls back to video description when no transcript.
 
+## Scraper paywall auth (per-domain login)
+Paywalled domains reuse the owner's subscription via a persisted browser session,
+so gated articles render full-text. Config lives in the existing per-domain seam —
+`extractors/<domain>/feed.yaml` — under an `auth:` block (`login_url`,
+`user_selector`, `pass_selector`, `submit_selector`, `success_text`,
+`paywall_text`). No new TOML section.
+- **Session jar:** Playwright `storageState` (cookies + localStorage) at
+  `<cacheDir>/auth/<domain>.json`, chmod 0600, gitignored (`**/auth/*.json`).
+  `extractor.AuthStatePath(cacheDir, domain)` resolves it.
+- **Login:** `POST /api/v1/admin/scraper/login` (loopback-only), body
+  `{domain, username, password}` → `worker.Login` → `BrowserPool.Login`: headless
+  form fill, then the **login success detector** waits for `success_text` to appear
+  (SPA-hydration-safe `Locator.WaitFor`, 20s) before saving the jar. Credentials are
+  used once and never stored — only the cookie jar persists. CLI: `sam login <domain>`
+  (`--user`/`--pass` or `SAM_LOGIN_USER`/`SAM_LOGIN_PASS`).
+- **Scrape:** `handleScrapeURL` looks up the domain's `Auth`; when present it loads
+  the jar into the fetch context (`BrowserPool.FetchHTML(url, statePath)`). The
+  **stale-session detector** warns (`re-run: sam login <domain>`) when `paywall_text`
+  is still present in the fetched HTML — session missing/expired.
+- SSO note: a domain's login may live on a parent host (444 → magyarjeti.hu); the
+  `login_url`'s `?redirect=` sends the session back so the content domain's cookie is
+  set. `storageState` captures cookies for all domains touched during login.
+- **Follow-up (not built):** credentialed Documents should route to a local LLM only
+  (Rule 5). The router guard is documented but unimplemented; single-user server →
+  no shared-cache leak today.
+
 ## YouTube ingest pipeline
 - Triggered by `scrape_url` jobs for any YouTube URL (all forms: watch, youtu.be, shorts, embed, music, m.).
 - **Canonical form**: always `https://www.youtube.com/watch?v=<id>` — canonicalization happens before DB dedup.

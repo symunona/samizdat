@@ -4,7 +4,7 @@
 
 ## Structure
 ```
-cmd/          one file per command group (root.go, setup.go, yt.go, …)
+cmd/          one file per command group (root.go, setup.go, yt.go, login.go, …)
 config/       Config struct + TOML load/save
 setup/        Step interface + Runner (step.go)
 setup/steps/  numbered step files: 01_data_dir.go, 02_llm.go, …
@@ -34,6 +34,16 @@ Commands that talk to the local server use a cached bearer token stored in confi
 - Helper `loadPort()` reads the server port from config (defined elsewhere in cmd/)
 - `enqueueScrape()` / similar per-command HTTP helpers build and fire the actual API request
 
+## login command — credential-passing pattern
+`sam login <domain>` authenticates to a paywalled domain so scrapes render full-text:
+- Credentials accepted via `--user`/`--pass` flags **or** `SAM_LOGIN_USER`/`SAM_LOGIN_PASS` env vars (env is fallback, flags take priority)
+- Credentials are validated present in the CLI before hitting the server — fail fast with a clear error
+- POSTs to `/api/v1/admin/scraper/login` (loopback admin endpoint — **not** bearer-token-authed; no pairing step used here)
+- Credentials are forwarded to the server but **never stored** by the CLI; only the server persists the resulting session cookie jar
+- Response body decoded for `ok`, `detail`, and `error` fields; non-200 falls back to `resp.Status` if `error` is empty
+- `--port` flag overrides `cfg.Server.Port` (same pattern as other commands)
+- Note: this command does **not** use the device-token pairing flow — it hits an admin endpoint directly. If pairing is added later, align with the standard auth pattern.
+
 ## Conventions
 - `CGO_ENABLED=0` always — pure Go, no cgo
 - Wrap all external errors: `fmt.Errorf("context: %w", err)` — including open src/dst/copy individually in file helpers
@@ -41,6 +51,7 @@ Commands that talk to the local server use a cached bearer token stored in confi
 - `readLine()` / `expandHome()` helpers live in steps package (not exported — copy-paste is fine for now)
 - URL validation for ingestion commands: validate before hitting the server (see `isYouTubeURL`)
 - Print user-facing "server not reachable" hint to stderr before returning the wrapped error
+- Credential env-var fallback pattern: check flag first, then `os.Getenv("SAM_LOGIN_*")` — use this for any future commands that accept secrets
 
 ## Stack
 - `github.com/spf13/cobra` — CLI dispatch

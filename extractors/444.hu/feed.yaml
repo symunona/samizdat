@@ -3,3 +3,14 @@ selector: "a"
 url_pattern: "/\\d{4}/\\d{2}/"
 base_url: "https://444.hu"
 max_urls: 100
+
+# Paywall login. 444's SSO lives on magyarjeti.hu (parent co); the ?redirect=
+# sends the session back to 444.hu so its cookie is set. Run `sam login 444.hu`
+# to mint the session jar.
+auth:
+  login_url: "https://magyarjeti.hu/bejelentkezes?redirect=https://444.hu"
+  user_selector: "input[name=username]"
+  pass_selector: "input[name=password]"
+  submit_selector: "input[name=send]"
+  success_text: "FIÓK"                         # account button label when logged in
+  paywall_text: "csak előfizetőink olvashatják" # gate CTA present only while still locked

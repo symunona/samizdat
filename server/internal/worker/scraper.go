@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	trafilatura "github.com/markusmobius/go-trafilatura"
 	"github.com/symunona/samizdat/server/internal/config"
+	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
 	"golang.org/x/net/html"
@@ -57,7 +58,22 @@ func canonicalize(raw string) (string, error) {
 	return u.String(), nil
 }
 
-func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, cacheDir string, ytdlp config.YTDLPSection) (string, error) {
+// domainAuth returns the login config for rawURL's domain, or nil when the
+// domain has no configured paywall login.
+func domainAuth(reg extractor.Registry, rawURL string) *extractor.AuthConfig {
+	cfg, ok := reg.LookupByURL(rawURL)
+	if !ok {
+		return nil
+	}
+	return cfg.Auth
+}
+
+// authStatePath resolves the persisted session jar path for rawURL's domain.
+func authStatePath(cacheDir, rawURL string) string {
+	return extractor.AuthStatePath(cacheDir, mustParseURL(rawURL).Hostname())
+}
+
+func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, reg extractor.Registry, cacheDir string, ytdlp config.YTDLPSection) (string, error) {
 	var p scrapePayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 		return "", fmt.Errorf("bad payload: %w", err)
@@ -73,14 +89,29 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		return handleYouTube(ctx, q, job, canonical, vid, cacheDir, ytdlp, p.Manual)
 	}
 
+	// Paywalled domains reuse a persisted login session (storageState jar) so the
+	// article renders full-text as the logged-in owner.
+	auth := domainAuth(reg, canonical)
+	statePath := ""
+	if auth != nil {
+		statePath = authStatePath(cacheDir, canonical)
+	}
+
 	logScraper.Printf("scraping %s", canonical)
 
-	htmlStr, err := browser.FetchHTML(canonical)
+	htmlStr, err := browser.FetchHTML(canonical, statePath)
 	if err != nil {
 		return "", fmt.Errorf("fetch: %w", err)
 	}
 	bodyBytes := []byte(htmlStr)
 	logScraper.Printf("fetched %d bytes HTML from %s", len(bodyBytes), canonical)
+
+	// Stale-session detector: an authed domain whose gate marker is still present
+	// means the saved session expired — warn the owner to re-run `sam login`.
+	if auth != nil && auth.PaywallText != "" && strings.Contains(htmlStr, auth.PaywallText) {
+		host := mustParseURL(canonical).Hostname()
+		logScraper.Warnf("paywall still gated for %s — session missing/expired, re-run: sam login %s", canonical, host)
+	}
 
 	// Lift <figure>-wrapped images into plain <p><img> so trafilatura keeps them
 	// inline at their real position (it discards <figure> but keeps <img> in <p>).

@@ -89,9 +89,16 @@ func (w *Worker) ExtractorRegistry() extractor.Registry {
 	return w.extractorReg
 }
 
-// FetchHTML fetches the fully-rendered HTML for the given URL via the browser pool.
+// FetchHTML fetches the fully-rendered HTML for the given URL via the browser
+// pool (no persisted auth session — used for preview/dry-run only).
 func (w *Worker) FetchHTML(url string) (string, error) {
-	return w.browser.FetchHTML(url)
+	return w.browser.FetchHTML(url, "")
+}
+
+// Login performs a headless form login for a paywalled domain and persists the
+// session jar to statePath. Delegates to the browser pool.
+func (w *Worker) Login(auth extractor.AuthConfig, user, pass, statePath string) (string, error) {
+	return w.browser.Login(auth, user, pass, statePath)
 }
 
 func (w *Worker) schedulePollFeeds(ctx context.Context) {
@@ -183,7 +190,7 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	)
 	switch job.Kind {
 	case "scrape_url":
-		result, err = handleScrapeURL(ctx, w.q, job, w.browser, w.cacheDir, w.ytdlp)
+		result, err = handleScrapeURL(ctx, w.q, job, w.browser, w.extractorReg, w.cacheDir, w.ytdlp)
 	case "fetch_assets":
 		result, err = handleFetchAssets(ctx, w.q, job, w.cacheDir)
 	case "poll_feed":

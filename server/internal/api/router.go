@@ -80,6 +80,9 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	adminFeedsH := &adminFeedsHandler{reg: w.ExtractorRegistry(), browser: w}
 	mux.HandleFunc("POST /api/v1/admin/feeds/preview", localhostOnly(adminFeedsH.preview))
 
+	adminScraperH := &adminScraperHandler{reg: w.ExtractorRegistry(), login: w, cacheDir: cacheDir}
+	mux.HandleFunc("POST /api/v1/admin/scraper/login", localhostOnly(adminScraperH.loginDomain))
+
 	nlH := &newsletterHandler{q: q}
 	mux.HandleFunc("POST /api/v1/inbound/email", nlH.inbound)
 	mux.HandleFunc("POST /api/v1/feeds/newsletter", bearerAuth(q, nlH.create))
