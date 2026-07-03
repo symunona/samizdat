@@ -307,3 +307,20 @@ only one of the two sounds at a time (audio pauses while the video plays, and vi
 
 ### `exportStats.ts` — auto-export vault status
 `src/exportStats.ts` exposes `fetchExportStats` and `ExportStats`, hitting `GET /api/v1/export/stats` (which also triggers a server-side re-export). Kept separate from `api.ts` like `proxyStatus.ts`. The Settings "Export Vault" card shows doc/annotation counts, last-export time, dir, and any error; its Refresh button re-fetches (forcing a fresh mirror). The card renders only when the endpoint returns (i.e. when export is configured).
+
+## Android share-sheet URL ingest (`ShareIntentBridge`)
+
+Sharing a webpage/YouTube link to Samizdat (Android `ACTION_SEND` `text/*`) queues it
+as a Document. `expo-share-intent` config plugin (in `app.json` plugins) registers the
+intent-filter at `expo prebuild` — the native tree is gitignored + regenerated every
+`just build-android`, so never hand-edit `AndroidManifest.xml`.
+
+- `src/ShareIntentBridge.tsx` — native: `useShareIntent()` → extract URL
+  (`webUrl` or first http(s) in `text`) → hold until `status==='connected'` →
+  `useScrapeQueue().startScrape(url)` (same path as the Documents "Add URL" box) →
+  `router.push('/documents')`. The existing overlay card shows scrape progress.
+- `src/ShareIntentBridge.web.tsx` — `return null` (Metro resolves `.web` so the web/e2e
+  build never imports the native module; knip-ignored).
+- Mounted in `app/_layout.tsx` inside `ScrapeQueueProvider`.
+
+Native-only — the share flow can't be exercised headless; test on a device after build.

@@ -2,7 +2,7 @@
 created: 2026-07-03
 topic: Android share-sheet URL ingest
 excerpt: Share a webpage/YouTube link from any Android app → Samizdat scrapes it as a Document.
-status: implementing
+status: done — shipped 0.3.0 / 1317139, squash-merged to main
 ---
 
 # Android share URL → ingest

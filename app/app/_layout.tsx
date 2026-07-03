@@ -11,6 +11,7 @@ import { ConnectionProvider, useConnection } from '../src/ConnectionContext'
 import { ToastProvider } from '../src/ToastContext'
 import { ConfirmProvider } from '../src/ConfirmContext'
 import { ScrapeQueueProvider } from '../src/ScrapeQueueContext'
+import ShareIntentBridge from '../src/ShareIntentBridge'
 import { useSyncEffect } from '../src/store/useSyncEffect'
 import { useDebugLogStore } from '../src/store/debugLogStore'
 import { setDebugLogTarget, logToServer } from '../src/debugLog'
@@ -111,6 +112,7 @@ export default function RootLayout() {
           <ToastProvider>
             <ConfirmProvider>
               <ScrapeQueueProvider>
+                <ShareIntentBridge />
                 <Slot />
               </ScrapeQueueProvider>
             </ConfirmProvider>
