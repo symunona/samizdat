@@ -496,6 +496,21 @@ SELECT * FROM highlights WHERE document_id = ? AND deleted_at IS NULL ORDER BY c
 -- name: ListHighlightsByPipelineRun :many
 SELECT * FROM highlights WHERE pipeline_run_id = ? AND deleted_at IS NULL ORDER BY created_at ASC;
 
+-- name: ListRecentTopicHighlightsByFeed :many
+-- Recent non-summary highlights from other documents of the same feed, for
+-- cross-issue dedup (feed the model what it already covered). Excludes the current
+-- document so a re-run doesn't dedup against its own prior output.
+SELECT h.title, h.body, h.kind
+FROM highlights h
+JOIN documents d ON d.id = h.document_id
+WHERE d.source_feed_id = ?
+  AND h.document_id != ?
+  AND h.deleted_at IS NULL
+  AND h.kind != 'summary'
+  AND h.created_at >= ?
+ORDER BY h.created_at DESC
+LIMIT ?;
+
 -- name: UpdateHighlightBody :exec
 UPDATE highlights SET body = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 

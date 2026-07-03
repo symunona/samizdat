@@ -2,7 +2,7 @@
 created: 2026-07-03
 topic: Pipeline tuning (dedup titles, per-feed skips, AI-news cross-issue dedup, James Clear titles) + per-platform clipboard
 excerpt: Six asks — kill summary double-title, skip summary on napirajz + Latent Space (highlights only), dedup AI news across issues via recent-headline context injection, James Clear titles = first sentence ≤10 words, and a per-platform copy wrapper (mobile copy is broken).
-status: planning
+status: done
 ---
 
 # Pipeline tuning + clipboard

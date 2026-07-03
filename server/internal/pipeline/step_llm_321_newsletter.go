@@ -40,7 +40,7 @@ Schema:
 {"highlights": [{"kind": string, "title": string, "body": string}]}
 
 Extract exactly these 6 highlights in order:
-- 3x kind="idea" — James Clear's 3 short ideas. Title: first 8 words of the idea. Body: full idea text verbatim.
+- 3x kind="idea" — James Clear's 3 short ideas. Title: the first sentence of the idea, at most 10 words. Body: full idea text verbatim.
 - 2x kind="quote" — the 2 quotes from others. Title: attribution (author name). Body: full quote verbatim.
 - 1x kind="question" — the 1 question. Title: "Question". Body: full question verbatim.
 
@@ -118,6 +118,14 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 		for _, h := range parsed.Highlights {
 			if h.Kind == "" || h.Title == "" {
 				continue
+			}
+			// Ideas: title = first sentence, capped at 10 words (enforced here so it
+			// can't drift even if the model over-runs). Quotes keep the attribution,
+			// the question keeps "Question".
+			if h.Kind == "idea" {
+				if t := firstSentenceTitle(h.Body, 10); t != "" {
+					h.Title = t
+				}
 			}
 			if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
 				ID:            uuid.NewString(),

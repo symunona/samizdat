@@ -22,6 +22,52 @@ type aiNewsletterConfig struct {
 	Provider string `json:"provider"`
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
+	// SkipSummary emits only the topic highlights, no bulleted "summary" highlight.
+	SkipSummary bool `json:"skip_summary"`
+	// DedupLookbackDays: feed the model the topic highlights from this feed's issues
+	// over the last N days so it doesn't re-extract stories already covered. 0 = 7.
+	DedupLookbackDays int `json:"dedup_lookback_days"`
+}
+
+// dedupItemLimit caps how many recent headlines are injected (token budget).
+const dedupItemLimit = 40
+
+// recentlyCoveredBlock builds the "ALREADY COVERED" prompt section from the topic
+// highlights of this feed's other recent documents: title + first body line each.
+// Empty string when there's nothing to dedup against.
+func recentlyCoveredBlock(ctx context.Context, q *store.Queries, doc store.Document, lookbackDays int) string {
+	if doc.SourceFeedID == nil {
+		return ""
+	}
+	if lookbackDays <= 0 {
+		lookbackDays = 7
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -lookbackDays).Format(time.RFC3339)
+	rows, err := q.ListRecentTopicHighlightsByFeed(ctx, store.ListRecentTopicHighlightsByFeedParams{
+		SourceFeedID: doc.SourceFeedID,
+		DocumentID:   doc.ID,
+		CreatedAt:    cutoff,
+		Limit:        dedupItemLimit,
+	})
+	if err != nil || len(rows) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n\nALREADY COVERED in recent issues — do NOT create a highlight for any item already on this list (match fuzzily on the name/model/tool, ignoring wording). Only extract genuinely NEW items, or an existing one that has materially new information:\n")
+	for _, r := range rows {
+		first := r.Body
+		if nl := strings.IndexByte(first, '\n'); nl >= 0 {
+			first = first[:nl]
+		}
+		first = strings.TrimSpace(strings.TrimLeft(first, "-* "))
+		line := "- [" + r.Kind + "] " + r.Title
+		if first != "" {
+			line += " — " + first
+		}
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 type aiNewsletterHighlight struct {
@@ -75,6 +121,7 @@ body is a string ARRAY, one element per WWWWH bullet where it makes sense (*Who*
 4. kind="opus_equivalent" — open-weight model that approximates Claude Opus 4.5 capability (top-tier reasoning, code, long context). Title: "⭐ [model name] ~ Opus 4.5". Body: WWWWH + benchmarks vs frontier. High bar — only include if genuinely competitive.
 
 Return [] for highlights if none qualify. Never invent highlights not in document.
+If an "ALREADY COVERED" list is provided below the schema, treat it as items from recent issues that are ALREADY captured: do NOT emit a highlight for anything on it (match fuzzily on the name/model/tool). Only emit genuinely new items, or a listed one that has materially new information.
 
 CAVEMAN COMMUNICATION GUIDELINES (apply to all output):
 - Drop all articles: a, an, the
@@ -114,7 +161,8 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 		content = content[:16000] + "\n\n[truncated]"
 	}
 
-	userMsg := aiNewsletterSystemPrompt + "\n\n# " + doc.Title + "\n\n" + content
+	seen := recentlyCoveredBlock(ctx, q, doc, c.DedupLookbackDays)
+	userMsg := aiNewsletterSystemPrompt + seen + "\n\n# " + doc.Title + "\n\n" + content
 	reply, usage, err := client.Complete(ctx, c.Model, []llm.Message{
 		{Role: "user", Content: userMsg},
 	})
@@ -153,8 +201,9 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 	now := time.Now().UTC().Format(time.RFC3339)
 	meta, _ := json.Marshal(map[string]string{"model": c.Model})
 
-	// Build summary highlight body: bullet list + optional hero image.
-	summaryBody := buildBullets(parsed.Summary)
+	// Build summary highlight body: bullet list + optional hero image. Strip a
+	// leading title echo so the card doesn't double the title.
+	summaryBody := stripLeadingTitle(buildBullets(parsed.Summary), doc.Title)
 	if assets, err2 := q.ListMediaAssetsByDocument(ctx, run.DocumentID); err2 == nil {
 		for _, a := range assets {
 			if a.Kind == "hero" {
@@ -166,18 +215,21 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 
 	// Insert the summary + per-topic highlights atomically (idempotent on retry).
 	if err := InsertTx(ctx, q, func(q *store.Queries) error {
-		if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
-			ID:            uuid.NewString(),
-			DocumentID:    run.DocumentID,
-			PipelineRunID: run.ID,
-			Kind:          "summary",
-			Title:         doc.Title,
-			Body:          summaryBody,
-			Metadata:      string(meta),
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		}); err != nil {
-			return fmt.Errorf("llm_ai_newsletter: insert summary highlight: %w", err)
+		// skip_summary pipelines (e.g. Latent Space) want topic highlights only.
+		if !c.SkipSummary && summaryBody != "" {
+			if _, err := q.InsertHighlight(ctx, store.InsertHighlightParams{
+				ID:            uuid.NewString(),
+				DocumentID:    run.DocumentID,
+				PipelineRunID: run.ID,
+				Kind:          "summary",
+				Title:         doc.Title,
+				Body:          summaryBody,
+				Metadata:      string(meta),
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			}); err != nil {
+				return fmt.Errorf("llm_ai_newsletter: insert summary highlight: %w", err)
+			}
 		}
 
 		for _, h := range parsed.Highlights {

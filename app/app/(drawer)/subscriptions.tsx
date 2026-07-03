@@ -23,6 +23,7 @@ import {
   patchSubscription,
 } from '../../src/api'
 import type { Feed, Subscription } from '../../src/api'
+import { copyToClipboard } from '../../src/clipboard'
 import { useConnection } from '../../src/ConnectionContext'
 import { useToast } from '../../src/ToastContext'
 
@@ -30,16 +31,6 @@ import { useToast } from '../../src/ToastContext'
 function newsletterEmail(feed: Feed | undefined): string | null {
   if (!feed?.config) return null
   try { return (JSON.parse(feed.config) as { email?: string }).email ?? null } catch { return null }
-}
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      await navigator.clipboard.writeText(text)
-      return true
-    }
-  } catch { /* fall through */ }
-  return false
 }
 
 function formatRelative(iso: string | null): string {
@@ -140,7 +131,7 @@ export default function SubscriptionsScreen() {
     try {
       const { email } = await createNewsletter(activeUrl, token, trimmed)
       setNlTitle('')
-      const copied = await copyText(email)
+      const copied = await copyToClipboard(email)
       toast(copied ? `Address copied: ${email}` : `Newsletter address: ${email}`, 'success')
       await load()
     } catch (e) {
@@ -151,7 +142,7 @@ export default function SubscriptionsScreen() {
   }
 
   async function handleCopyAddress(email: string) {
-    const copied = await copyText(email)
+    const copied = await copyToClipboard(email)
     toast(copied ? 'Address copied' : email, copied ? 'success' : 'info')
   }
 

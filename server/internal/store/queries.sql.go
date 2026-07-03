@@ -3163,6 +3163,63 @@ func (q *Queries) ListPipelines(ctx context.Context) ([]Pipeline, error) {
 	return items, nil
 }
 
+const listRecentTopicHighlightsByFeed = `-- name: ListRecentTopicHighlightsByFeed :many
+SELECT h.title, h.body, h.kind
+FROM highlights h
+JOIN documents d ON d.id = h.document_id
+WHERE d.source_feed_id = ?
+  AND h.document_id != ?
+  AND h.deleted_at IS NULL
+  AND h.kind != 'summary'
+  AND h.created_at >= ?
+ORDER BY h.created_at DESC
+LIMIT ?
+`
+
+type ListRecentTopicHighlightsByFeedParams struct {
+	SourceFeedID *string `json:"source_feed_id"`
+	DocumentID   string  `json:"document_id"`
+	CreatedAt    string  `json:"created_at"`
+	Limit        int64   `json:"limit"`
+}
+
+type ListRecentTopicHighlightsByFeedRow struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	Kind  string `json:"kind"`
+}
+
+// Recent non-summary highlights from other documents of the same feed, for
+// cross-issue dedup (feed the model what it already covered). Excludes the current
+// document so a re-run doesn't dedup against its own prior output.
+func (q *Queries) ListRecentTopicHighlightsByFeed(ctx context.Context, arg ListRecentTopicHighlightsByFeedParams) ([]ListRecentTopicHighlightsByFeedRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRecentTopicHighlightsByFeed,
+		arg.SourceFeedID,
+		arg.DocumentID,
+		arg.CreatedAt,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecentTopicHighlightsByFeedRow
+	for rows.Next() {
+		var i ListRecentTopicHighlightsByFeedRow
+		if err := rows.Scan(&i.Title, &i.Body, &i.Kind); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRootJobsByKindPage = `-- name: ListRootJobsByKindPage :many
 SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE parent_job_id IS NULL AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
