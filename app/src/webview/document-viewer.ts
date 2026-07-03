@@ -329,12 +329,14 @@ function getCharOffset(range: Range): number {
   return 0
 }
 
-function getContext(range: Range, n: number): { prefix: string; suffix: string } {
+// n chars of body text immediately before/after the exact span [start, start+len).
+// Aligned to the trimmed exact so prefix+exact+suffix reconstructs a contiguous
+// body substring (used as the TextQuoteSelector probe in locateExact).
+function getContext(start: number, len: number, n: number): { prefix: string; suffix: string } {
   const body = getBodyText()
-  const start = getCharOffset(range)
   return {
     prefix: body.substring(Math.max(0, start - n), start),
-    suffix: body.substring(start + range.toString().length, start + range.toString().length + n),
+    suffix: body.substring(start + len, start + len + n),
   }
 }
 
@@ -371,43 +373,66 @@ function updateGutter(): void {
   })
 }
 
-function highlightTextNode(exact: string, charIdx: number, annId: string, color: string): void {
+// Wrap the body-text span [charIdx, charIdx+length) in <mark> elements. The span
+// routinely crosses inline elements (<a>, <b>, <em>, <code>) — i.e. multiple text
+// nodes — so we wrap EACH intersecting text-node slice in its own <mark> sharing
+// the same data-ann-id (removeMark already clears all marks for an id). A single
+// range.surroundContents can only wrap a range inside one text node, which is why
+// selections across inline elements previously produced no highlight at all.
+function highlightRange(charIdx: number, length: number, annId: string, color: string): void {
+  const end = charIdx + length
+  // Collect slices first — surroundContents splits the node it wraps, so mutating
+  // during the walk would invalidate the walker's position.
+  const slices: { node: Text; start: number; end: number }[] = []
   const w = visibleWalker()
   let offset = 0
   while (w.nextNode()) {
     const node = w.currentNode as Text
     const len = node.nodeValue?.length ?? 0
-    if (offset + len > charIdx) {
-      const start = charIdx - offset
-      if (start + exact.length > len) { offset += len; continue }
-      const range = document.createRange()
-      range.setStart(node, start)
-      range.setEnd(node, start + exact.length)
-      const mark = document.createElement('mark')
-      mark.className = 'color-' + color
-      mark.dataset.annId = annId
-      range.surroundContents(mark)
-      return
+    const nodeEnd = offset + len
+    if (nodeEnd > charIdx && offset < end) {
+      slices.push({
+        node,
+        start: Math.max(0, charIdx - offset),
+        end: Math.min(len, end - offset),
+      })
     }
-    offset += len
+    offset = nodeEnd
+    if (offset >= end) break
   }
+  for (const sl of slices) {
+    if (sl.end <= sl.start) continue
+    const range = document.createRange()
+    range.setStart(sl.node, sl.start)
+    range.setEnd(sl.node, sl.end)
+    const mark = document.createElement('mark')
+    mark.className = 'color-' + color
+    mark.dataset.annId = annId
+    try { range.surroundContents(mark) } catch { /* node boundary shifted; skip slice */ }
+  }
+}
+
+// Find the body-text offset of an annotation's exact text. Prefer the stored
+// character offset; fall back to a prefix+exact+suffix probe (W3C TextQuoteSelector,
+// robust to duplicate phrases); last resort a plain search.
+function locateExact(text: string, a: AnnData): number {
+  if (a.pos_start >= 0 && a.pos_end > a.pos_start && text.substring(a.pos_start, a.pos_end) === a.exact) {
+    return a.pos_start
+  }
+  if (a.prefix || a.suffix) {
+    const probe = (a.prefix ?? '') + a.exact + (a.suffix ?? '')
+    const i = text.indexOf(probe)
+    if (i >= 0) return i + (a.prefix ?? '').length
+  }
+  return text.indexOf(a.exact)
 }
 
 function applyMark(a: AnnData): void {
+  if (!a.exact) return
   const text = getBodyText()
-  let idx = -1
-  if (a.pos_start > 0 && a.pos_end > a.pos_start) {
-    if (text.substring(a.pos_start, a.pos_end) === a.exact) idx = a.pos_start
-  }
-  if (idx < 0) idx = text.indexOf(a.exact)
+  const idx = locateExact(text, a)
   if (idx < 0) return
-  highlightTextNode(a.exact, idx, a.id, a.color || 'yellow')
-}
-
-function addMark(a: AnnData): void {
-  applyMark(a)
-  markSegAnnotation(a)
-  setTimeout(updateGutter, 50)
+  highlightRange(idx, a.exact.length, a.id, a.color || 'yellow')
 }
 
 function removeMark(id: string): void {
@@ -754,10 +779,12 @@ function handleSelection(): void {
     _pendingSel = null
     return
   }
-  const exact = sel.toString().trim()
+  const raw = sel.toString()
+  const exact = raw.trim()
+  const lead = raw.length - raw.trimStart().length // keep pos_start aligned to trimmed exact
   const range = sel.getRangeAt(0)
-  const start = getCharOffset(range)
-  const ctx = getContext(range, 64)
+  const start = getCharOffset(range) + lead
+  const ctx = getContext(start, exact.length, 64)
   // If the selection sits inside a transcript segment, anchor the note to that
   // segment's playback time (not wherever audio happens to be playing).
   const startNode = range.startContainer
@@ -937,14 +964,6 @@ function handleMessage(event: MessageEvent): void {
       if (max > 0) window.scrollTo(0, frac * max)
       break
     }
-
-    case 'addMark':
-      addMark(msg.annotation as AnnData)
-      break
-
-    case 'removeMark':
-      removeMark(msg.id as string)
-      break
 
     case 'setAnnotations':
       setAnnotations((msg.annotations as AnnData[]) ?? [])

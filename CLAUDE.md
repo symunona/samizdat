@@ -56,6 +56,14 @@ When feature is larger commit plan to main, then branch off, do smaller commits,
 ## Testing
 Craft one time E2E self-tests before starting - how you will make sure the feature works when the work is done!
 ALWAYS TEST YOURSELF VIA agent-browser!
+
+**Test the interaction, not JUST the API.** Start from the API to set up state, then
+ALWAYS drive the real interaction (agent-browser) and assert the VISIBLE result. A
+`POST` proving a row was created is NOT proof the feature works — a silent UI failure
+returns HTTP 200 and throws nothing, so "no errors" passes on broken code. Compose the
+HARD case (e.g. a selection crossing inline `<a>`/`<b>`/`<code>`, not the first easy
+word). Write an interaction test for EACH page. Green smoke ≠ working feature; the deep
+interaction net lives in `e2e/integration.js` (`just e2e-int`).
 **Never pair a fresh device for UI tests** — it spams the dev DB. Run `just robot-browser`
 (or `just test-device`) which mints/reuses the single `robot-automated-ui-tester` device via
 the idempotent `POST /api/v1/admin/test-device` endpoint and preloads its token into the

@@ -374,6 +374,12 @@ e2e: build-server
     cd e2e && node smoke.js
 
 [group('quality')]
+[doc('E2E integration test: drives real interactions (select→annotate→highlight lifecycle + per-page)')]
+e2e-int: build-server
+    @echo "Running integration test (port 8766, fresh /tmp/samizdat-test DB)..."
+    cd e2e && node integration.js
+
+[group('quality')]
 [doc('Run all tests')]
 test: test-go
 

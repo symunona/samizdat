@@ -134,6 +134,16 @@ export default function DocumentViewer() {
     sendToWebView({ type: 'setTheme', theme: { background: bg, text: fg, surface: su, border: bo, accent: ac, muted: mu } })
   }, [sendToWebView, bg, fg, su, bo, ac, mu])
 
+  // Single source of truth for marks: whenever the annotation set changes (initial
+  // async load, create, edit, delete), re-sync the whole set into the WebView. The
+  // `init` message seeds annotations on `ready`, but the fetch can resolve AFTER the
+  // WebView is up — without this the marks never render (VideoDocument has the same
+  // effect; the article viewer previously relied on per-op injects and missed the race).
+  useEffect(() => {
+    if (!isDocLoadedRef.current) return
+    sendToWebView({ type: 'setAnnotations', annotations })
+  }, [sendToWebView, annotations])
+
   // Meta panel state
   const [metaVisible, setMetaVisible] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
@@ -253,14 +263,6 @@ export default function DocumentViewer() {
   const handleHeaderLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
     headerHeightRef.current = e.nativeEvent.layout.height
   }, [])
-
-  const injectAddMark = useCallback((ann: Annotation) => {
-    sendToWebView({ type: 'addMark', annotation: ann })
-  }, [sendToWebView])
-
-  const injectRemoveMark = useCallback((annId: string) => {
-    sendToWebView({ type: 'removeMark', id: annId })
-  }, [sendToWebView])
 
   const handleLinkPress = useCallback(async (href: string) => {
     if (!activeUrl || !token) return
@@ -401,30 +403,26 @@ export default function DocumentViewer() {
       if (annMode === 'create') {
         const sel = pendingSelection ?? { exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 }
         const ann = await createAnnotation(activeUrl, token, id, { ...sel, ...data })
-        setAnnotations(prev => [...prev, ann])
-        if (sel.exact) injectAddMark(ann)
+        setAnnotations(prev => [...prev, ann]) // marks re-sync via the annotations effect
       } else if (annMode === 'edit' && existingAnnotation) {
         const ann = await updateAnnotation(activeUrl, token, existingAnnotation.id, data)
         setAnnotations(prev => prev.map(a => a.id === ann.id ? ann : a))
-        injectRemoveMark(ann.id)
-        injectAddMark(ann)
       }
     } catch (e) {
       log.error('annotation save failed', e)
     }
-  }, [annMode, pendingSelection, existingAnnotation, activeUrl, token, id, injectAddMark, injectRemoveMark])
+  }, [annMode, pendingSelection, existingAnnotation, activeUrl, token, id])
 
   const handleAnnDelete = useCallback(async () => {
     if (!activeUrl || !token || !existingAnnotation) return
     setAnnVisible(false)
     try {
       await deleteAnnotation(activeUrl, token, existingAnnotation.id)
-      setAnnotations(prev => prev.filter(a => a.id !== existingAnnotation.id))
-      injectRemoveMark(existingAnnotation.id)
+      setAnnotations(prev => prev.filter(a => a.id !== existingAnnotation.id)) // effect removes the mark
     } catch (e) {
       log.error('annotation delete failed', e)
     }
-  }, [existingAnnotation, activeUrl, token, injectRemoveMark])
+  }, [existingAnnotation, activeUrl, token])
 
   const handleQueuePipelines = useCallback(async () => {
     if (!activeUrl || !token || queueingPipelines) return
