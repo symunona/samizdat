@@ -88,10 +88,17 @@ Always run `just build` before you call a job done.
 ## Versioning (app)
 `just build-android` **auto-bumps the version every build** — default **PATCH**
 (`0.2.2`→`0.2.3`). Pass `just build-android minor` (feature: `0.2.x`→`0.3.0`) or
-`just build-android major` (`0.x`→`1.0.0`) when the release warrants it. `versionCode`
-always increments by 1 (Android requires strictly-increasing for the in-app updater).
-Bump-only (no build): `just bump [patch|minor|major]`. Logic in `tools/bump-version.mjs`;
-it runs *before* prebuild so the native manifest is stamped. Semver = `MAJOR.MINOR.PATCH`.
+`just build-android major` (`0.x`→`1.0.0`) when the release warrants it.
+`versionCode` is **monotonic by wall-clock**: `max(oldCode+1, minutesSince2024-01-01)`,
+NOT a plain +1. Plain +1 reads the git-tracked `app.json`, which regresses when a
+bump isn't committed (or across sessions/machines) → a rebuild reuses the SAME code →
+Android refuses the install-over and the updater (`served_code > installed_code`) never
+offers it ("new build not picked up"). Wall-clock minutes always advance, so every
+build gets a unique strictly-greater revision. `bump-version.mjs` also stamps
+`expo.extra.buildEpoch` (ms); the checker (`isUpdateAvailable` in `src/appVersion.ts`,
+used by Settings) offers a rebuild even at an equal code via built_at. Bump-only (no
+build): `just bump [patch|minor|major]`. Runs *before* prebuild so the native manifest
+is stamped. Semver = `MAJOR.MINOR.PATCH`.
 
 ## Design source of truth
 Detailed research + decisions live in the planning vault (outside this repo):

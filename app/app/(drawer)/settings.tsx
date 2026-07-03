@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, mintExtensionToken, fetchLatestAndroidBuild, androidApkUrl, ApiError } from '../../src/api'
 import type { DeviceInfo, AppSettings, AndroidBuild } from '../../src/api'
-import { APP_VERSION, APP_VERSION_CODE } from '../../src/appVersion'
+import { APP_VERSION, APP_VERSION_CODE, isUpdateAvailable } from '../../src/appVersion'
 import { fetchYtdlpProxyStatus } from '../../src/proxyStatus'
 import type { YtdlpProxyStatus } from '../../src/proxyStatus'
 import { fetchExportStats } from '../../src/exportStats'
@@ -165,7 +165,7 @@ export default function SettingsScreen() {
     try {
       const b = await fetchLatestAndroidBuild(activeUrl, token)
       setLatestBuild(b)
-      if (b && b.version_code > APP_VERSION_CODE) toast(`Update available — v${b.version}`, 'info')
+      if (b && isUpdateAvailable(b)) toast(`Update available — v${b.version} (build ${b.version_code})`, 'info')
       else toast('Up to date', 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Version check failed', 'error')
@@ -424,9 +424,9 @@ export default function SettingsScreen() {
           <Text style={s.infoLabel}>Installed{'  '}<Text style={{ color: theme.colors.muted, fontSize: 12 }}>(tap to check)</Text></Text>
           {checkingVersion
             ? <ActivityIndicator size="small" color={theme.colors.accent} />
-            : <Text style={s.infoValue}>v{APP_VERSION}</Text>}
+            : <Text style={s.infoValue}>v{APP_VERSION} <Text style={{ color: theme.colors.muted, fontSize: 12 }}>(build {APP_VERSION_CODE})</Text></Text>}
         </Pressable>
-        {latestBuild && latestBuild.version_code > APP_VERSION_CODE ? (
+        {latestBuild && isUpdateAvailable(latestBuild) ? (
           <>
             <View style={s.statusRow}>
               <View style={[s.dot, { backgroundColor: theme.colors.accent }]} />

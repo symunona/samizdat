@@ -16,3 +16,19 @@ export const APP_VERSION: string =
 export const APP_VERSION_CODE: number = Application.nativeBuildVersion
   ? Number.parseInt(Application.nativeBuildVersion, 10)
   : appJson.expo.android.versionCode
+
+// When this bundle was built (ms), stamped into app.json by tools/bump-version.mjs.
+// Bundled into the JS at build time, so it travels inside the installed APK.
+export const APP_BUILD_EPOCH: number = (appJson.expo as { extra?: { buildEpoch?: number } }).extra?.buildEpoch ?? 0
+
+// Single source of truth for "is the hosted APK newer than what's installed?".
+// versionCode is monotonic (see bump-version.mjs), so a higher code always means a
+// newer build. The built_at fallback offers a rebuild even at an equal code — a
+// belt-and-braces guard so a fresh build is never silently ignored.
+export function isUpdateAvailable(build: { version_code: number; built_at?: string }): boolean {
+  if (build.version_code > APP_VERSION_CODE) return true
+  if (build.version_code === APP_VERSION_CODE && build.built_at) {
+    return Date.parse(build.built_at) > APP_BUILD_EPOCH
+  }
+  return false
+}
