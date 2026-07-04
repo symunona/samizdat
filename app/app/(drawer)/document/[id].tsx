@@ -17,6 +17,7 @@ import {
 import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useUnistyles, UnistylesRuntime } from 'react-native-unistyles'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import WebView from 'react-native-webview'
 import type { WebViewMessageEvent } from 'react-native-webview'
 import AsyncStorage from '@react-native-async-storage/async-storage'
@@ -66,6 +67,10 @@ export default function DocumentViewer() {
   const router = useRouter()
   const { theme, rt } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
+  // Header floats absolute at top:0, so RN SafeAreaView (a no-op on Android
+  // anyway) can't push it clear of the status bar/notch — pad it (and the
+  // content offset) by the top inset explicitly. See guard: `just check-safe-area`.
+  const insets = useSafeAreaInsets()
   const isDark = rt.themeName === 'dark'
 
   const [doc, setDoc] = useState<Document | null>(null)
@@ -461,7 +466,7 @@ export default function DocumentViewer() {
 
   return (
     <SafeAreaView style={s.screen}>
-      <Animated.View style={[s.header, { transform: [{ translateY: headerAnim }] }]} onLayout={handleHeaderLayout}>
+      <Animated.View style={[s.header, { paddingTop: theme.spacing.sm + insets.top, transform: [{ translateY: headerAnim }] }]} onLayout={handleHeaderLayout}>
         <Pressable onPress={() => router.navigate((from as string) ?? '/documents')} style={s.backBtn} hitSlop={12}>
           <Text style={s.backText}>←</Text>
         </Pressable>
@@ -486,7 +491,7 @@ export default function DocumentViewer() {
           <Pressable onPress={load} style={s.retryBtn}><Text style={s.retryText}>Retry</Text></Pressable>
         </View>
       ) : htmlContent ? (
-        <View style={s.contentArea}>
+        <View style={[s.contentArea, { marginTop: 56 + insets.top }]}>
           <PendingPipelineBanner docId={id} />
           {Platform.OS === 'web' ? (
             <View style={s.webView}>

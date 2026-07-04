@@ -390,7 +390,7 @@ test-go:
 
 [group('quality')]
 [doc('Lint all code (go vet + golangci-lint + eslint)')]
-lint: lint-go lint-app check-native-log lint-parity
+lint: lint-go lint-app check-native-log check-safe-area lint-parity
 
 [group('quality')]
 [doc('Check paired-renderer files (Highlight card: RN feed vs WebView DOM) stay in sync vs main')]
@@ -419,6 +419,23 @@ check-native-log:
       echo "$hits"
       exit 1
     fi
+
+[group('quality')]
+[doc('Fail if a mobile document-viewer header drops the top safe-area inset (status bar/notch would cover the back button)')]
+check-safe-area:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Both viewers render an absolute top:0 header — RN SafeAreaView is a no-op on
+    # Android, so each MUST pad by useSafeAreaInsets().top or the notification bar
+    # covers the back button. A refactor that drops it regresses silently; guard it.
+    fail=0
+    for f in "app/app/(drawer)/document/[id].tsx" "app/src/VideoDocument.tsx"; do
+      if ! grep -q 'insets\.top' "$f"; then
+        echo "ERROR: $f header lost its top safe-area inset (insets.top) — the status bar will cover the back button on mobile."
+        fail=1
+      fi
+    done
+    [ "$fail" -eq 0 ] || exit 1
 
 # ── Landing ───────────────────────────────────────────────────────────────────
 
