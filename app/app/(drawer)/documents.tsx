@@ -16,6 +16,7 @@ import { submitScrapeJob, deleteDocument, fetchPipelineDocuments, fetchJobs } fr
 import type { Document, Job } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
 import { useDocuments, useSyncStatus } from '../../src/store/hooks'
+import { useShareStore } from '../../src/store/shareStore'
 import { forceSync, requestSync } from '../../src/store/syncEngine'
 
 function jobUrl(job: Job): string {
@@ -127,6 +128,22 @@ export default function DocumentsScreen() {
   const [urlInput, setUrlInput] = useState('')
   const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'error'>('idle')
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const urlInputRef = useRef<TextInput>(null)
+
+  // A shared link (Android share sheet → ShareIntentBridge) arrives via the
+  // one-shot share store: fill the Add-URL box and focus it so the user just
+  // taps Add. `consume` clears the store, so a normal later visit won't re-fill
+  // and a fresh share re-fires.
+  const pendingShareUrl = useShareStore((st) => st.pendingUrl)
+  const consumeShare = useShareStore((st) => st.consume)
+  useEffect(() => {
+    if (!pendingShareUrl) return
+    const url = consumeShare()
+    if (!url) return
+    setUrlInput(url)
+    const t = setTimeout(() => urlInputRef.current?.focus(), 120)
+    return () => clearTimeout(t)
+  }, [pendingShareUrl, consumeShare])
 
   // Queued / running scrape jobs, shown as pinned rows above the document list.
   const [pendingJobs, setPendingJobs] = useState<Job[]>([])
@@ -287,6 +304,7 @@ export default function DocumentsScreen() {
       {/* URL submit row */}
       <View style={s.addRow}>
         <TextInput
+          ref={urlInputRef}
           style={s.urlInputField}
           placeholder="https://example.com/article"
           placeholderTextColor={theme.colors.placeholder}

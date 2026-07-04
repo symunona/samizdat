@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
 import { useRouter } from 'expo-router'
 import { useShareIntent } from 'expo-share-intent'
 import type { ShareIntent } from 'expo-share-intent'
-import { useConnection } from './ConnectionContext'
-import { useScrapeQueue } from './ScrapeQueueContext'
 import { useToast } from './ToastContext'
+import { useShareStore } from './store/shareStore'
 
 const URL_RE = /https?:\/\/[^\s]+/i
 
@@ -17,20 +16,14 @@ function extractUrl(si: ShareIntent): string | null {
   return m ? m[0] : null
 }
 
-// Bridges Android's ACTION_SEND share sheet into the scrape queue: a URL shared
-// from any app is queued as a Document (same path as the Documents "Add URL" box)
-// and the app navigates to Documents, where the in-flight scrape card shows
-// progress → tap-to-open. Native-only; the web build resolves ShareIntentBridge.web.
+// Bridges Android's ACTION_SEND share sheet into the Documents screen: a URL
+// shared from any app opens Documents with the "Add URL" field prefilled, so the
+// user confirms (presses Add) and watches it land in the scrape queue. Native-only;
+// the web build resolves ShareIntentBridge.web.
 export default function ShareIntentBridge() {
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent()
-  const { status } = useConnection()
-  const { startScrape } = useScrapeQueue()
   const { toast } = useToast()
   const router = useRouter()
-
-  // URL captured from a share intent, held until the connection is up.
-  const [pendingUrl, setPendingUrl] = useState<string | null>(null)
-  const navigatedRef = useRef(false)
 
   // Capture the shared URL the moment it arrives, then consume the intent so it
   // can't re-fire on the next foreground.
@@ -42,22 +35,12 @@ export default function ShareIntentBridge() {
       toast('No link found in shared content', 'error')
       return
     }
-    navigatedRef.current = false
-    setPendingUrl(url)
-    toast('Adding shared link…')
-  }, [hasShareIntent, shareIntent, resetShareIntent, toast])
-
-  // Fire the scrape once connected (a cold-start share can land before the
-  // connection probe finishes), then land the user on Documents.
-  useEffect(() => {
-    if (!pendingUrl || status !== 'connected') return
-    startScrape(pendingUrl)
-    setPendingUrl(null)
-    if (!navigatedRef.current) {
-      navigatedRef.current = true
-      router.push('/documents')
-    }
-  }, [pendingUrl, status, startScrape, router])
+    // Hand the URL to the Documents screen via a one-shot store, then navigate.
+    // The screen prefills + focuses the "Add URL" box; the user submits. No
+    // connection needed to prefill (a cold-start share can beat the probe).
+    useShareStore.getState().setPendingUrl(url)
+    router.push('/documents')
+  }, [hasShareIntent, shareIntent, resetShareIntent, toast, router])
 
   return null
 }

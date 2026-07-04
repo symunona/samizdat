@@ -310,15 +310,22 @@ only one of the two sounds at a time (audio pauses while the video plays, and vi
 
 ## Android share-sheet URL ingest (`ShareIntentBridge`)
 
-Sharing a webpage/YouTube link to Samizdat (Android `ACTION_SEND` `text/*`) queues it
-as a Document. `expo-share-intent` config plugin (in `app.json` plugins) registers the
-intent-filter at `expo prebuild` — the native tree is gitignored + regenerated every
-`just build-android`, so never hand-edit `AndroidManifest.xml`.
+Sharing a webpage/YouTube link to Samizdat (Android `ACTION_SEND` `text/*`) opens the
+Documents screen with the "Add URL" box **prefilled** — the user confirms (taps Add)
+and watches it land in the scrape queue. Prefill (not auto-submit) is deliberate: it
+gives a confirm step and works before the connection probe finishes. `expo-share-intent`
+config plugin (in `app.json` plugins) registers the intent-filter at `expo prebuild` —
+the native tree is gitignored + regenerated every `just build-android`, so never
+hand-edit `AndroidManifest.xml`.
 
-- `src/ShareIntentBridge.tsx` — native: `useShareIntent()` → extract URL
-  (`webUrl` or first http(s) in `text`) → hold until `status==='connected'` →
-  `useScrapeQueue().startScrape(url)` (same path as the Documents "Add URL" box) →
-  `router.push('/documents')`. The existing overlay card shows scrape progress.
+- `src/ShareIntentBridge.tsx` — native: `useShareIntent()` → extract URL (`webUrl` or
+  first http(s) in `text`) → `useShareStore.getState().setPendingUrl(url)` → `router.push('/documents')`.
+- `src/store/shareStore.ts` — one-shot Zustand channel (`pendingUrl` + `consume()`).
+  **Do NOT** pass the URL as an expo-router param: `router.setParams` in the consuming
+  effect re-render-loops the screen to a white crash. A store carries it cleanly, leaves
+  no stale param in the URL, and re-fires on a fresh share.
+- `app/(drawer)/documents.tsx` — reads `pendingUrl`, `consume()`s it (clears the store),
+  fills + focuses the Add-URL field.
 - `src/ShareIntentBridge.web.tsx` — `return null` (Metro resolves `.web` so the web/e2e
   build never imports the native module; knip-ignored).
 - Mounted in `app/_layout.tsx` inside `ScrapeQueueProvider`.
