@@ -21,6 +21,12 @@ export const APP_VERSION_CODE: number = Application.nativeBuildVersion
 // Bundled into the JS at build time, so it travels inside the installed APK.
 export const APP_BUILD_EPOCH: number = (appJson.expo as { extra?: { buildEpoch?: number } }).extra?.buildEpoch ?? 0
 
+// Git commit baked into THIS web bundle at build time (justfile build-app-web sets
+// EXPO_PUBLIC_BUILD_COMMIT to the same short-SHA the server stamps into /health).
+// The web build has no APK to update; instead we compare this to the live server's
+// /health commit — a mismatch means the tab is running a stale bundle → prompt reload.
+export const WEB_BUILD_COMMIT: string = process.env.EXPO_PUBLIC_BUILD_COMMIT ?? ''
+
 // Single source of truth for "is the hosted APK newer than what's installed?".
 // versionCode is monotonic (see bump-version.mjs), so a higher code always means a
 // newer build. The built_at fallback offers a rebuild even at an equal code — a

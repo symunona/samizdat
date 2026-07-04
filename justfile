@@ -237,7 +237,14 @@ build-cli:
 [group('build')]
 [doc('Export the Expo web build (served by the server)')]
 build-app-web:
-    cd app && pnpm expo export --platform web --output-dir dist --clear
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Bake the running commit into the bundle (same short-SHA the server stamps into
+    # /health) so an open web tab can detect a redeploy and prompt a reload.
+    commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+    [ -z "$(git status --porcelain 2>/dev/null)" ] || commit="${commit}-dirty"
+    cd "{{justfile_directory()}}/app"
+    EXPO_PUBLIC_BUILD_COMMIT="${commit}" pnpm expo export --platform web --output-dir dist --clear
 
 [group('build')]
 [doc('Package the clipper extension (dist/unpacked + dist/sam-chrome.zip)')]

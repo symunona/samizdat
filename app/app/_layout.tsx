@@ -12,6 +12,7 @@ import { ToastProvider } from '../src/ToastContext'
 import { ConfirmProvider } from '../src/ConfirmContext'
 import { ScrapeQueueProvider } from '../src/ScrapeQueueContext'
 import ShareIntentBridge from '../src/ShareIntentBridge'
+import WebReloadBanner from '../src/WebReloadBanner'
 import { useSyncEffect } from '../src/store/useSyncEffect'
 import { useDebugLogStore } from '../src/store/debugLogStore'
 import { setDebugLogTarget, logToServer } from '../src/debugLog'
@@ -114,6 +115,7 @@ export default function RootLayout() {
               <ScrapeQueueProvider>
                 <ShareIntentBridge />
                 <Slot />
+                <WebReloadBanner />
               </ScrapeQueueProvider>
             </ConfirmProvider>
           </ToastProvider>

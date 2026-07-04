@@ -415,7 +415,7 @@ export default function SettingsScreen() {
             ? <ActivityIndicator size="small" color={theme.colors.accent} />
             : <Text style={s.infoValue}>v{APP_VERSION} <Text style={{ color: theme.colors.muted, fontSize: 12 }}>(build {APP_VERSION_CODE})</Text></Text>}
         </Pressable>
-        {latestBuild && isUpdateAvailable(latestBuild) ? (
+        {latestBuild && !isWeb && isUpdateAvailable(latestBuild) ? (
           <>
             <View style={s.statusRow}>
               <View style={[s.dot, { backgroundColor: theme.colors.accent }]} />

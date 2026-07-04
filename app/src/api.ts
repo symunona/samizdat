@@ -5,7 +5,7 @@ export type PairResult = {
   device_id: string
   server_urls?: string[]  // ordered: localhost → LAN → Tailscale
 }
-export type Health = { status: string; version?: string; time?: string }
+export type Health = { status: string; version?: string; time?: string; commit?: string; built_at?: string }
 export type Me = { device_id: string; name?: string; server_version?: string }
 
 export class ApiError extends Error {
