@@ -1589,7 +1589,7 @@ func (q *Queries) InsertTag(ctx context.Context, arg InsertTagParams) (Tag, erro
 }
 
 const listAnnotationTagsSince = `-- name: ListAnnotationTagsSince :many
-SELECT id, annotation_id, tag_id, created_at, updated_at, rev, deleted_at FROM annotation_tags WHERE updated_at > ? ORDER BY updated_at ASC
+SELECT id, annotation_id, tag_id, created_at, updated_at, rev, deleted_at FROM annotation_tags WHERE updated_at >= ? ORDER BY updated_at ASC
 `
 
 func (q *Queries) ListAnnotationTagsSince(ctx context.Context, updatedAt string) ([]AnnotationTag, error) {
@@ -1713,7 +1713,7 @@ func (q *Queries) ListAnnotationsByTag(ctx context.Context, tagID string) ([]Ann
 }
 
 const listAnnotationsSince = `-- name: ListAnnotationsSince :many
-SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE updated_at > ? ORDER BY updated_at ASC
+SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE updated_at >= ? ORDER BY updated_at ASC
 `
 
 func (q *Queries) ListAnnotationsSince(ctx context.Context, updatedAt string) ([]Annotation, error) {
@@ -1833,7 +1833,7 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 }
 
 const listDocumentTagsSince = `-- name: ListDocumentTagsSince :many
-SELECT id, document_id, tag_id, created_at, updated_at, rev, deleted_at FROM document_tags WHERE updated_at > ? ORDER BY updated_at ASC
+SELECT id, document_id, tag_id, created_at, updated_at, rev, deleted_at FROM document_tags WHERE updated_at >= ? ORDER BY updated_at ASC
 `
 
 func (q *Queries) ListDocumentTagsSince(ctx context.Context, updatedAt string) ([]DocumentTag, error) {
@@ -2070,10 +2070,15 @@ func (q *Queries) ListDocumentsByTag(ctx context.Context, tagID string) ([]Docum
 
 const listDocumentsSince = `-- name: ListDocumentsSince :many
 
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at FROM documents WHERE updated_at > ? ORDER BY updated_at ASC
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at FROM documents WHERE updated_at >= ? ORDER BY updated_at ASC
 `
 
 // Differential sync queries (returns all rows changed after since, including tombstones)
+// NOTE: `>=` (not `>`) is intentional. updated_at is RFC3339 second-resolution, and
+// the sync cursor is the previous pull's server_time. With strict `>`, a row written
+// in the same wall-clock second as a prior sync is skipped forever (the cursor only
+// advances). `>=` re-includes the boundary second; the client upserts by id, so the
+// tiny re-send is idempotent. (The export path solves the same skew via overlap(-1s).)
 func (q *Queries) ListDocumentsSince(ctx context.Context, updatedAt string) ([]Document, error) {
 	rows, err := q.db.QueryContext(ctx, listDocumentsSince, updatedAt)
 	if err != nil {
@@ -2342,7 +2347,7 @@ func (q *Queries) ListFeeds(ctx context.Context) ([]Feed, error) {
 }
 
 const listHighlightTagsSince = `-- name: ListHighlightTagsSince :many
-SELECT id, highlight_id, tag_id, created_at, updated_at, rev, deleted_at FROM highlight_tags WHERE updated_at > ? ORDER BY updated_at ASC
+SELECT id, highlight_id, tag_id, created_at, updated_at, rev, deleted_at FROM highlight_tags WHERE updated_at >= ? ORDER BY updated_at ASC
 `
 
 func (q *Queries) ListHighlightTagsSince(ctx context.Context, updatedAt string) ([]HighlightTag, error) {
@@ -2544,7 +2549,7 @@ func (q *Queries) ListHighlightsByTag(ctx context.Context, tagID string) ([]High
 }
 
 const listHighlightsSince = `-- name: ListHighlightsSince :many
-SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, archived_at, created_at, updated_at, rev, deleted_at FROM highlights WHERE updated_at > ? ORDER BY updated_at ASC
+SELECT id, document_id, pipeline_run_id, kind, title, body, metadata, pinned, archived_at, created_at, updated_at, rev, deleted_at FROM highlights WHERE updated_at >= ? ORDER BY updated_at ASC
 `
 
 func (q *Queries) ListHighlightsSince(ctx context.Context, updatedAt string) ([]Highlight, error) {
@@ -3619,7 +3624,7 @@ func (q *Queries) ListTagsByHighlight(ctx context.Context, highlightID string) (
 }
 
 const listTagsSince = `-- name: ListTagsSince :many
-SELECT id, name, color, created_at, updated_at, rev, deleted_at FROM tags WHERE updated_at > ? ORDER BY updated_at ASC
+SELECT id, name, color, created_at, updated_at, rev, deleted_at FROM tags WHERE updated_at >= ? ORDER BY updated_at ASC
 `
 
 func (q *Queries) ListTagsSince(ctx context.Context, updatedAt string) ([]Tag, error) {

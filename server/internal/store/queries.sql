@@ -549,27 +549,32 @@ WHERE ht.tag_id = ? AND ht.deleted_at IS NULL AND h.deleted_at IS NULL
 ORDER BY h.created_at DESC;
 
 -- Differential sync queries (returns all rows changed after since, including tombstones)
+-- NOTE: `>=` (not `>`) is intentional. updated_at is RFC3339 second-resolution, and
+-- the sync cursor is the previous pull's server_time. With strict `>`, a row written
+-- in the same wall-clock second as a prior sync is skipped forever (the cursor only
+-- advances). `>=` re-includes the boundary second; the client upserts by id, so the
+-- tiny re-send is idempotent. (The export path solves the same skew via overlap(-1s).)
 
 -- name: ListDocumentsSince :many
-SELECT * FROM documents WHERE updated_at > ? ORDER BY updated_at ASC;
+SELECT * FROM documents WHERE updated_at >= ? ORDER BY updated_at ASC;
 
 -- name: ListHighlightsSince :many
-SELECT * FROM highlights WHERE updated_at > ? ORDER BY updated_at ASC;
+SELECT * FROM highlights WHERE updated_at >= ? ORDER BY updated_at ASC;
 
 -- name: ListAnnotationsSince :many
-SELECT * FROM annotations WHERE updated_at > ? ORDER BY updated_at ASC;
+SELECT * FROM annotations WHERE updated_at >= ? ORDER BY updated_at ASC;
 
 -- name: ListTagsSince :many
-SELECT * FROM tags WHERE updated_at > ? ORDER BY updated_at ASC;
+SELECT * FROM tags WHERE updated_at >= ? ORDER BY updated_at ASC;
 
 -- name: ListDocumentTagsSince :many
-SELECT * FROM document_tags WHERE updated_at > ? ORDER BY updated_at ASC;
+SELECT * FROM document_tags WHERE updated_at >= ? ORDER BY updated_at ASC;
 
 -- name: ListAnnotationTagsSince :many
-SELECT * FROM annotation_tags WHERE updated_at > ? ORDER BY updated_at ASC;
+SELECT * FROM annotation_tags WHERE updated_at >= ? ORDER BY updated_at ASC;
 
 -- name: ListHighlightTagsSince :many
-SELECT * FROM highlight_tags WHERE updated_at > ? ORDER BY updated_at ASC;
+SELECT * FROM highlight_tags WHERE updated_at >= ? ORDER BY updated_at ASC;
 
 -- Jobs paging (offset-based for the admin UI)
 
