@@ -5,6 +5,7 @@ import { Link, useNavigation, usePathname, type Href } from 'expo-router'
 import { UnistylesRuntime, useUnistyles } from 'react-native-unistyles'
 import { saveTheme } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
+import { useUpdateAvailable } from '../../src/useUpdate'
 
 type NavRow =
   | { kind: 'header'; label: string }
@@ -25,9 +26,7 @@ const NAV_BLOCKS: NavRow[][] = [
     { kind: 'link', name: 'pipelines', label: 'Pipelines', href: '/pipelines' as Href },
     { kind: 'link', name: 'jobs', label: 'Jobs', href: '/jobs' as Href },
   ],
-  [
-    { kind: 'link', name: 'settings', label: 'Settings', href: '/settings' as Href },
-  ],
+  // Settings lives in the pinned footer (below), not in the scrolling nav.
 ]
 
 function hostname(url: string): string {
@@ -39,6 +38,7 @@ function DrawerContent(_props: any) {
   const pathname = usePathname()
   const { status, activeUrl } = useConnection()
   const { theme, rt } = useUnistyles()
+  const { available: updateAvailable } = useUpdateAvailable()
 
   async function handleThemeToggle() {
     const next = rt.themeName === 'dark' ? 'light' : 'dark'
@@ -95,8 +95,22 @@ function DrawerContent(_props: any) {
           </View>
         ))}
       </ScrollView>
-      <View style={{ borderTopWidth: 1, borderTopColor: theme.colors.border, padding: 16 }}>
-        <Pressable onPress={handleThemeToggle} style={{ paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <View style={{ borderTopWidth: 1, borderTopColor: theme.colors.border, padding: 16, gap: 2 }}>
+        {updateAvailable && (
+          <Link href={'/settings' as Href} asChild>
+            <Pressable style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, backgroundColor: theme.colors.accent + '22', borderWidth: 1, borderColor: theme.colors.accent, marginBottom: 4 }}>
+              <Ionicons name="arrow-up-circle" size={18} color={theme.colors.accent} />
+              <Text style={{ color: theme.colors.accent, fontSize: 14, fontWeight: '700' }}>Update Available</Text>
+            </Pressable>
+          </Link>
+        )}
+        <Link href={'/settings' as Href} asChild>
+          <Pressable style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, backgroundColor: pathname === '/settings' ? theme.colors.background : 'transparent' }}>
+            <Ionicons name="settings-outline" size={18} color={pathname === '/settings' ? theme.colors.accent : theme.colors.muted} />
+            <Text style={{ color: pathname === '/settings' ? theme.colors.accent : theme.colors.muted, fontSize: 15, fontWeight: pathname === '/settings' ? '700' : '500' }}>Settings</Text>
+          </Pressable>
+        </Link>
+        <Pressable onPress={handleThemeToggle} style={{ paddingVertical: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Text style={{ fontSize: 16 }}>{isDark ? '☀' : '☾'}</Text>
           <Text style={{ color: theme.colors.muted, fontSize: 14 }}>{isDark ? 'Light mode' : 'Dark mode'}</Text>
         </Pressable>
@@ -109,6 +123,7 @@ function DrawerToggleIcon() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const navigation = useNavigation() as any
   const { theme } = useUnistyles()
+  const { available: updateAvailable } = useUpdateAvailable()
   return (
     <Pressable
       onPress={() => navigation.openDrawer?.()}
@@ -116,6 +131,9 @@ function DrawerToggleIcon() {
       hitSlop={8}
     >
       <Text style={{ color: theme.colors.text, fontSize: 20, lineHeight: 24 }}>☰</Text>
+      {updateAvailable && (
+        <View style={{ position: 'absolute', top: 6, right: 12, width: 9, height: 9, borderRadius: 5, backgroundColor: theme.colors.accent, borderWidth: 1, borderColor: theme.colors.surface }} />
+      )}
     </Pressable>
   )
 }

@@ -3,9 +3,10 @@ import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, mintExtensionToken, fetchLatestAndroidBuild, androidApkUrl, ApiError } from '../../src/api'
-import type { DeviceInfo, AppSettings, AndroidBuild } from '../../src/api'
+import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, mintExtensionToken, androidApkUrl, ApiError } from '../../src/api'
+import type { DeviceInfo, AppSettings } from '../../src/api'
 import { APP_VERSION, APP_VERSION_CODE, isUpdateAvailable } from '../../src/appVersion'
+import { useLatestBuild } from '../../src/useUpdate'
 import { fetchYtdlpProxyStatus } from '../../src/proxyStatus'
 import type { YtdlpProxyStatus } from '../../src/proxyStatus'
 import { fetchExportStats } from '../../src/exportStats'
@@ -79,8 +80,8 @@ export default function SettingsScreen() {
   const isWeb = Platform.OS === 'web'
   const [extStatus, setExtStatus] = useState<'not_installed' | 'unpaired' | 'connected'>('not_installed')
   const [extConnecting, setExtConnecting] = useState(false)
-  const [latestBuild, setLatestBuild] = useState<AndroidBuild | null>(null)
-  const [checkingVersion, setCheckingVersion] = useState(false)
+  // Shared with the drawer badge (one React Query, no double-fetch).
+  const { data: latestBuild, refetch: refetchBuild, isFetching: checkingVersion } = useLatestBuild()
 
   const handleUnauthorized = useCallback(async () => {
     await logout()
@@ -150,39 +151,27 @@ export default function SettingsScreen() {
     } catch { /* best-effort; keep prior stats */ }
   }, [activeUrl, token])
 
-  const loadLatestBuild = useCallback(async () => {
-    if (!activeUrl || !token) return
-    try {
-      setLatestBuild(await fetchLatestAndroidBuild(activeUrl, token))
-    } catch { /* best-effort; no APK hosted or offline */ }
-  }, [activeUrl, token])
-
   // Tap the installed-version row to check for a newer hosted build on demand.
   const handleCheckVersion = useCallback(async () => {
     if (checkingVersion) return
     if (!activeUrl || !token) { toast('Connect to check for updates', 'info'); return }
-    setCheckingVersion(true)
     try {
-      const b = await fetchLatestAndroidBuild(activeUrl, token)
-      setLatestBuild(b)
+      const { data: b } = await refetchBuild()
       if (b && isUpdateAvailable(b)) toast(`Update available — v${b.version} (build ${b.version_code})`, 'info')
       else toast('Up to date', 'success')
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Version check failed', 'error')
-    } finally {
-      setCheckingVersion(false)
     }
-  }, [activeUrl, token, checkingVersion, toast])
+  }, [activeUrl, token, checkingVersion, toast, refetchBuild])
 
   useEffect(() => {
     if (status === 'connected') {
       loadDevices()
       loadSettings()
-      loadLatestBuild()
       loadExportStats()
       loadUrlLastUsedMap().then(setUrlLastUsed)
     }
-  }, [status, loadDevices, loadSettings, loadLatestBuild, loadExportStats])
+  }, [status, loadDevices, loadSettings, loadExportStats])
 
   // Extension install/pair status comes from a data-attr the content script
   // injects on this page (web only). Poll it and react to the pair ack.
@@ -431,7 +420,7 @@ export default function SettingsScreen() {
             <View style={s.statusRow}>
               <View style={[s.dot, { backgroundColor: theme.colors.accent }]} />
               <Text style={[s.statusText, { fontSize: 14, color: theme.colors.accent }]}>
-                Update available — v{latestBuild.version}
+                Update available — v{latestBuild.version} <Text style={{ color: theme.colors.muted, fontSize: 12 }}>(build {latestBuild.version_code})</Text>
               </Text>
             </View>
             <Pressable
