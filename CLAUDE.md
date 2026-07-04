@@ -96,7 +96,12 @@ Android refuses the install-over and the updater (`served_code > installed_code`
 offers it ("new build not picked up"). Wall-clock minutes always advance, so every
 build gets a unique strictly-greater revision. `bump-version.mjs` also stamps
 `expo.extra.buildEpoch` (ms); the checker (`isUpdateAvailable` in `src/appVersion.ts`,
-used by Settings) offers a rebuild even at an equal code via built_at. Bump-only (no
+used by Settings) offers a rebuild even at an equal code via built_at. **The APK
+sidecar's `built_at` MUST be derived from `extra.buildEpoch`, never `new Date()`** —
+`isUpdateAvailable` compares `built_at > APP_BUILD_EPOCH` at equal versionCode, and
+buildEpoch is stamped at build *start* while the sidecar is written minutes later at
+build *end*; a `new Date()` built_at is always > buildEpoch → the app perpetually
+reports an update against its own build. Bump-only (no
 build): `just bump [patch|minor|major]`. Runs *before* prebuild so the native manifest
 is stamped. Semver = `MAJOR.MINOR.PATCH`.
 

@@ -313,7 +313,12 @@ build-android level="patch":
     cp app/android/app/build/outputs/apk/release/app-release.apk dist/samizdat.apk
     # Sidecar manifest (version + versionCode from app.json), written atomically
     # with the copy so the served version never drifts from the served artifact.
-    node -e 'const a=require("./app/app.json").expo,fs=require("fs");const st=fs.statSync("dist/samizdat.apk");fs.writeFileSync("dist/samizdat.apk.json",JSON.stringify({version:a.version,version_code:a.android.versionCode,size:st.size,built_at:new Date().toISOString()})+"\n")'
+    # built_at MUST derive from extra.buildEpoch (the value baked into the bundle as
+    # APP_BUILD_EPOCH), NOT `new Date()`: the equal-versionCode fallback in
+    # isUpdateAvailable compares built_at > APP_BUILD_EPOCH, and a fresh `new Date()`
+    # (captured minutes after buildEpoch was stamped at build start) is ALWAYS later
+    # than buildEpoch → the app would perpetually report an update against its own build.
+    node -e 'const a=require("./app/app.json").expo,fs=require("fs");const st=fs.statSync("dist/samizdat.apk");const be=(a.extra&&a.extra.buildEpoch)||Date.now();fs.writeFileSync("dist/samizdat.apk.json",JSON.stringify({version:a.version,version_code:a.android.versionCode,size:st.size,built_at:new Date(be).toISOString()})+"\n")'
     echo "APK → dist/samizdat.apk ($(du -h dist/samizdat.apk | cut -f1))"
     # Auto-deploy so the fresh build is what the live server (and in-app updater) sees.
     just deploy-android
