@@ -33,6 +33,16 @@ func (h *syncHandler) sync(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// Sample the cursor BEFORE the reads so it is a guaranteed lower bound on
+	// anything that changes from here on. If a row is upserted concurrently
+	// (e.g. a background re-scrape) *during* the multi-query read window below,
+	// its updated_at is >= serverTime, so the next `updated_at >= since` pull
+	// re-selects it. Sampling server_time AFTER the reads (the old bug) let such
+	// a write land in the read gap yet sit below the returned cursor — the client
+	// advanced past it and it was skipped forever. Second-resolution boundaries
+	// are covered by the `>=` filter; re-delivered rows are idempotent client-side.
+	serverTime := time.Now().UTC().Format(time.RFC3339)
+
 	docs, err := h.q.ListDocumentsSince(ctx, since)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error: documents")
@@ -78,7 +88,7 @@ func (h *syncHandler) sync(w http.ResponseWriter, r *http.Request) {
 	logSync(since, docs, highlights, annotations, tags, docTags, annTags, hlTags)
 
 	writeJSON(w, http.StatusOK, syncResponse{
-		ServerTime:     time.Now().UTC().Format(time.RFC3339),
+		ServerTime:     serverTime,
 		Documents:      nullSlice(docs),
 		Highlights:     nullSlice(highlights),
 		Annotations:    nullSlice(annotations),

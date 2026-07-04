@@ -56,6 +56,8 @@ server/
                             # GET  /api/v1/documents/{id}/audio (audio streaming)
       ytdlp_status.go       # GET  /api/v1/ytdlp/status    (bearer-authed, proxy health)
       middleware.go         # bearerAuth, localhostOnly guards
+      sync.go               # GET  /api/v1/sync            (bearer-authed, incremental pull)
+      sync_test.go          # unit tests for cursor correctness
     transcript/
       vtt.go                # WebVTT parser → []Segment{StartMs,EndMs,Text}
     worker/
@@ -141,6 +143,16 @@ Run `sqlc generate` before `go build`. `just server::gen` wraps this. Generated 
 - Never return stack traces in HTTP responses — log internally, return `{"error":"..."}` with appropriate 4xx/5xx
 - Errors: typed sentinels + `fmt.Errorf("context: %w", err)` wrapping
 
+## Sync endpoint (`GET /api/v1/sync`)
+
+Incremental pull for phone clients. Uses an `updated_at`-based cursor with `>=` filter (RFC3339 second resolution).
+
+**Cursor contract (critical):** `server_time` in the response is sampled with `time.Now()` **before** any DB reads, not after. This makes it a guaranteed lower bound: any write that occurs concurrently during the multi-query read window has `updated_at >= serverTime`, so the next pull with that cursor re-selects it. Sampling server_time after the reads (the old bug) allowed a concurrent write to land in the read gap yet sit below the returned cursor — the client would advance past it and skip it forever.
+
+- Re-delivered rows are idempotent client-side (LWW).
+- The `>=` filter means same-second updates (doc's `updated_at` equals the cursor) are always included, never skipped.
+- **Do not move the `serverTime` sample** to after the DB reads without carefully re-reading the race analysis in `sync.go`.
+
 ## Domain model naming (exact, no synonyms)
 `Document` · `Highlight` · `Annotation` · `Note` · `Feed` · `Subscription` · `Scraper` · `Pipeline` · `PipelineStep` · `Job` · `Schedule` · `Tag` · `UserProfile`
 Banned: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`
@@ -219,50 +231,4 @@ The VPS datacenter IP is bot-blocked by YouTube. A residential proxy (e.g. home 
 
 ## Media serving
 - `GET /api/v1/media/{id}` — serves any media asset by asset ID; content-type inferred by extension.
-- `GET /api/v1/documents/{id}/audio` — looks up the `audio`-kind asset for a document; streams it via `http.ServeFile` (supports HTTP range requests for seek).
-- Content-type is inferred by file extension: `.m4a/.mp4/.aac` → `audio/mp4`, `.mp3` → `audio/mpeg`, `.webm/.opus` → `audio/webm`, `.png` → `image/png`, default → `image/jpeg`.
-
-## Job enqueueing rules
-- **Always set `ParentJobID`** when enqueueing a job from inside a pipeline step or worker handler. Use `ParentJobIDFromCtx(ctx)` in pipeline steps; use `&job.ID` or `job.ParentJobID` in worker handlers. Never insert a job with a nil parent when a driving job exists — this is required for job-tree visibility in the UI.
-- **Pipeline filter exclusions**: use `exclude_source_feed_ids` in a pipeline's filter JSON to prevent it from running on specific feeds (e.g., a global summarizer pipeline should exclude feed IDs that have their own dedicated pipeline). Never rely on pipeline ordering or naming conventions to avoid double-processing.
-- **`skip_new_scrapes` config**: both `extract_links` and `extract_list_items` steps support `{"skip_new_scrapes": true}` — set this on pipelines that should only enrich already-scraped links, never trigger new scrapes.
-- **`finishDocument()`** is the shared post-upsert hook for any scraped Document (article or video): enqueues `fetch_assets` and triggers matching pipelines. Failures inside `finishDocument` are logged but not propagated — the Document is already persisted, so re-raising would cause needless re-scrape/re-download on retry.
-
-## LLM routing
-- Two adapters only: Anthropic Messages API + OpenAI-compatible
-- Tier routing: triage→Haiku (`claude-haiku-4-5-20251001`), breakdown→Sonnet (`claude-sonnet-4-6`), digest→Opus (`claude-opus-4-8`)
-- Credentialed/paywalled jobs → local provider only, never cloud (enforced in router, not caller)
-
-## Auto-export vault (`internal/export`)
-One-way mirror of Documents + Annotations to a structured plain-markdown Obsidian vault on disk. DB → markdown only; never imports. Config: `[export]` section (`enabled`, `dir`) in TOML — distinct from the reserved (unused) `vault_dir`. Needs `cacheDir` (passed by `api.New`) to source image assets.
-- **Layout:** `documents/<slug>.md` (one per Document, marker `samizdat: export`), `annotations/<slug>.md` (one **separate** note per Annotation, marker `samizdat: export-annotation`), `assets/<id>.<ext>` (copied image assets), `_index.md` (MOC, marker `samizdat: export-index`).
-- **Ownership marker:** every note carries its marker + `id:` in frontmatter. `loadIndex()` scans `documents/` and `annotations/` at startup and only ever writes/renames files carrying the matching marker — **foreign files are never touched**.
-- **Documents:** frontmatter (id, url, title, author, published, fetched, media_type, `hero`, tags); body = markdown with image URLs rewritten to `../assets/…` + a `![hero]` embed; a `## Annotations` section wikilinks its annotation notes. Tombstoned doc → note removed.
-- **Annotations:** own note — frontmatter (id, `document: [[doc]]`, color, media_ts, pos, created) + `> [!quote] From [[doc]]` blockquote + note body. Tombstoned annotation → note removed (handled in the sweep from the changed-annotation list, since `exportDoc` only writes live ones).
-- **Assets:** every image `MediaAsset` (kind ≠ `audio`) is copied `cacheDir/<LocalPath>` → `assets/<basename>` (skips if same size); its `OriginalUrl` is rewritten to `../assets/…` in doc/annotation bodies. Audio is not exported.
-- **Cursor:** incremental by `updated_at` (same cursor `GET /api/v1/sync` uses). A doc re-exports when its row OR any of its annotations changed. `overlap()` steps the cursor back 1s so a same-second commit (RFC3339 is second-resolution) isn't skipped; re-export is idempotent.
-- **Sweeps are serialized** (`sweepMu`) so the 15s ticker and on-demand `Refresh` can't write the same file at once. `GET /api/v1/export/stats` triggers a `Refresh` then returns the snapshot (`{enabled, dir, doc_count, annotation_count, last_export_at, last_error}`) — a UI refresh forces an immediate mirror.
-- Wired in `api.New` (goroutine started only when `enabled`). e2e coverage: `e2e/smoke.js` `runExportChecks`.
-
-## TLS
-- CertMagic in-binary. `--dev` flag → plain HTTP on localhost (no TLS). Do not add nginx, certbot, or reverse proxy dependencies.
-
-## Build
-- `CGO_ENABLED=0 go build -o bin/samizdat .`
-- Target: linux/amd64, linux/arm64, darwin/arm64 (cross-compile in CI)
-
-## Stack (locked — do not add without discussion)
-- `modernc.org/sqlite` — SQLite
-- `sqlc` — SQL codegen
-- `github.com/google/uuid` — UUID generation
-- `golang.org/x/crypto` — Argon2id
-- `golang.org/x/net` — SOCKS5 proxy dialer (for yt-dlp proxy health checks)
-- `golang.org/x/image` — image processing
-- `CertMagic` — TLS (post-M1)
-- `github.com/markusmobius/go-trafilatura` — HTML content extraction (direct dep, not indirect)
-- `github.com/playwright-community/playwright-go` — headless browser scraping (direct dep, not indirect)
-- `github.com/JohannesKaufmann/html-to-markdown/v2` — HTML→Markdown conversion (direct dep, not indirect)
-- `github.com/yuin/goldmark` — Markdown processing (direct dep, not indirect)
-- `gopkg.in/yaml.v3` — YAML parsing (direct dep, not indirect)
-- LLM: plain HTTP client to Anthropic + OpenAI-compat endpoints (post-M1)
-- **yt-dlp**: external binary (not a Go library) — invoked via `os/exec`. Must be installed separately on the host.
+- `GET /api/v1/documents/{id}/audio
