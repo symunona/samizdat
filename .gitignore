@@ -4,6 +4,7 @@
 .env.*
 config.toml
 config.local.*
+credentials.toml
 secrets.*
 *.db
 *.db-wal

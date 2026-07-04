@@ -89,7 +89,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	urls := network.DetectURLs(port)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	handler := api.New(context.Background(), db, webDir, extensionZip, apkPath, urls, c.CacheDir, c.ExtractorsDir, c.YTDLP, c.Export, c.LLM)
+	handler := api.New(context.Background(), db, webDir, extensionZip, apkPath, urls, c.DataDir, c.CacheDir, c.ExtractorsDir, c.YTDLP, c.Export, c.LLM)
 
 	logServer.Printf("samizdat %s (%s) listening on %s", api.Version(), api.Build(), addr)
 	logServer.Printf("reachable at:\n  %s", strings.Join(urls, "\n  "))

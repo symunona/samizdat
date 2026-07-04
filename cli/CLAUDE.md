@@ -39,7 +39,7 @@ Commands that talk to the local server use a cached bearer token stored in confi
 - Credentials accepted via `--user`/`--pass` flags **or** `SAM_LOGIN_USER`/`SAM_LOGIN_PASS` env vars (env is fallback, flags take priority)
 - Credentials are validated present in the CLI before hitting the server — fail fast with a clear error
 - POSTs to `/api/v1/admin/scraper/login` (loopback admin endpoint — **not** bearer-token-authed; no pairing step used here)
-- Credentials are forwarded to the server but **never stored** by the CLI; only the server persists the resulting session cookie jar
+- Credentials are forwarded to the server but **never stored** by the CLI. By default the server stores them (0600 credentials.toml) for unattended session refresh; `--no-save` keeps the cookie jar only
 - Response body decoded for `ok`, `detail`, and `error` fields; non-200 falls back to `resp.Status` if `error` is empty
 - `--port` flag overrides `cfg.Server.Port` (same pattern as other commands)
 - Note: this command does **not** use the device-token pairing flow — it hits an admin endpoint directly. If pairing is added later, align with the standard auth pattern.

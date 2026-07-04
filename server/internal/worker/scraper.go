@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	trafilatura "github.com/markusmobius/go-trafilatura"
 	"github.com/symunona/samizdat/server/internal/config"
+	"github.com/symunona/samizdat/server/internal/credstore"
 	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
@@ -73,7 +74,34 @@ func authStatePath(cacheDir, rawURL string) string {
 	return extractor.AuthStatePath(cacheDir, mustParseURL(rawURL).Hostname())
 }
 
-func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, reg extractor.Registry, cacheDir string, ytdlp config.YTDLPSection) (string, error) {
+// isGated reports whether an authed domain's page still shows its paywall marker
+// (i.e. the login session is missing or expired).
+func isGated(html string, auth *extractor.AuthConfig) bool {
+	return auth != nil && auth.PaywallText != "" && strings.Contains(html, auth.PaywallText)
+}
+
+// refreshSession re-logins host from stored credentials and rewrites its session
+// jar in place. Returns false when no credentials are stored or the login fails —
+// callers then fall through with the gated page and a warning.
+func refreshSession(browser *BrowserPool, cred *credstore.Store, auth *extractor.AuthConfig, host, statePath string) bool {
+	if cred == nil {
+		return false
+	}
+	c, ok := cred.Get(host)
+	if !ok {
+		logScraper.Warnf("session expired for %s and no stored credentials — run: sam login %s --save", host, host)
+		return false
+	}
+	logScraper.Printf("session expired for %s — re-logging in from stored credentials", host)
+	if _, err := browser.Login(*auth, c.Username, c.Password, statePath); err != nil {
+		logScraper.Errorf("auto re-login failed for %s: %v", host, err)
+		return false
+	}
+	logScraper.Printf("session refreshed for %s", host)
+	return true
+}
+
+func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, reg extractor.Registry, cred *credstore.Store, cacheDir string, ytdlp config.YTDLPSection) (string, error) {
 	var p scrapePayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 		return "", fmt.Errorf("bad payload: %w", err)
@@ -103,15 +131,25 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	if err != nil {
 		return "", fmt.Errorf("fetch: %w", err)
 	}
+
+	// Stale-session auto-refresh: an authed domain still showing its gate marker
+	// means the saved session expired. Re-login once from stored credentials and
+	// re-fetch. If still gated (no creds, login failed, or lapsed subscription),
+	// warn and fall through with whatever we got.
+	if isGated(htmlStr, auth) {
+		host := mustParseURL(canonical).Hostname()
+		if refreshSession(browser, cred, auth, host, statePath) {
+			if h2, ferr := browser.FetchHTML(canonical, statePath); ferr == nil {
+				htmlStr = h2
+			}
+		}
+		if isGated(htmlStr, auth) {
+			logScraper.Warnf("paywall still gated for %s — run: sam login %s --save", canonical, host)
+		}
+	}
+
 	bodyBytes := []byte(htmlStr)
 	logScraper.Printf("fetched %d bytes HTML from %s", len(bodyBytes), canonical)
-
-	// Stale-session detector: an authed domain whose gate marker is still present
-	// means the saved session expired — warn the owner to re-run `sam login`.
-	if auth != nil && auth.PaywallText != "" && strings.Contains(htmlStr, auth.PaywallText) {
-		host := mustParseURL(canonical).Hostname()
-		logScraper.Warnf("paywall still gated for %s — session missing/expired, re-run: sam login %s", canonical, host)
-	}
 
 	// Lift <figure>-wrapped images into plain <p><img> so trafilatura keeps them
 	// inline at their real position (it discards <figure> but keeps <img> in <p>).

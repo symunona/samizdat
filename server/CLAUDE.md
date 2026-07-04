@@ -166,16 +166,24 @@ so gated articles render full-text. Config lives in the existing per-domain seam
 - **Session jar:** Playwright `storageState` (cookies + localStorage) at
   `<cacheDir>/auth/<domain>.json`, chmod 0600, gitignored (`**/auth/*.json`).
   `extractor.AuthStatePath(cacheDir, domain)` resolves it.
+- **Credential store:** per-domain `{username, password}` in
+  `<data_dir>/credentials.toml` (0600, gitignored, `internal/credstore`) — separate
+  from the hand-edited config.toml, written programmatically. Keyed by domain
+  (`["444.hu"]` table). This is what enables unattended session refresh; it is the
+  answer to "where do the creds live" — **not** shell rc / env files.
 - **Login:** `POST /api/v1/admin/scraper/login` (loopback-only), body
-  `{domain, username, password}` → `worker.Login` → `BrowserPool.Login`: headless
-  form fill, then the **login success detector** waits for `success_text` to appear
-  (SPA-hydration-safe `Locator.WaitFor`, 20s) before saving the jar. Credentials are
-  used once and never stored — only the cookie jar persists. CLI: `sam login <domain>`
-  (`--user`/`--pass` or `SAM_LOGIN_USER`/`SAM_LOGIN_PASS`).
-- **Scrape:** `handleScrapeURL` looks up the domain's `Auth`; when present it loads
-  the jar into the fetch context (`BrowserPool.FetchHTML(url, statePath)`). The
-  **stale-session detector** warns (`re-run: sam login <domain>`) when `paywall_text`
-  is still present in the fetched HTML — session missing/expired.
+  `{domain, username, password, save}` → `worker.Login` → `BrowserPool.Login`:
+  headless form fill, then the **login success detector** waits for `success_text`
+  to appear (SPA-hydration-safe `Locator.WaitFor`, 20s) before saving the jar. When
+  `save` is true (default) the credentials are also written to credentials.toml. CLI:
+  `sam login <domain>` (`--user`/`--pass` or `SAM_LOGIN_USER`/`SAM_LOGIN_PASS`;
+  `--no-save` = jar only, no auto-refresh).
+- **Scrape + auto-refresh:** `handleScrapeURL` loads the domain's jar into the fetch
+  context (`BrowserPool.FetchHTML(url, statePath)`). If the fetched HTML still shows
+  `paywall_text` (`isGated`), the session expired → `refreshSession` re-logins **once**
+  from credentials.toml, rewrites the jar, and re-fetches. Only if still gated after
+  that (no stored creds, login failed, or lapsed subscription) does it warn
+  (`run: sam login <domain> --save`). Refresh is at most once per scrape — no loop.
 - SSO note: a domain's login may live on a parent host (444 → magyarjeti.hu); the
   `login_url`'s `?redirect=` sends the session back so the content domain's cookie is
   set. `storageState` captures cookies for all domains touched during login.

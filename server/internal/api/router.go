@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/symunona/samizdat/server/internal/config"
+	"github.com/symunona/samizdat/server/internal/credstore"
 	"github.com/symunona/samizdat/server/internal/export"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
@@ -20,8 +21,10 @@ import (
 
 // New returns the root HTTP handler. webDir may be empty (API-only mode).
 // serverURLs is the ordered list of reachable base URLs for this server.
-func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, apkPath string, serverURLs []string, cacheDir string, extractorDir string, ytdlp config.YTDLPSection, exportCfg config.ExportSection, llmCfg ...config.LLMSection) http.Handler {
+func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, apkPath string, serverURLs []string, dataDir string, cacheDir string, extractorDir string, ytdlp config.YTDLPSection, exportCfg config.ExportSection, llmCfg ...config.LLMSection) http.Handler {
 	q := store.New(db)
+
+	creds := credstore.New(dataDir)
 
 	var exp *export.Exporter
 	if exportCfg.Enabled && exportCfg.Dir != "" {
@@ -34,7 +37,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 		llmClient = llm.New(llmCfg[0])
 	}
 
-	w := worker.New(q, db, cacheDir, extractorDir, llmClient, ytdlp)
+	w := worker.New(q, db, cacheDir, extractorDir, llmClient, ytdlp, creds)
 	w.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -80,7 +83,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	adminFeedsH := &adminFeedsHandler{reg: w.ExtractorRegistry(), browser: w}
 	mux.HandleFunc("POST /api/v1/admin/feeds/preview", localhostOnly(adminFeedsH.preview))
 
-	adminScraperH := &adminScraperHandler{reg: w.ExtractorRegistry(), login: w, cacheDir: cacheDir}
+	adminScraperH := &adminScraperHandler{reg: w.ExtractorRegistry(), login: w, cacheDir: cacheDir, creds: creds}
 	mux.HandleFunc("POST /api/v1/admin/scraper/login", localhostOnly(adminScraperH.loginDomain))
 
 	nlH := &newsletterHandler{q: q}

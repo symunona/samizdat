@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/symunona/samizdat/server/internal/config"
+	"github.com/symunona/samizdat/server/internal/credstore"
 	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/pipeline"
@@ -32,9 +33,10 @@ type Worker struct {
 	extractorReg extractor.Registry
 	llmClient    llm.Client
 	ytdlp        config.YTDLPSection
+	creds        *credstore.Store
 }
 
-func New(q *store.Queries, db *sql.DB, cacheDir string, extractorDir string, llmClient llm.Client, ytdlp config.YTDLPSection) *Worker {
+func New(q *store.Queries, db *sql.DB, cacheDir string, extractorDir string, llmClient llm.Client, ytdlp config.YTDLPSection, creds *credstore.Store) *Worker {
 	browser, err := NewBrowserPool()
 	if err != nil {
 		logWorker.Fatalf("browser init failed: %v", err)
@@ -45,7 +47,7 @@ func New(q *store.Queries, db *sql.DB, cacheDir string, extractorDir string, llm
 		reg = make(extractor.Registry)
 	}
 	logWorker.Printf("loaded %d extractor configs from %s", len(reg), extractorDir)
-	return &Worker{q: q, db: db, cacheDir: cacheDir, browser: browser, extractorReg: reg, llmClient: llmClient, ytdlp: ytdlp}
+	return &Worker{q: q, db: db, cacheDir: cacheDir, browser: browser, extractorReg: reg, llmClient: llmClient, ytdlp: ytdlp, creds: creds}
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -190,7 +192,7 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	)
 	switch job.Kind {
 	case "scrape_url":
-		result, err = handleScrapeURL(ctx, w.q, job, w.browser, w.extractorReg, w.cacheDir, w.ytdlp)
+		result, err = handleScrapeURL(ctx, w.q, job, w.browser, w.extractorReg, w.creds, w.cacheDir, w.ytdlp)
 	case "fetch_assets":
 		result, err = handleFetchAssets(ctx, w.q, job, w.cacheDir)
 	case "poll_feed":

@@ -13,6 +13,11 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 #                                 # at the end of the build) picks it up. Path is relative to the
 #                                 # service WorkingDirectory (repo root). Omit to disable the routes.
 
+# Paywalled scraping: per-domain login lives in extractors/<domain>/feed.yaml
+# (auth block: login_url + form selectors + success/paywall markers). Secrets are
+# NOT here — `sam login <domain>` stores them in <data_dir>/credentials.toml (0600),
+# and the scraper auto-refreshes an expired session from that file.
+
 # LLM provider — prefer environment variables for keys (ANTHROPIC_API_KEY / OPENAI_API_KEY).
 # [llm]
 # provider      = "anthropic"                 # or "openai_compat" (OpenAI cloud / Ollama / LM Studio)
