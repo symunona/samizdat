@@ -6,7 +6,7 @@ package store
 
 type Annotation struct {
 	ID          string  `json:"id"`
-	DocumentID  string  `json:"document_id"`
+	DocumentID  *string `json:"document_id"`
 	HighlightID *string `json:"highlight_id"`
 	Exact       string  `json:"exact"`
 	Prefix      string  `json:"prefix"`

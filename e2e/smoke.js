@@ -26,6 +26,7 @@ const PAGES = [
   ['/starred', 'starred'],
   ['/archived', 'archived'],
   ['/documents', 'documents'],
+  ['/notes', 'notes'],
   ['/tags', 'tags'],
   ['/jobs', 'jobs'],
   ['/subscriptions', 'subscriptions'],

@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -36,7 +38,7 @@ func (h *annotationsHandler) list(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing id")
 		return
 	}
-	anns, err := h.q.ListAnnotationsByDocument(r.Context(), docID)
+	anns, err := h.q.ListAnnotationsByDocument(r.Context(), &docID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
@@ -65,11 +67,45 @@ func (h *annotationsHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "exact or note is required")
 		return
 	}
+	ann, err := h.insert(r.Context(), &docID, inp)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, ann)
+}
+
+// createStandalone creates a standalone note (POST /api/v1/annotations): an
+// annotation with no parent Document (document_id NULL) and no anchor. The body
+// carries just note + optional color, reusing the annotation storage/sync/tagging
+// surface.
+func (h *annotationsHandler) createStandalone(w http.ResponseWriter, r *http.Request) {
+	var inp annotationInput
+	if err := json.NewDecoder(r.Body).Decode(&inp); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if inp.Note == "" {
+		writeErr(w, http.StatusBadRequest, "note is required")
+		return
+	}
+	// A standalone note is unanchored: force-clear any anchor fields a client sends.
+	inp.Exact, inp.Prefix, inp.Suffix, inp.PosStart, inp.PosEnd, inp.HighlightID = "", "", "", 0, 0, nil
+	ann, err := h.insert(r.Context(), nil, inp)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, ann)
+}
+
+// insert writes an annotation row; docID is nil for a standalone note.
+func (h *annotationsHandler) insert(ctx context.Context, docID *string, inp annotationInput) (store.Annotation, error) {
 	if inp.Color == "" {
 		inp.Color = "yellow"
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	ann, err := h.q.InsertAnnotation(r.Context(), store.InsertAnnotationParams{
+	ann, err := h.q.InsertAnnotation(ctx, store.InsertAnnotationParams{
 		ID:          uuid.New().String(),
 		DocumentID:  docID,
 		HighlightID: inp.HighlightID,
@@ -85,10 +121,9 @@ func (h *annotationsHandler) create(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:   now,
 	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "db error")
-		return
+		return ann, fmt.Errorf("insert annotation: %w", err)
 	}
-	writeJSON(w, http.StatusCreated, ann)
+	return ann, nil
 }
 
 func (h *annotationsHandler) update(w http.ResponseWriter, r *http.Request) {

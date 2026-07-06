@@ -1,0 +1,210 @@
+import { useMemo, useState } from 'react'
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
+import { useUnistyles } from 'react-native-unistyles'
+import { useConnection } from '../../src/ConnectionContext'
+import { useNotes, useSyncStatus, type NoteWithTags } from '../../src/store/hooks'
+import { forceSync } from '../../src/store/syncEngine'
+import { createNote, updateAnnotation, deleteAnnotation } from '../../src/api'
+import AnnotationPanel, { type ExistingAnnotation } from '../../src/AnnotationPanel'
+import TagSelectorModal from '../../src/TagSelectorModal'
+
+function tagDotColor(color: string): string {
+  switch (color) {
+    case 'red': return '#f87171'
+    case 'orange': return '#e8743b'
+    case 'yellow': return '#facc15'
+    case 'green': return '#4ade80'
+    case 'blue': return '#60a5fa'
+    case 'purple': return '#a78bfa'
+    case 'pink': return '#f472b6'
+    default: return '#9ca3af'
+  }
+}
+
+export default function NotesScreen() {
+  const { theme } = useUnistyles()
+  const s = useMemo(() => buildStyles(theme), [theme])
+  const { activeUrl, token, status } = useConnection()
+
+  const notes = useNotes()
+  const { status: syncStatus, error: syncError } = useSyncStatus()
+  const [refreshing, setRefreshing] = useState(false)
+
+  // Editor state: panel for create/edit, plus the tag modal target.
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [editing, setEditing] = useState<ExistingAnnotation | null>(null)
+  const [tagFor, setTagFor] = useState<string | null>(null)
+
+  const ready = !!activeUrl && !!token
+
+  async function refresh() {
+    if (!ready) return
+    setRefreshing(true)
+    try {
+      await forceSync(activeUrl, token)
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  function openCreate() {
+    setEditing(null)
+    setPanelOpen(true)
+  }
+
+  function openEdit(n: NoteWithTags) {
+    setEditing({ id: n.id, exact: '', note: n.note, color: n.color })
+    setPanelOpen(true)
+  }
+
+  async function handleSave(data: { note: string; color: string }) {
+    if (!ready) return
+    setPanelOpen(false)
+    try {
+      if (editing) {
+        await updateAnnotation(activeUrl, token, editing.id, data)
+      } else {
+        await createNote(activeUrl, token, { note: data.note, color: data.color })
+      }
+      await forceSync(activeUrl, token)
+    } catch {
+      // A follow-up sync will reconcile; surface via the list's sync status.
+    }
+  }
+
+  async function handleDelete() {
+    if (!ready || !editing) return
+    const id = editing.id
+    setPanelOpen(false)
+    try {
+      await deleteAnnotation(activeUrl, token, id)
+      await forceSync(activeUrl, token)
+    } catch {
+      /* reconciled on next sync */
+    }
+  }
+
+  function handleTag(annotationId: string) {
+    setPanelOpen(false)
+    setTagFor(annotationId)
+  }
+
+  async function closeTagModal() {
+    setTagFor(null)
+    if (ready) await forceSync(activeUrl, token)
+  }
+
+  function renderItem({ item }: { item: NoteWithTags }) {
+    const preview = item.note.trim() || '(empty note)'
+    return (
+      <Pressable style={s.item} onPress={() => openEdit(item)}>
+        <Text style={s.itemNote} numberOfLines={4}>{preview}</Text>
+        {item.tags.length > 0 && (
+          <View style={s.chips}>
+            {item.tags.map((t) => (
+              <View key={t.id} style={s.chip}>
+                <View style={[s.dot, { backgroundColor: tagDotColor(t.color) }]} />
+                <Text style={s.chipText}>{t.name}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </Pressable>
+    )
+  }
+
+  const loading = status === 'loading' || (syncStatus === 'syncing' && notes.length === 0)
+
+  return (
+    <SafeAreaView style={s.screen}>
+      {loading ? (
+        <View style={s.centered}><ActivityIndicator color={theme.colors.accent} size="large" /></View>
+      ) : syncStatus === 'error' && notes.length === 0 ? (
+        <View style={s.centered}>
+          <Text style={s.errorText}>{syncError ?? 'Sync failed'}</Text>
+          <Pressable onPress={refresh} style={s.retryBtn}><Text style={s.retryText}>Retry</Text></Pressable>
+        </View>
+      ) : (
+        <FlatList
+          data={notes}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          contentContainerStyle={notes.length === 0 ? s.emptyContainer : s.listContent}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={theme.colors.accent} />
+          }
+          ListEmptyComponent={
+            <Text style={s.emptyText}>No notes yet. Tap + to write a note — it isn&apos;t tied to any document.</Text>
+          }
+          ItemSeparatorComponent={() => <View style={s.separator} />}
+        />
+      )}
+
+      {/* Create-note FAB */}
+      <Pressable style={s.fab} onPress={openCreate} accessibilityLabel="New note" hitSlop={8}>
+        <Ionicons name="add" size={28} color={theme.colors.background} />
+      </Pressable>
+
+      <AnnotationPanel
+        visible={panelOpen}
+        mode={editing ? 'edit' : 'create'}
+        existing={editing ?? undefined}
+        onSave={handleSave}
+        onDelete={editing ? handleDelete : undefined}
+        onCancel={() => setPanelOpen(false)}
+        onTag={handleTag}
+      />
+
+      {tagFor && (
+        <TagSelectorModal
+          visible={!!tagFor}
+          objectId={tagFor}
+          objectType="annotation"
+          onClose={closeTagModal}
+        />
+      )}
+    </SafeAreaView>
+  )
+}
+
+type Theme = ReturnType<typeof useUnistyles>['theme']
+function buildStyles(t: Theme) {
+  return StyleSheet.create({
+    screen: { flex: 1, backgroundColor: t.colors.background },
+    centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
+    errorText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
+    retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
+    retryText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
+    listContent: { paddingVertical: t.spacing.xs, maxWidth: 800, alignSelf: 'center', width: '100%' },
+    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl, maxWidth: 800, alignSelf: 'center', width: '100%' },
+    emptyText: { color: t.colors.muted, fontSize: 15, textAlign: 'center', lineHeight: 22 },
+    separator: { height: 1, backgroundColor: t.colors.border, marginLeft: t.spacing.md },
+    item: { paddingHorizontal: t.spacing.md, paddingVertical: t.spacing.md, backgroundColor: t.colors.background, gap: t.spacing.sm },
+    itemNote: { color: t.colors.text, fontSize: 15, lineHeight: 21 },
+    chips: { flexDirection: 'row', flexWrap: 'wrap', gap: t.spacing.xs, alignItems: 'center' },
+    chip: {
+      flexDirection: 'row', alignItems: 'center', gap: 5,
+      backgroundColor: t.colors.surface, borderRadius: t.radius.sm,
+      paddingHorizontal: t.spacing.sm, paddingVertical: 3,
+      borderWidth: 1, borderColor: t.colors.border,
+    },
+    dot: { width: 8, height: 8, borderRadius: 4 },
+    chipText: { color: t.colors.muted, fontSize: 11, fontWeight: '600' },
+    fab: {
+      position: 'absolute', right: 20, bottom: 28,
+      width: 56, height: 56, borderRadius: 28,
+      backgroundColor: t.colors.accent, alignItems: 'center', justifyContent: 'center',
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 6,
+    },
+  })
+}

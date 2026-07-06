@@ -336,4 +336,15 @@ hand-edit `AndroidManifest.xml`.
   build never imports the native module; knip-ignored).
 - Mounted in `app/_layout.tsx` inside `ScrapeQueueProvider`.
 
+## Store selectors: never map to fresh objects inside a `useShallow` selector
+A zustand selector wrapped in `useShallow` that returns `arr.map(x => ({...x, extra}))`
+mints new element references every call, so shallow-equality never holds → the hook
+returns a "changed" value on every render → **infinite render loop / white crash
+(React #185)** the moment there's any data (empty arrays compare equal, so it passes
+smoke tests and only breaks with real rows). `useDocuments` is safe because it only
+`.filter().sort()`s raw store refs. For derived shapes (counts, joined tags), select
+the **raw store slices** (`s => s.tags`, `s => s.annotationTags`, … — stable refs) and
+build the derived array in a `useMemo`. See `useNotes`/`useTagsWithCounts` in
+`src/store/hooks.ts`.
+
 Native-only — the share flow can't be exercised headless; test on a device after build.

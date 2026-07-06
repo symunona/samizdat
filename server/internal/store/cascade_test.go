@@ -81,7 +81,7 @@ func TestRegenerateCascadePreservesInteracted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := q.InsertAnnotation(ctx, InsertAnnotationParams{
-		ID: uuid.NewString(), DocumentID: doc.ID, HighlightID: &annotated.ID,
+		ID: uuid.NewString(), DocumentID: &doc.ID, HighlightID: &annotated.ID,
 		Exact: "x", Color: "yellow", CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)

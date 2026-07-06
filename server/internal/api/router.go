@@ -106,6 +106,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	annH := &annotationsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents/{id}/annotations", bearerAuth(q, annH.list))
 	mux.HandleFunc("POST /api/v1/documents/{id}/annotations", bearerAuth(q, annH.create))
+	mux.HandleFunc("POST /api/v1/annotations", bearerAuth(q, annH.createStandalone))
 	mux.HandleFunc("PUT /api/v1/annotations/{id}", bearerAuth(q, annH.update))
 	mux.HandleFunc("DELETE /api/v1/annotations/{id}", bearerAuth(q, annH.delete))
 

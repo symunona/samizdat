@@ -136,7 +136,7 @@ CREATE INDEX IF NOT EXISTS feed_items_feed_id ON feed_items(feed_id);
 
 CREATE TABLE IF NOT EXISTS annotations (
     id           TEXT    PRIMARY KEY,
-    document_id  TEXT    NOT NULL REFERENCES documents(id),
+    document_id  TEXT    REFERENCES documents(id),  -- nullable: NULL = standalone note (no parent Document)
     highlight_id TEXT,
     exact        TEXT    NOT NULL,
     prefix       TEXT    NOT NULL DEFAULT '',

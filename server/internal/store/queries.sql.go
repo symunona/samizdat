@@ -1053,7 +1053,7 @@ RETURNING id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_e
 
 type InsertAnnotationParams struct {
 	ID          string  `json:"id"`
-	DocumentID  string  `json:"document_id"`
+	DocumentID  *string `json:"document_id"`
 	HighlightID *string `json:"highlight_id"`
 	Exact       string  `json:"exact"`
 	Prefix      string  `json:"prefix"`
@@ -1642,7 +1642,7 @@ const listAnnotationsByDocument = `-- name: ListAnnotationsByDocument :many
 SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE document_id = ? AND deleted_at IS NULL ORDER BY pos_start ASC
 `
 
-func (q *Queries) ListAnnotationsByDocument(ctx context.Context, documentID string) ([]Annotation, error) {
+func (q *Queries) ListAnnotationsByDocument(ctx context.Context, documentID *string) ([]Annotation, error) {
 	rows, err := q.db.QueryContext(ctx, listAnnotationsByDocument, documentID)
 	if err != nil {
 		return nil, err

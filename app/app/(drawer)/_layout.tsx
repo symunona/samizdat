@@ -19,6 +19,7 @@ const NAV_BLOCKS: NavRow[][] = [
     { kind: 'link', name: 'starred', label: 'Starred', href: '/starred' as Href, indent: true },
     { kind: 'link', name: 'archived', label: 'Archived', href: '/archived' as Href, indent: true },
     { kind: 'link', name: 'documents', label: 'Documents', href: '/documents' as Href },
+    { kind: 'link', name: 'notes', label: 'Notes', href: '/notes' as Href },
     { kind: 'link', name: 'tags', label: 'Tags', href: '/tags' as Href },
   ],
   [
@@ -154,6 +155,7 @@ export default function DrawerLayout() {
       <Drawer.Screen name="starred" options={{ title: 'Starred' }} />
       <Drawer.Screen name="archived" options={{ title: 'Archived' }} />
       <Drawer.Screen name="documents" options={{ title: 'Documents' }} />
+      <Drawer.Screen name="notes" options={{ title: 'Notes' }} />
       <Drawer.Screen name="tags" options={{ title: 'Tags' }} />
       <Drawer.Screen name="subscriptions" options={{ title: 'Subscriptions' }} />
       <Drawer.Screen name="pipelines" options={{ title: 'Pipelines' }} />

@@ -2,7 +2,7 @@
 created: 2026-07-04
 topic: Standalone notes — drawer "Notes" screen, parentless annotations
 excerpt: New left-drawer "Notes" item. Create/tag random markdown notes not tied to any Document/Highlight, reusing the annotation editor + tag picker. Modeled as parentless Annotations (document_id nullable) per the user's chosen data model.
-status: in-progress
+status: done — verified via agent-browser (create→tag→delete); migration safe on live-DB copy (21 anns intact); also fixed a pre-existing /tags render-loop crash. Awaiting user review before squash-merge.
 ---
 
 # Standalone notes

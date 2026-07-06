@@ -385,5 +385,95 @@ func migrate(db *sql.DB) error {
 			}
 		}
 	}
+
+	// Non-additive: relax annotations.document_id from NOT NULL to nullable so a
+	// standalone note (no parent Document) can be stored as a document-less
+	// annotation. SQLite can't drop NOT NULL via ALTER, so rebuild the table.
+	if err := relaxAnnotationDocumentID(db); err != nil {
+		return fmt.Errorf("relax annotations.document_id: %w", err)
+	}
+	return nil
+}
+
+// relaxAnnotationDocumentID rebuilds the annotations table with a nullable
+// document_id when an older DB still has it NOT NULL. It preserves every row and
+// re-creates the indexes. Idempotent: a no-op once document_id is already
+// nullable (fresh schema or previously migrated).
+func relaxAnnotationDocumentID(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(annotations)`)
+	if err != nil {
+		return fmt.Errorf("inspect annotations: %w", err)
+	}
+	notNull := false
+	found := false
+	for rows.Next() {
+		var cid, nn, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &nn, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan table_info: %w", err)
+		}
+		if name == "document_id" {
+			found = true
+			notNull = nn == 1
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("table_info rows: %w", err)
+	}
+	_ = rows.Close()
+	if !found || !notNull {
+		return nil // already nullable (or table absent — schema exec handles that)
+	}
+
+	// FK toggling must happen outside a transaction; MaxOpenConns(1) keeps it on
+	// the same connection as the rebuild below.
+	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys: %w", err)
+	}
+	defer func() { _, _ = db.Exec(`PRAGMA foreign_keys=ON`) }()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin rebuild: %w", err)
+	}
+	stmts := []string{
+		`CREATE TABLE annotations_new (
+			id           TEXT    PRIMARY KEY,
+			document_id  TEXT    REFERENCES documents(id),
+			highlight_id TEXT,
+			exact        TEXT    NOT NULL,
+			prefix       TEXT    NOT NULL DEFAULT '',
+			suffix       TEXT    NOT NULL DEFAULT '',
+			pos_start    INTEGER NOT NULL DEFAULT 0,
+			pos_end      INTEGER NOT NULL DEFAULT 0,
+			media_ts_ms  INTEGER NOT NULL DEFAULT 0,
+			color        TEXT    NOT NULL DEFAULT 'yellow',
+			note         TEXT    NOT NULL DEFAULT '',
+			created_at   TEXT    NOT NULL,
+			updated_at   TEXT    NOT NULL,
+			rev          INTEGER NOT NULL DEFAULT 0,
+			deleted_at   TEXT
+		)`,
+		`INSERT INTO annotations_new (id, document_id, highlight_id, exact, prefix, suffix,
+			pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev, deleted_at)
+			SELECT id, document_id, highlight_id, exact, prefix, suffix,
+			pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev, deleted_at
+			FROM annotations`,
+		`DROP TABLE annotations`,
+		`ALTER TABLE annotations_new RENAME TO annotations`,
+		`CREATE INDEX IF NOT EXISTS annotations_document_id ON annotations(document_id)`,
+		`CREATE INDEX IF NOT EXISTS annotations_updated_at ON annotations(updated_at)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("rebuild annotations: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit rebuild: %w", err)
+	}
 	return nil
 }

@@ -182,7 +182,6 @@ func (e *Exporter) sweep(ctx context.Context) {
 		}
 	}
 	for _, a := range annos {
-		dirty[a.DocumentID] = struct{}{}
 		if a.UpdatedAt > maxTs {
 			maxTs = a.UpdatedAt
 		}
@@ -191,6 +190,16 @@ func (e *Exporter) sweep(ctx context.Context) {
 		if a.DeletedAt != nil {
 			if err := e.removeAnnotation(a.ID); err != nil {
 				e.log.Warnf("remove annotation %s: %v", a.ID, err)
+			}
+			continue
+		}
+		if a.DocumentID != nil {
+			// Anchored annotation: re-export its parent doc (whose note lists it).
+			dirty[*a.DocumentID] = struct{}{}
+		} else {
+			// Standalone note: no parent doc to group under — write its note directly.
+			if err := e.exportStandaloneNote(a); err != nil {
+				e.log.Warnf("export standalone note %s: %v", a.ID, err)
 			}
 		}
 	}
@@ -226,7 +235,7 @@ func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 		return e.removeDoc(id)
 	}
 
-	annos, err := e.q.ListAnnotationsByDocument(ctx, id)
+	annos, err := e.q.ListAnnotationsByDocument(ctx, &id)
 	if err != nil {
 		return fmt.Errorf("list annotations for %s: %w", id, err)
 	}
@@ -478,12 +487,18 @@ func renderDoc(doc store.Document, annos []store.Annotation, annNames []string, 
 	return []byte(b.String())
 }
 
+// renderAnnotation renders an annotation note. When docName is empty the
+// annotation is a standalone note (no parent Document): the `document:` backlink
+// and the "From [[doc]]" quote header are omitted.
 func renderAnnotation(a store.Annotation, docName string, rewrite map[string]string) []byte {
+	standalone := strings.TrimSuffix(docName, ".md") == ""
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "id: %s\n", a.ID)
 	b.WriteString(annMark + "\n")
-	fmt.Fprintf(&b, "document: %s\n", yamlStr("[["+strings.TrimSuffix(docName, ".md")+"]]"))
+	if !standalone {
+		fmt.Fprintf(&b, "document: %s\n", yamlStr("[["+strings.TrimSuffix(docName, ".md")+"]]"))
+	}
 	if a.Color != "" {
 		fmt.Fprintf(&b, "color: %s\n", yamlStr(a.Color))
 	}
@@ -494,7 +509,11 @@ func renderAnnotation(a store.Annotation, docName string, rewrite map[string]str
 	fmt.Fprintf(&b, "created: %s\n", yamlStr(a.CreatedAt))
 	b.WriteString("---\n\n")
 
-	fmt.Fprintf(&b, "> [!quote] From [[%s]]\n", strings.TrimSuffix(docName, ".md"))
+	if standalone {
+		b.WriteString("> [!note]\n")
+	} else {
+		fmt.Fprintf(&b, "> [!quote] From [[%s]]\n", strings.TrimSuffix(docName, ".md"))
+	}
 	if strings.TrimSpace(a.Exact) != "" {
 		for _, ln := range strings.Split(rewriteURLs(a.Exact, rewrite), "\n") {
 			b.WriteString("> " + ln + "\n")
@@ -504,6 +523,20 @@ func renderAnnotation(a store.Annotation, docName string, rewrite map[string]str
 		b.WriteString("\n" + strings.TrimRight(rewriteURLs(a.Note, rewrite), "\n") + "\n")
 	}
 	return []byte(b.String())
+}
+
+// exportStandaloneNote writes a document-less annotation (a standalone note) as
+// its own note file, with no parent-doc backlink.
+func (e *Exporter) exportStandaloneNote(a store.Annotation) error {
+	name := e.annFilename(a)
+	note := renderAnnotation(a, "", nil)
+	if err := os.WriteFile(filepath.Join(e.dir, annsSub, name), note, 0o644); err != nil {
+		return fmt.Errorf("write standalone note %s: %w", name, err)
+	}
+	e.mu.Lock()
+	e.annFiles[a.ID] = name
+	e.mu.Unlock()
+	return nil
 }
 
 // --- helpers ---

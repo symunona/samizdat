@@ -578,7 +578,7 @@ export async function deleteDocument(serverUrl: string, token: string, id: strin
 
 export type Annotation = {
   id: string
-  document_id: string
+  document_id: string | null // null = standalone note (no parent Document)
   highlight_id: string | null
   exact: string
   prefix: string
@@ -612,6 +612,20 @@ export async function createAnnotation(
     body: JSON.stringify(data),
   })
   return json<Annotation>(res, '/api/v1/documents/:id/annotations POST')
+}
+
+// Create a standalone note: an annotation with no parent Document. Reuses the
+// annotation storage/sync/tagging surface (document_id is NULL server-side).
+export async function createNote(
+  serverUrl: string, token: string,
+  data: { note: string; color?: string },
+): Promise<Annotation> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/annotations`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  return json<Annotation>(res, '/api/v1/annotations POST')
 }
 
 export async function updateAnnotation(
