@@ -95,6 +95,8 @@ export default function SettingsScreen() {
   const [urlLastUsed, setUrlLastUsed] = useState<Record<string, string>>({})
   const [proxyStatus, setProxyStatus] = useState<YtdlpProxyStatus | null>(null)
   const [proxyChecking, setProxyChecking] = useState(false)
+  // Latest known status, read inside the polling callback without re-creating it.
+  const proxyStatusRef = useRef<YtdlpProxyStatus | null>(null)
   const [exportStats, setExportStats] = useState<ExportStats | null>(null)
   const [deviceNameInput, setDeviceNameInput] = useState('')
   const [deviceNameSaving, setDeviceNameSaving] = useState(false)
@@ -145,11 +147,16 @@ export default function SettingsScreen() {
     } catch { /* best-effort */ }
   }, [activeUrl, token])
 
-  const loadProxyStatus = useCallback(async () => {
+  const loadProxyStatus = useCallback(async (silent = false) => {
     if (!activeUrl || !token) return
-    setProxyChecking(true)
+    // Only flash the grey "Checking…" state on an explicit recheck / first load,
+    // or while the last known status was broken. Healthy 20s background polls
+    // stay green instead of blinking the dot to grey every interval.
+    if (!silent || !proxyStatusRef.current?.ok) setProxyChecking(true)
     try {
-      setProxyStatus(await fetchYtdlpProxyStatus(activeUrl, token))
+      const st = await fetchYtdlpProxyStatus(activeUrl, token)
+      proxyStatusRef.current = st
+      setProxyStatus(st)
     } catch { /* best-effort; keep prior status */ } finally {
       setProxyChecking(false)
     }
@@ -164,7 +171,7 @@ export default function SettingsScreen() {
   useEffect(() => {
     if (status !== 'connected') return
     loadProxyStatus()
-    const id = setInterval(loadProxyStatus, 20000)
+    const id = setInterval(() => loadProxyStatus(true), 20000)
     return () => clearInterval(id)
   }, [status, loadProxyStatus])
 
@@ -611,7 +618,7 @@ export default function SettingsScreen() {
           </View>
           {proxyChecking
             ? <ActivityIndicator size="small" color={theme.colors.accent} />
-            : <Pressable onPress={loadProxyStatus} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
+            : <Pressable onPress={() => loadProxyStatus()} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
                 <Text style={s.refreshBtnText}>Recheck</Text>
               </Pressable>
           }
