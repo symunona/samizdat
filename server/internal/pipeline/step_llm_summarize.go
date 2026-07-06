@@ -82,7 +82,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	reply = strings.TrimSpace(reply)
 	// Drop any leading heading / echoed title so the card doesn't show a double
 	// title (the Highlight.Title field already carries doc.Title).
-	reply = stripLeadingTitle(reply, doc.Title)
+	reply = StripLeadingTitle(reply, doc.Title)
 	if reply == "" {
 		return StepResult{Done: true}, nil
 	}

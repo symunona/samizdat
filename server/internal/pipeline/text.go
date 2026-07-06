@@ -15,12 +15,13 @@ func normalizeTitle(s string) string {
 	return strings.Trim(s, " .:!?—-#")
 }
 
-// stripLeadingTitle removes a redundant title line from the top of an LLM summary
-// body: either a markdown heading (`# …`) or a first line that echoes the document
-// title. The Highlight already carries the title in its own field, so repeating it
-// at the top of the body renders as a double title in the card. Returns the body
-// unchanged when the first content line isn't a title.
-func stripLeadingTitle(body, docTitle string) string {
+// StripLeadingTitle removes a redundant title line from the top of a body:
+// either a markdown heading (`# …`) or a first line that echoes the document
+// title. Callers that carry the title in a separate field (Highlight.Title, or
+// the scraped Document.title rendered as an injected `#doc-title` / vault `# H1`)
+// would otherwise show a double title. Returns the body unchanged when the first
+// content line isn't a title.
+func StripLeadingTitle(body, docTitle string) string {
 	trimmed := strings.TrimLeft(body, "\n \t")
 	nl := strings.IndexByte(trimmed, '\n')
 	first := trimmed

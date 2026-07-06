@@ -15,8 +15,8 @@ func TestStripLeadingTitle(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := stripLeadingTitle(c.body, c.title); got != c.want {
-				t.Errorf("stripLeadingTitle(%q, %q) = %q, want %q", c.body, c.title, got, c.want)
+			if got := StripLeadingTitle(c.body, c.title); got != c.want {
+				t.Errorf("StripLeadingTitle(%q, %q) = %q, want %q", c.body, c.title, got, c.want)
 			}
 		})
 	}

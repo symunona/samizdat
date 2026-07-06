@@ -193,6 +193,12 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		md = extracted.ContentText
 	}
 
+	// Trafilatura keeps the article's own <h1> headline at the top of the content.
+	// The title lives once in doc.Title (rendered as the injected #doc-title in the
+	// app and the `# H1` in the vault export), so strip the echoed heading here to
+	// avoid a duplicate title in both the viewer and the exported markdown.
+	md = pipeline.StripLeadingTitle(md, strings.TrimSpace(extracted.Metadata.Title))
+
 	// Prepend any lead bullet lists that trafilatura skipped.
 	if leadLists := extractLeadLists(bodyBytes, md); leadLists != "" {
 		md = leadLists + "\n\n" + md

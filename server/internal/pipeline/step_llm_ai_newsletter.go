@@ -203,7 +203,7 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 
 	// Build summary highlight body: bullet list + optional hero image. Strip a
 	// leading title echo so the card doesn't double the title.
-	summaryBody := stripLeadingTitle(buildBullets(parsed.Summary), doc.Title)
+	summaryBody := StripLeadingTitle(buildBullets(parsed.Summary), doc.Title)
 	if assets, err2 := q.ListMediaAssetsByDocument(ctx, run.DocumentID); err2 == nil {
 		for _, a := range assets {
 			if a.Kind == "hero" {
