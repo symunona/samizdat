@@ -220,14 +220,17 @@ build-server:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{justfile_directory()}}/server"
-    # Stamp the running commit + build time into the binary so a live server can
-    # self-report which code it runs (GET /api/v1/health → commit). `just status`
-    # compares it to git HEAD to catch stale processes. `-dirty` = uncommitted tree.
+    # Stamp version + commit + build time into the binary so a live server can
+    # self-report which code it runs (GET /api/v1/health, /api/v1/me). version
+    # tracks the single product version from app/app.json (bumped by `just bump`
+    # / build-android) so server and app never diverge. `just status` compares
+    # /health's commit to git HEAD to catch stale processes. `-dirty` = uncommitted.
+    ver=$(python3 -c 'import json;print(json.load(open("{{justfile_directory()}}/app/app.json"))["expo"]["version"])' 2>/dev/null || echo 0.0.0-dev)
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
     [ -z "$(git status --porcelain 2>/dev/null)" ] || commit="${commit}-dirty"
     built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     pkg=github.com/symunona/samizdat/server/internal/api
-    CGO_ENABLED=0 go build -ldflags "-X ${pkg}.commit=${commit} -X ${pkg}.buildTime=${built}" -o bin/samizdat .
+    CGO_ENABLED=0 go build -ldflags "-X ${pkg}.version=${ver} -X ${pkg}.commit=${commit} -X ${pkg}.buildTime=${built}" -o bin/samizdat .
 
 [group('build')]
 [doc('Build the sam CLI')]

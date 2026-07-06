@@ -5,14 +5,15 @@ import (
 	"time"
 )
 
-const version = "0.1.0"
-
-// commit and buildTime are stamped at build time via `-ldflags -X` (see the
-// build-server just recipe). They let a running server report exactly which
-// code it is executing, so staleness is detectable from outside — `just status`
-// compares /health's commit to `git rev-parse HEAD`. The defaults apply to a
-// bare `go build`/`go run` with no ldflags.
+// version, commit and buildTime are stamped at build time via `-ldflags -X`
+// (see the build-server just recipe). version tracks the single product version
+// from app/app.json (`expo.version`), so server and app report the same number;
+// commit + buildTime let a running server report exactly which code it is
+// executing, so staleness is detectable from outside — `just status` compares
+// /health's commit to `git rev-parse HEAD`. The defaults apply to a bare
+// `go build`/`go run` with no ldflags.
 var (
+	version   = "0.0.0-dev"
 	commit    = "unknown"
 	buildTime = "unknown"
 )
