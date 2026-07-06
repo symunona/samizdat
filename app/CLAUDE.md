@@ -296,11 +296,11 @@ auto-scroll (`mediaTime` message) keeps following with **no** change to the tran
 ### Transcript helpers + language selector
 `Document.transcript` is a **lang-keyed map** `{lang: [segments]}` (legacy rows may be a bare array). `src/api.ts` helpers, always used — never `JSON.parse` inline:
 - `parseTranscripts(doc)` → `Record<lang, TranscriptSegment[]>` (accepts both map and legacy array).
-- `transcriptLangs(doc)` → languages present, **original first** (from `media_metadata.orig_lang`).
-- `parseTranscript(doc, lang?)` → one track: requested `lang`, else original, else first.
-- `parseMediaMetadata(doc)` → `{provider, external_id, duration_ms, transcript_status, orig_lang, transcript_langs, description}`.
+- `transcriptLangs(doc)` → languages present, in the server's **primary-first** order (`media_metadata.transcript_langs`).
+- `parseTranscript(doc, lang?)` → one track: requested `lang`, else the primary (`transcriptLangs[0]`).
+- `parseMediaMetadata(doc)` → `{provider, external_id, duration_ms, transcript_status, orig_lang, transcript_langs, description}`. `orig_lang` = the true original (marks the `·orig` pill); `transcript_langs[0]` = the default/primary track.
 
-`VideoDocument` shows a **language pill selector** above the transcript when >1 track exists; default = original (so a machine translation is never surfaced unasked). Ingest policy is set server-side in Settings → Transcript Languages (`AppSettings.language_prefs`).
+`VideoDocument` shows a **language pill selector** (codes; `·orig` marks `orig_lang`) above the transcript when >1 track exists; default = the primary track (original for a preserved language, English for a translated one). Ingest policy: one `preserved_langs` list in Settings → Transcript Languages (`AppSettings.language_prefs`) — languages kept original, everything else → English. `src/langNames.ts` (`displayLang`/`parseLangInput`) maps names↔codes for that editor.
 
 ### YouTube video ID
 `meta.external_id` from `parseMediaMetadata` is the YouTube video ID, fed to `YtPlayer` (see

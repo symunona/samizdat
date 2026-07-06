@@ -25,42 +25,29 @@ func TestWanted(t *testing.T) {
 		want  []string
 	}{
 		{
-			// The Borizü bug: a Hungarian video with the user reading Hungarian must
-			// keep only the original — never the English machine-translation.
-			name:  "native original, no translation",
-			prefs: Prefs{NativeLangs: []string{"hu", "en"}, TranslateToEnglish: true},
+			// The Borízű case: user preserves Hungarian → keep only the original,
+			// never the English machine-translation.
+			name:  "preserved original, no translation",
+			prefs: Prefs{PreservedLangs: []string{"hu", "en"}},
 			orig:  "hu",
 			want:  []string{"hu"},
 		},
 		{
-			// Non-native original with default policy → keep original AND fetch English.
-			name:  "non-native original translates to english",
-			prefs: Prefs{NativeLangs: []string{"en"}, TranslateToEnglish: true},
+			// Not preserved → English is primary, original kept alongside to switch.
+			name:  "non-preserved translates to english (primary)",
+			prefs: Prefs{PreservedLangs: []string{"en"}},
 			orig:  "de",
-			want:  []string{"de", "en"},
+			want:  []string{"en", "de"},
 		},
 		{
-			name:  "non-native but translation off keeps original only",
-			prefs: Prefs{NativeLangs: []string{"en"}, TranslateToEnglish: false},
-			orig:  "de",
-			want:  []string{"de"},
-		},
-		{
-			name:  "always-store langs are unioned in",
-			prefs: Prefs{NativeLangs: []string{"hu"}, AlwaysStoreLangs: []string{"fr", "hu"}},
-			orig:  "hu",
-			want:  []string{"hu", "fr"},
-		},
-		{
-			// Default (empty prefs) preserves the original AND keeps an English copy —
-			// the old code dropped the original entirely.
-			name:  "default preserves original plus english",
+			// Empty policy: a non-English video → English primary + original.
+			name:  "default non-english → english primary",
 			prefs: Default(),
 			orig:  "hu",
-			want:  []string{"hu", "en"},
+			want:  []string{"en", "hu"},
 		},
 		{
-			name:  "english original is not duplicated",
+			name:  "english original is single track",
 			prefs: Default(),
 			orig:  "en-US",
 			want:  []string{"en"},
@@ -70,6 +57,12 @@ func TestWanted(t *testing.T) {
 			prefs: Default(),
 			orig:  "",
 			want:  []string{"en"},
+		},
+		{
+			name:  "preserved non-english original kept as-is",
+			prefs: Prefs{PreservedLangs: []string{"fr"}},
+			orig:  "fr-CA",
+			want:  []string{"fr"},
 		},
 	}
 	for _, tc := range tests {
@@ -81,23 +74,27 @@ func TestWanted(t *testing.T) {
 	}
 }
 
-func TestParseFallsBackToDefault(t *testing.T) {
-	if got := Parse(""); !got.TranslateToEnglish {
-		t.Error("empty Parse should default TranslateToEnglish=true")
+func TestParse(t *testing.T) {
+	if got := Parse(""); got.PreservedLangs == nil {
+		t.Error("empty Parse should yield non-nil PreservedLangs")
 	}
-	if got := Parse("not json"); !got.TranslateToEnglish {
-		t.Error("malformed Parse should default TranslateToEnglish=true")
+	if got := Parse("not json"); got.PreservedLangs == nil {
+		t.Error("malformed Parse should yield non-nil PreservedLangs")
 	}
-	got := Parse(`{"native_langs":["hu"],"translate_to_english":false}`)
-	if len(got.NativeLangs) != 1 || got.NativeLangs[0] != "hu" || got.TranslateToEnglish {
+	// New key.
+	got := Parse(`{"preserved_langs":["hu","en"]}`)
+	if len(got.PreservedLangs) != 2 || got.PreservedLangs[0] != "hu" {
 		t.Errorf("Parse round-trip mismatch: %+v", got)
 	}
-	// Slice fields must be non-nil so the API emits [] not null (the app types
-	// them as string[] and calls .length/.map — a null would crash Settings).
-	for _, raw := range []string{"", "{}", `{"native_langs":null}`} {
-		p := Parse(raw)
-		if p.NativeLangs == nil || p.AlwaysStoreLangs == nil {
-			t.Errorf("Parse(%q) left a nil slice: %+v", raw, p)
+	// Legacy key still honored.
+	legacy := Parse(`{"native_langs":["fr"]}`)
+	if len(legacy.PreservedLangs) != 1 || legacy.PreservedLangs[0] != "fr" {
+		t.Errorf("legacy native_langs not migrated: %+v", legacy)
+	}
+	// Slice must be non-nil so the API emits [] not null (the app calls .map).
+	for _, raw := range []string{"", "{}", `{"preserved_langs":null}`} {
+		if p := Parse(raw); p.PreservedLangs == nil {
+			t.Errorf("Parse(%q) left a nil slice", raw)
 		}
 	}
 }

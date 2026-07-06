@@ -172,26 +172,27 @@ export function parseTranscripts(doc: Document): Record<string, TranscriptSegmen
   } catch { return {} }
 }
 
-// transcriptLangs returns the languages present in a Document's transcript,
-// original language first.
+// transcriptLangs returns the languages present in a Document's transcript, in
+// the server's order (primary/default track first — English for a translated
+// video, the original for a preserved one). Falls back to map key order.
 export function transcriptLangs(doc: Document): string[] {
-  const map = parseTranscripts(doc)
-  const keys = Object.keys(map)
-  const orig = parseMediaMetadata(doc).orig_lang
-  if (orig && keys.includes(orig)) return [orig, ...keys.filter(k => k !== orig)]
-  return keys
+  const present = Object.keys(parseTranscripts(doc))
+  const ordered = parseMediaMetadata(doc).transcript_langs
+  if (ordered && ordered.length) {
+    const inOrder = ordered.filter(l => present.includes(l))
+    for (const l of present) if (!inOrder.includes(l)) inOrder.push(l)
+    if (inOrder.length) return inOrder
+  }
+  return present
 }
 
 // parseTranscript returns the segments for one language: the requested lang, else
-// the original language, else the first available track.
+// the primary/default track (transcriptLangs[0]).
 export function parseTranscript(doc: Document, lang?: string): TranscriptSegment[] {
   const map = parseTranscripts(doc)
-  const keys = Object.keys(map)
-  if (keys.length === 0) return []
   if (lang && map[lang]) return map[lang]
-  const orig = parseMediaMetadata(doc).orig_lang
-  if (orig && map[orig]) return map[orig]
-  return map[keys[0]]
+  const order = transcriptLangs(doc)
+  return order.length ? (map[order[0]] || []) : []
 }
 
 // parseMediaMetadata safely parses the Document.media_metadata JSON string.
@@ -916,11 +917,10 @@ export type LLMUsageSummary = {
   total_cost_usd: number
 }
 
-// LanguagePrefs mirrors the server's transcript language policy (langpref.Prefs).
+// LanguagePrefs mirrors the server's transcript language policy (langpref.Prefs):
+// the languages to keep original (never translate). Everything else → English.
 export type LanguagePrefs = {
-  native_langs: string[]
-  translate_to_english: boolean
-  always_store_langs: string[]
+  preserved_langs: string[]
 }
 
 export type AppSettings = {

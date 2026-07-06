@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, mintExtensionToken, androidApkUrl, ApiError } from '../../src/api'
 import type { DeviceInfo, AppSettings, LanguagePrefs } from '../../src/api'
+import { displayLang, parseLangInput } from '../../src/langNames'
 import { APP_VERSION, APP_VERSION_CODE, isUpdateAvailable } from '../../src/appVersion'
 import { useLatestBuild } from '../../src/useUpdate'
 import { fetchYtdlpProxyStatus } from '../../src/proxyStatus'
@@ -60,10 +61,10 @@ function browserLangs(): string[] {
   } catch { return [] }
 }
 
-// addLang appends a normalized base language code to a list (no dups); returns the
-// same reference unchanged when nothing was added.
+// addLang parses a typed name-or-code and appends its base code to a list (no
+// dups); returns the same reference unchanged when nothing was added.
 function addLang(list: string[], raw: string): string[] {
-  const l = raw.toLowerCase().trim().split(/[-_]/)[0]
+  const l = parseLangInput(raw)
   if (!l || list.includes(l)) return list
   return [...list, l]
 }
@@ -89,8 +90,7 @@ export default function SettingsScreen() {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [settingsLoading, setSettingsLoading] = useState(false)
   const [langSaving, setLangSaving] = useState(false)
-  const [nativeInput, setNativeInput] = useState('')
-  const [alwaysInput, setAlwaysInput] = useState('')
+  const [langInput, setLangInput] = useState('')
   const langSeededRef = useRef(false)
   const [urlLastUsed, setUrlLastUsed] = useState<Record<string, string>>({})
   const [proxyStatus, setProxyStatus] = useState<YtdlpProxyStatus | null>(null)
@@ -268,15 +268,16 @@ export default function SettingsScreen() {
     }
   }, [activeUrl, token, toast, loadSettings])
 
-  // Seed the native-language list from the platform locale the first time we see an
-  // empty policy, so a fresh install defaults to "keep the languages I read native".
+  // Seed the preserved-language list from the platform locale the first time we
+  // see an empty policy, so a fresh install defaults to "keep the languages I
+  // read in their original language".
   useEffect(() => {
     if (!settings || langSeededRef.current) return
     langSeededRef.current = true
     const lp = settings.language_prefs
-    if (lp && (lp.native_langs ?? []).length === 0) {
+    if (lp && (lp.preserved_langs ?? []).length === 0) {
       const seed = browserLangs()
-      if (seed.length) saveLangPrefs({ ...lp, native_langs: seed })
+      if (seed.length) saveLangPrefs({ preserved_langs: seed })
     }
   }, [settings, saveLangPrefs])
 
@@ -368,38 +369,35 @@ export default function SettingsScreen() {
   const dotColor = status === 'connected' ? theme.colors.online : status === 'disconnected' ? theme.colors.error : theme.colors.placeholder
   const extDotColor = extStatus === 'connected' ? theme.colors.online : extStatus === 'unpaired' ? theme.colors.accent : theme.colors.placeholder
 
-  // Chip editor for one language list (native / always-store), shared by both rows.
-  const renderChipEditor = (
-    langKey: 'native_langs' | 'always_store_langs',
-    input: string,
-    setInput: (v: string) => void,
-  ) => {
+  // Editor for the single "keep original" language list: chips of friendly names
+  // plus a name-or-code add field.
+  const renderLangEditor = () => {
     const lp = settings?.language_prefs
     if (!lp) return null
-    const list = lp[langKey] ?? []
+    const list = lp.preserved_langs ?? []
     const commit = () => {
-      const next = addLang(list, input)
-      setInput('')
-      if (next !== list) saveLangPrefs({ ...lp, [langKey]: next })
+      const next = addLang(list, langInput)
+      setLangInput('')
+      if (next !== list) saveLangPrefs({ preserved_langs: next })
     }
     return (
       <>
         <View style={s.langChips}>
           {list.map((l) => (
             <View key={l} style={s.langChip}>
-              <Text style={s.langChipText}>{l.toUpperCase()}</Text>
-              <Pressable onPress={() => saveLangPrefs({ ...lp, [langKey]: list.filter((x) => x !== l) })} hitSlop={6}>
+              <Text style={s.langChipText}>{displayLang(l)}</Text>
+              <Pressable onPress={() => saveLangPrefs({ preserved_langs: list.filter((x) => x !== l) })} hitSlop={6}>
                 <Ionicons name="close" size={13} color={theme.colors.muted} />
               </Pressable>
             </View>
           ))}
-          {list.length === 0 ? <Text style={s.langEmpty}>none</Text> : null}
+          {list.length === 0 ? <Text style={s.langEmpty}>none — every video will be translated to English</Text> : null}
         </View>
         <View style={s.langAddRow}>
           <TextInput
-            value={input}
-            onChangeText={setInput}
-            placeholder="add code e.g. hu"
+            value={langInput}
+            onChangeText={setLangInput}
+            placeholder="add a language…"
             placeholderTextColor={theme.colors.muted}
             style={s.langInput}
             autoCapitalize="none"
@@ -573,34 +571,14 @@ export default function SettingsScreen() {
         <View style={s.cardHeader}>
           <View style={{ flex: 1 }}>
             <Text style={s.cardTitle}>Transcript Languages</Text>
-            <Text style={s.cardSubtitle}>Keep the original transcript for languages you read; translate the rest to English.</Text>
+            <Text style={s.cardSubtitle}>Keep videos in these languages in their original language. Everything else is translated to English.</Text>
           </View>
           {langSaving ? <ActivityIndicator size="small" color={theme.colors.accent} /> : null}
         </View>
         {settings === null ? (
           <ActivityIndicator size="small" color={theme.colors.accent} />
         ) : (
-          <>
-            <Text style={s.langGroupLabel}>Keep native (no translation)</Text>
-            {renderChipEditor('native_langs', nativeInput, setNativeInput)}
-
-            <View style={[s.cardHeader, { marginTop: theme.spacing.md }]}>
-              <View style={{ flex: 1 }}>
-                <Text style={s.langGroupLabel}>Translate others to English</Text>
-                <Text style={s.cardSubtitle}>When a video&apos;s language isn&apos;t in your list, also fetch an English translation.</Text>
-              </View>
-              <Switch
-                value={settings.language_prefs.translate_to_english}
-                onValueChange={(v) => saveLangPrefs({ ...settings.language_prefs, translate_to_english: v })}
-                disabled={langSaving}
-                trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
-                thumbColor={theme.colors.background}
-              />
-            </View>
-
-            <Text style={[s.langGroupLabel, { marginTop: theme.spacing.md }]}>Always also store</Text>
-            {renderChipEditor('always_store_langs', alwaysInput, setAlwaysInput)}
-          </>
+          renderLangEditor()
         )}
       </View>
 
@@ -980,7 +958,6 @@ function buildStyles(t: Theme) {
     refreshBtnDisabled: { borderColor: t.colors.border },
     refreshBtnText: { color: t.colors.accent, fontSize: 13, fontWeight: '600' },
     // Transcript-language editor
-    langGroupLabel: { color: t.colors.text, fontSize: 13, fontWeight: '600', marginTop: t.spacing.sm },
     langChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: t.spacing.xs },
     langChip: {
       flexDirection: 'row', alignItems: 'center', gap: 4,

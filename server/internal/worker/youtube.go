@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -127,8 +126,11 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 	}
 	prefsRaw, _ := q.GetSetting(ctx, langpref.SettingKey)
 	prefs := langpref.Parse(prefsRaw)
-	wanted := prefs.Wanted(info.Language) // wanted[0] == original language
-	origLang := wanted[0]
+	wanted := prefs.Wanted(info.Language) // wanted[0] == primary (default/pipeline) track
+	trueOrig := langpref.BaseLang(info.Language)
+	if trueOrig == "" {
+		trueOrig = "en"
+	}
 
 	// Download pass: audio + the wanted subtitle tracks in one session.
 	// Re-encode to 64k AAC: transparent for speech, ~half the disk/sync size on
@@ -169,24 +171,30 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 	}
 
 	// Transcript: lang-keyed map {lang: [segments]}. Per language, manual subs
-	// win over auto-captions. status reflects the ORIGINAL language's track.
+	// win over auto-captions. status reflects the PRIMARY (wanted[0]) track.
 	transcriptMap, status := loadTranscripts(base, wanted, info)
 	transcriptJSON := "{}"
 	if len(transcriptMap) > 0 {
 		b, _ := json.Marshal(transcriptMap)
 		transcriptJSON = string(b)
 	}
-	langs := make([]string, 0, len(transcriptMap))
-	for l := range transcriptMap {
-		langs = append(langs, l)
+	// langs in wanted order (primary first) so the app defaults to the primary
+	// track — English for a translated video, the original for a preserved one.
+	langs := make([]string, 0, len(wanted))
+	for _, l := range wanted {
+		if _, ok := transcriptMap[l]; ok {
+			langs = append(langs, l)
+		}
 	}
-	sort.Strings(langs)
-	origSegs := transcriptMap[origLang]
+	primary := ""
+	if len(langs) > 0 {
+		primary = langs[0]
+	}
 
-	// Body markdown = flattened ORIGINAL transcript (so Pipeline/Highlight/
-	// Annotation work on the native language, never a machine translation);
+	// Body markdown = flattened PRIMARY transcript (so Pipeline/Highlight/
+	// Annotation work on the language the reader actually sees);
 	// fall back to the video description when there's no transcript.
-	md := transcript.FlattenText(origSegs)
+	md := transcript.FlattenText(transcriptMap[primary])
 	if strings.TrimSpace(md) == "" {
 		md = strings.TrimSpace(info.Description)
 	}
@@ -210,7 +218,7 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 		ExternalID:       videoID,
 		DurationMs:       int64(info.Duration * 1000),
 		TranscriptStatus: status,
-		OrigLang:         origLang,
+		OrigLang:         trueOrig,
 		TranscriptLangs:  langs,
 		Description:      strings.TrimSpace(info.Description),
 	}
@@ -266,15 +274,15 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 	// lang-keyed transcript map rebuildable (design rule 1) without re-fetching.
 	// The probe pass writes no info.json, so there is nothing else to clean up.
 
-	logScraper.Printf("youtube document %s: %q orig=%s transcript=%s langs=%v segs=%d dur=%dms",
-		doc.ID[:8], title, origLang, status, langs, len(origSegs), meta.DurationMs)
+	logScraper.Printf("youtube document %s: %q orig=%s primary=%s transcript=%s langs=%v segs=%d dur=%dms",
+		doc.ID[:8], title, trueOrig, primary, status, langs, len(transcriptMap[primary]), meta.DurationMs)
 
 	// Reuse the shared finalize: thumbnail download + pipeline triggers.
 	finishDocument(ctx, q, job, doc, title, manual)
 
 	res, _ := json.Marshal(map[string]any{
 		"document_id": doc.ID, "title": title, "media_type": "video",
-		"transcript": status, "orig_lang": origLang, "langs": langs, "segments": len(origSegs),
+		"transcript": status, "orig_lang": trueOrig, "primary": primary, "langs": langs, "segments": len(transcriptMap[primary]),
 	})
 	return string(res), nil
 }
