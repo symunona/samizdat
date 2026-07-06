@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
+	github.com/andybalholm/cascadia v1.3.4
 	github.com/google/uuid v1.6.0
 	github.com/markusmobius/go-trafilatura v1.12.2
 	github.com/playwright-community/playwright-go v0.5700.1
@@ -20,7 +21,6 @@ require (
 require (
 	github.com/JohannesKaufmann/dom v0.3.1 // indirect
 	github.com/RadhiFadlillah/whatlanggo v0.0.0-20240916001553-aac1f0f737fc // indirect
-	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
 	github.com/deckarep/golang-set/v2 v2.8.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

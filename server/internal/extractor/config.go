@@ -23,6 +23,14 @@ type ExtractorConfig struct {
 	// rss fields
 	FeedURL string `yaml:"feed_url,omitempty"`
 
+	// ArticleSelector, when set, prunes fetched article HTML to the node(s)
+	// matching this CSS selector before trafilatura extraction — used to strip
+	// trailing "recommended articles" blocks that trafilatura would otherwise
+	// swallow into the Document body. The original <head> is preserved (it is
+	// trafilatura's metadata source); only <body> is replaced with the match.
+	// A selector that matches nothing is a no-op (the raw HTML passes through).
+	ArticleSelector string `yaml:"article_selector,omitempty"`
+
 	// Auth, when set, logs in once and reuses a persisted browser session
 	// (storageState cookie jar) so paywalled articles render full-text.
 	Auth *AuthConfig `yaml:"auth,omitempty"`

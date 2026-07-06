@@ -16,6 +16,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	"github.com/andybalholm/cascadia"
 	"github.com/google/uuid"
 	trafilatura "github.com/markusmobius/go-trafilatura"
 	"github.com/symunona/samizdat/server/internal/config"
@@ -150,6 +151,14 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 
 	bodyBytes := []byte(htmlStr)
 	logScraper.Printf("fetched %d bytes HTML from %s", len(bodyBytes), canonical)
+
+	// Optional per-domain prune: keep only the article-content node so trafilatura
+	// never swallows a trailing "recommended articles" block into the Document body.
+	if cfg, ok := reg.LookupByURL(canonical); ok && cfg.ArticleSelector != "" {
+		before := len(bodyBytes)
+		bodyBytes = pruneToArticle(bodyBytes, cfg.ArticleSelector)
+		logScraper.Printf("article_selector %q: %d→%d bytes", cfg.ArticleSelector, before, len(bodyBytes))
+	}
 
 	// Lift <figure>-wrapped images into plain <p><img> so trafilatura keeps them
 	// inline at their real position (it discards <figure> but keeps <img> in <p>).
@@ -492,6 +501,68 @@ func leadListCheckStr(line string) string {
 		stripped = stripped[:maxLen]
 	}
 	return stripped
+}
+
+// pruneToArticle rewrites rawHTML to keep only the node(s) matching selector inside
+// <body>, preserving the original <head> verbatim (trafilatura reads Title/Author/
+// Date/Image/Description from its meta/OG tags — pruning to only the article div
+// would blank all of that). Used to drop trailing "recommended articles" blocks that
+// trafilatura would otherwise fold into the Document body. Returns rawHTML unchanged
+// when the selector fails to compile or matches nothing — it never emits an empty doc.
+func pruneToArticle(rawHTML []byte, selector string) []byte {
+	sel, err := cascadia.Compile(selector)
+	if err != nil {
+		logScraper.Warnf("article_selector %q failed to compile: %v — leaving HTML unpruned", selector, err)
+		return rawHTML
+	}
+	root, err := html.Parse(bytes.NewReader(rawHTML))
+	if err != nil {
+		return rawHTML
+	}
+
+	matches := cascadia.QueryAll(root, sel)
+	if len(matches) == 0 {
+		logScraper.Warnf("article_selector %q matched no nodes — leaving HTML unpruned", selector)
+		return rawHTML
+	}
+
+	var body *html.Node
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if body == nil && n.Type == html.ElementNode && n.DataAtom == atom.Body {
+			body = n
+		}
+		for c := n.FirstChild; c != nil && body == nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(root)
+	if body == nil {
+		return rawHTML
+	}
+
+	// Detach matched nodes, empty the body, then re-append the matches in document
+	// order. Detaching first (mutating the tree invalidates sibling links) mirrors
+	// the collect-then-mutate pattern in unwrapFigureImages.
+	for _, m := range matches {
+		if m.Parent != nil {
+			m.Parent.RemoveChild(m)
+		}
+	}
+	for body.FirstChild != nil {
+		body.RemoveChild(body.FirstChild)
+	}
+	for _, m := range matches {
+		if m.Parent == nil { // guard against nested matches already re-parented
+			body.AppendChild(m)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := renderNode(&buf, root); err != nil {
+		return rawHTML
+	}
+	return buf.Bytes()
 }
 
 // figureSkipZones are regions whose figures are boilerplate, never article content.

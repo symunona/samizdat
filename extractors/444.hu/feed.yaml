@@ -4,6 +4,12 @@ url_pattern: "/\\d{4}/\\d{2}/"
 base_url: "https://444.hu"
 max_urls: 100
 
+# Prune fetched article HTML to the body-copy node before trafilatura runs. 444
+# appends a "Kapcsolódó cikkek" (recommended articles) block that lives OUTSIDE
+# div.slotArticle; without this the extractor swallows those headlines into the
+# Document body. slotArticle is 444's semantic component slot for the article copy.
+article_selector: "div.slotArticle"
+
 # Paywall login. 444's SSO lives on magyarjeti.hu (parent co); the ?redirect=
 # sends the session back to 444.hu so its cookie is set. Run `sam login 444.hu`
 # to mint the session jar.
