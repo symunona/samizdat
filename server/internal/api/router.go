@@ -101,6 +101,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	mux.HandleFunc("DELETE /api/v1/documents/{id}", bearerAuth(q, docsH.delete))
 	mux.HandleFunc("GET /api/v1/documents/{id}/media", bearerAuth(q, docsH.listMedia))
 	mux.HandleFunc("POST /api/v1/documents/{id}/queue-pipelines", bearerAuth(q, docsH.queuePipelines))
+	mux.HandleFunc("POST /api/v1/documents/{id}/queue-video", bearerAuth(q, docsH.queueVideo))
 
 	annH := &annotationsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents/{id}/annotations", bearerAuth(q, annH.list))
@@ -128,6 +129,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	mediaH := &mediaHandler{q: q, cacheDir: cacheDir}
 	mux.HandleFunc("GET /api/v1/media/{id}", mediaH.serve)
 	mux.HandleFunc("GET /api/v1/documents/{id}/audio", mediaH.serveDocAudio)
+	mux.HandleFunc("GET /api/v1/documents/{id}/video", mediaH.serveDocVideo)
 
 	rsH := &readStatesHandler{q: q}
 	mux.HandleFunc("GET /api/v1/documents/{id}/progress", bearerAuth(q, rsH.get))

@@ -3,8 +3,10 @@ package worker
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -254,6 +256,112 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 	res, _ := json.Marshal(map[string]any{
 		"document_id": doc.ID, "title": title, "media_type": "video",
 		"transcript": status, "segments": len(segs),
+	})
+	return string(res), nil
+}
+
+// fetchVideoPayload is the fetch_video job payload — an already-ingested video
+// Document to download a playable stream for.
+type fetchVideoPayload struct {
+	DocumentID string `json:"document_id"`
+}
+
+// handleFetchVideo downloads a native video stream for an already-ingested video
+// Document (by canonical URL) so the app can play it without the YouTube embed.
+// On-demand — most video Docs are never watched, and video is far larger than the
+// audio we always fetch. Idempotent: skips if a video asset already exists.
+func handleFetchVideo(ctx context.Context, q *store.Queries, job store.Job, cacheDir string, cfg config.YTDLPSection) (string, error) {
+	var p fetchVideoPayload
+	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
+		return "", fmt.Errorf("bad payload: %w", err)
+	}
+	doc, err := q.GetDocumentByID(ctx, p.DocumentID)
+	if err != nil {
+		return "", fmt.Errorf("get document: %w", err)
+	}
+	// Already fetched — no-op (idempotent retries / duplicate triggers).
+	if _, err := q.GetMediaAssetByDocumentAndKind(ctx, store.GetMediaAssetByDocumentAndKindParams{
+		DocumentID: doc.ID, Kind: "video",
+	}); err == nil {
+		return `{"skipped":"video already fetched"}`, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("check video asset: %w", err)
+	}
+	vid, ok := youtubeID(doc.CanonicalUrl)
+	if !ok {
+		return "", fmt.Errorf("document %s is not a youtube video", doc.ID[:8])
+	}
+	return fetchDocVideo(ctx, q, doc.CanonicalUrl, vid, cacheDir, cfg)
+}
+
+// fetchDocVideo downloads a capped-resolution muxed mp4 for a video Document and
+// records it as a media_asset with kind="video". Prefers a muxed mp4 ≤720p, falls
+// back to merging ≤480p video+audio — capping resolution keeps the 4GB box's disk
+// in check. Routed through the configured proxy (the VPS IP is bot-blocked).
+func fetchDocVideo(ctx context.Context, q *store.Queries, canonical, videoID, cacheDir string, cfg config.YTDLPSection) (string, error) {
+	bin := cfg.Path
+	if bin == "" {
+		bin = "yt-dlp"
+	}
+
+	mediaDir := filepath.Join(cacheDir, "media")
+	if err := os.MkdirAll(mediaDir, 0755); err != nil {
+		return "", fmt.Errorf("mkdir media: %w", err)
+	}
+
+	videoAssetID := IDFromURL(canonical + "#video")
+	base := filepath.Join(mediaDir, videoAssetID)
+
+	args := []string{
+		"-f", "best[ext=mp4][vcodec!=none][acodec!=none][height<=720]/bv*[height<=480]+ba/best[height<=480]",
+		"--merge-output-format", "mp4",
+		"--no-playlist", "--no-progress",
+		"-o", base + ".%(ext)s",
+	}
+	if cfg.Proxy != "" {
+		args = append(args, "--proxy", cfg.Proxy)
+	}
+	if cfg.Cookies != "" {
+		args = append(args, "--cookies", cfg.Cookies)
+	}
+	args = append(args, canonical)
+
+	logScraper.Printf("yt-dlp video %s (proxy=%q)", canonical, cfg.Proxy)
+	cmd := exec.CommandContext(ctx, bin, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", classifyYTDLPError(err, string(out), cfg)
+	}
+
+	// Locate the produced file (ext should be .mp4 after the merge).
+	videoPath := base + ".mp4"
+	if _, err := os.Stat(videoPath); err != nil {
+		if found := firstMatch(base + ".*"); found != "" {
+			videoPath = found
+		} else {
+			return "", fmt.Errorf("yt-dlp produced no video file")
+		}
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	docID := IDFromURL(canonical)
+	relPath := filepath.Join("media", filepath.Base(videoPath))
+	if _, err := q.UpsertMediaAsset(ctx, store.UpsertMediaAssetParams{
+		ID:          videoAssetID,
+		DocumentID:  docID,
+		OriginalUrl: canonical + "#video",
+		LocalPath:   relPath,
+		Kind:        "video",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		return "", fmt.Errorf("insert video asset: %w", err)
+	}
+
+	logScraper.Printf("youtube video asset %s for %s (%s)", videoAssetID[:8], canonical, filepath.Base(videoPath))
+
+	res, _ := json.Marshal(map[string]any{
+		"document_id": docID, "video_asset": videoAssetID, "file": filepath.Base(videoPath),
 	})
 	return string(res), nil
 }

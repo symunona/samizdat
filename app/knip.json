@@ -12,6 +12,7 @@
     "babel.config.js",
     "src/useAudio.web.ts",
     "src/YtPlayer.web.tsx",
+    "src/ServerVideoPlayer.web.tsx",
     "src/ShareIntentBridge.web.tsx",
     "src/webview/document-viewer.ts"
   ],

@@ -21,6 +21,7 @@ import WebView from 'react-native-webview'
 import type { WebViewMessageEvent } from 'react-native-webview'
 import { useMediaTimeline } from './useMediaTimeline'
 import YtPlayer from './YtPlayer'
+import ServerVideoPlayer from './ServerVideoPlayer'
 import * as FileSystem from 'expo-file-system/legacy'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
@@ -30,6 +31,9 @@ import {
   updateAnnotation,
   deleteAnnotation,
   audioDocUrl,
+  videoDocUrl,
+  probeVideoReady,
+  queueVideo,
   parseTranscript,
   parseMediaMetadata,
   fetchReadingProgress,
@@ -123,6 +127,12 @@ const MARK_JUMP = '#f5b301'
 const MARK_ANN = '#a78bfa'
 // Resume tracking pauses for this much *forward playback* after any jump.
 const JUMP_GRACE_MS = 10000
+// How long to poll for the server-fetched video before giving up and falling back
+// to the YouTube embed. yt-dlp downloads a capped-res mp4; ~2 min is a safe ceiling.
+const VIDEO_FETCH_TIMEOUT_MS = 120000
+
+// Native-video lifecycle: probe → (fetch + poll) → ready, or fail → embed fallback.
+type ServerVideoState = 'idle' | 'probing' | 'preparing' | 'ready' | 'failed'
 
 export default function VideoDocument({ doc, from }: { doc: Document; from?: string }) {
   const router = useRouter()
@@ -152,9 +162,12 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const [localUri, setLocalUri] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [trackWidth, setTrackWidth] = useState(0)
-  // YouTube IFrame error code, if any. 101/150 = owner disabled embedding → we
-  // swap the black player box for an "open in YouTube" fallback (see below).
+  // YouTube IFrame error code, if any. 101/150/152/153 = the embed can't play here
+  // → we swap the black player box for an "open in YouTube" fallback (see below).
   const [ytError, setYtError] = useState<number | null>(null)
+  // Native server-video lifecycle. Preferred over the embed when available (no
+  // error 152, no ads); falls back to the YtPlayer embed on fetch failure/timeout.
+  const [serverVideoState, setServerVideoState] = useState<ServerVideoState>('idle')
   // Playback position captured when the video view opens, so the YouTube player
   // starts exactly where the audio was.
   const [videoStartMs, setVideoStartMs] = useState(0)
@@ -186,10 +199,17 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   // <audio> element (offline local file if synced, else the server stream) OR the
   // YouTube player while the video view is open — same interface either way.
   const remoteUrl = activeUrl ? audioDocUrl(activeUrl, doc.id) : ''
+  const serverVideoUrl = activeUrl ? videoDocUrl(activeUrl, doc.id) : ''
+  // Which video backend (if any) is mounted: the native server stream when it's
+  // fetched, else the YouTube embed once the stream fetch has failed/timed out.
+  const serverMode = serverVideoState === 'ready'
+  const embedMode = serverVideoState === 'failed' && !!ytId
+  const hasVideoBackend = serverMode || embedMode
+  const preparingVideo = showVideo && (serverVideoState === 'probing' || serverVideoState === 'preparing')
   const {
     playing, positionMs, durationMs: mediaDurMs, rate,
     play, pause, seek, setRate, videoActive, ytRef, onYtStatus,
-  } = useMediaTimeline({ audioUrl: localUri ?? remoteUrl, ytId, showVideo, meta: nowPlaying })
+  } = useMediaTimeline({ audioUrl: localUri ?? remoteUrl, hasVideo: hasVideoBackend, showVideo, meta: nowPlaying })
   // Prefer the real media duration; fall back to the metadata estimate.
   const durationMs = mediaDurMs > 0 ? mediaDurMs : (meta.duration_ms ?? 0)
 
@@ -524,21 +544,69 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('message', onMsg) }
   }, [handleHotkey])
 
-  // Show the video view as an alternate VIEW of the same timeline. Capture the
-  // current position so the YouTube player starts exactly there; the timeline hook
-  // handles the audio↔video handoff (pause the <audio>, resume it on collapse).
-  const toggleVideo = useCallback(() => {
-    if (!showVideo) { setVideoStartMs(positionMs); setYtError(null) }
-    setShowVideo(v => !v)
-  }, [showVideo, positionMs])
+  // Ensure a native video stream is available: probe the server, and if it hasn't
+  // been fetched yet, ask it to download one (idempotent) and poll until ready. On
+  // any failure we mark 'failed' → the render falls back to the YouTube embed.
+  const ensureServerVideo = useCallback(async () => {
+    if (!activeUrl || !token || serverVideoState === 'ready') return
+    setServerVideoState('probing')
+    try {
+      if (await probeVideoReady(activeUrl, doc.id)) { setServerVideoState('ready'); return }
+      const res = await queueVideo(activeUrl, token, doc.id)
+      setServerVideoState(res.status === 'ready' ? 'ready' : 'preparing')
+    } catch (e) {
+      log.error('ensure server video failed', e)
+      setServerVideoState('failed')
+    }
+  }, [activeUrl, token, doc.id, serverVideoState])
 
-  // YouTube reported an error. Codes 101 & 150 mean the owner disabled embedding —
-  // the video genuinely can't play here, so surface a fallback instead of a black box.
+  // While preparing, poll the server every 3s until the stream lands (or time out
+  // and fall back to the embed so the user is never stuck on a spinner).
+  useEffect(() => {
+    if (serverVideoState !== 'preparing' || !activeUrl) return
+    let cancelled = false
+    const started = Date.now()
+    const id = setInterval(async () => {
+      if (cancelled) return
+      if (await probeVideoReady(activeUrl, doc.id)) {
+        if (!cancelled) setServerVideoState('ready')
+      } else if (Date.now() - started > VIDEO_FETCH_TIMEOUT_MS) {
+        if (!cancelled) { log.error('server video fetch timed out'); setServerVideoState('failed') }
+      }
+    }, 3000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [serverVideoState, activeUrl, doc.id])
+
+  // When a video backend first becomes available (server stream ready OR the embed
+  // fallback kicks in), start it from the CURRENT position — audio may have kept
+  // playing while the stream was preparing, so the tap-time position is stale.
+  const prevHasBackend = useRef(false)
+  useEffect(() => {
+    if (hasVideoBackend && !prevHasBackend.current) setVideoStartMs(Math.floor(positionRef.current))
+    prevHasBackend.current = hasVideoBackend
+  }, [hasVideoBackend])
+
+  // Show the video view as an alternate VIEW of the same timeline. Kicks off the
+  // native-video fetch; the timeline hook handles the audio↔video handoff (pause the
+  // <audio>, resume it on collapse) once a backend is mounted.
+  const toggleVideo = useCallback(() => {
+    if (!showVideo) { setYtError(null); void ensureServerVideo() }
+    setShowVideo(v => !v)
+  }, [showVideo, ensureServerVideo])
+
+  // The YouTube embed reported an error. Codes 101/150/152/153 mean it can't play
+  // here (owner disabled embedding, or an ad-blocked network fails YT's ad-status
+  // script → error 152) — surface a fallback instead of a black box.
   const handleYtError = useCallback((code: number) => {
     log.error('yt player error', code)
     setYtError(code)
   }, [])
-  const embedDisabled = ytError === 101 || ytError === 150
+  // The native server stream failed to load → fall back to the YouTube embed.
+  const handleServerVideoError = useCallback((code: number) => {
+    log.error('server video player error', code)
+    setServerVideoState('failed')
+  }, [])
+  const embedDisabled = ytError === 101 || ytError === 150 || ytError === 152 || ytError === 153
 
   // Collapse back to audio-only, continuing from the video's position.
   const switchToAudio = useCallback(() => setShowVideo(false), [])
@@ -613,20 +681,25 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
       <PendingPipelineBanner docId={doc.id} isVideo />
 
-      {/* Player / thumbnail — pinned to the top (never scrolls away). */}
+      {/* Player / thumbnail — pinned to the top (never scrolls away). Prefers the
+          native server stream; falls back to the YouTube embed on fetch failure. */}
       <View style={s.player}>
-          {videoActive && ytId ? (
+          {videoActive ? (
             <View ref={videoBoxRef} style={[s.videoBox, playerDims]}>
-              <YtPlayer ref={ytRef} videoId={ytId} startMs={videoStartMs} rate={rate} onStatus={onYtStatus} onError={handleYtError} />
-              {embedDisabled ? (
+              {serverMode ? (
+                <ServerVideoPlayer ref={ytRef} src={serverVideoUrl} startMs={videoStartMs} rate={rate} onStatus={onYtStatus} onError={handleServerVideoError} />
+              ) : (
+                <YtPlayer ref={ytRef} videoId={ytId as string} startMs={videoStartMs} rate={rate} onStatus={onYtStatus} onError={handleYtError} />
+              )}
+              {embedMode && embedDisabled ? (
                 <View style={s.ytErrorBox}>
                   <Ionicons name="alert-circle-outline" size={30} color="#fff" />
-                  <Text style={s.ytErrorText}>This video can’t be embedded.</Text>
+                  <Text style={s.ytErrorText}>Can’t play this video here.</Text>
                   <Pressable onPress={() => Linking.openURL(`https://www.youtube.com/watch?v=${ytId}`)} style={s.ytErrorLink} hitSlop={8}>
                     <Ionicons name="logo-youtube" size={16} color="#fff" />
                     <Text style={s.ytErrorLinkText}>Open in YouTube</Text>
                   </Pressable>
-                  <Text style={s.ytErrorHint}>Tap “Audio only” to keep listening here.</Text>
+                  <Text style={s.ytErrorHint}>Or tap “Audio only” to keep listening here.</Text>
                 </View>
               ) : null}
               <View style={s.videoBtns}>
@@ -635,6 +708,22 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
                     <Ionicons name="expand" size={16} color="#fff" />
                   </Pressable>
                 ) : null}
+                <Pressable onPress={toggleVideo} style={s.videoBtn} hitSlop={10}>
+                  <Ionicons name="chevron-up" size={16} color="#fff" />
+                </Pressable>
+              </View>
+            </View>
+          ) : preparingVideo ? (
+            <View style={[s.thumbBox, playerDims]}>
+              {doc.hero_image_url ? (
+                <Image source={{ uri: doc.hero_image_url }} style={s.thumb} resizeMode="cover" />
+              ) : <View style={[s.thumb, s.thumbPlaceholder]} />}
+              <View style={s.ytErrorBox}>
+                <ActivityIndicator size="large" color="#fff" />
+                <Text style={s.ytErrorText}>Preparing video…</Text>
+                <Text style={s.ytErrorHint}>Fetching a playable stream — you can keep listening.</Text>
+              </View>
+              <View style={s.videoBtns}>
                 <Pressable onPress={toggleVideo} style={s.videoBtn} hitSlop={10}>
                   <Ionicons name="chevron-up" size={16} color="#fff" />
                 </Pressable>

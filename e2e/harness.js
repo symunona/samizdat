@@ -140,10 +140,14 @@ VALUES ('${q(id)}','${q(canonicalUrl)}','${q(title)}','${q(markdown)}','${now}',
 // Seed the video Document used by the smoke test's player + export checks.
 export function seedVideoDoc(deviceId, videoDocId) {
   const aid = 'eeeeeeee-0000-4000-8000-0000000000a1'
+  const vid = 'eeeeeeee-0000-4000-8000-0000000000c1'
   const rsid = 'eeeeeeee-0000-4000-8000-0000000000b1'
   const mediaDir = '/tmp/samizdat-test/cache/media'
   fs.mkdirSync(mediaDir, { recursive: true })
+  // Placeholder files: make GET /documents/:id/{audio,video} return 200 (no 4xx);
+  // the headless run never plays them.
   fs.writeFileSync(join(mediaDir, `${aid}.m4a`), Buffer.alloc(2048))
+  fs.writeFileSync(join(mediaDir, `${vid}.mp4`), Buffer.alloc(4096))
   const now = new Date().toISOString()
   const segs = [
     { start_ms: 0, end_ms: 3000, text: 'First line of the seeded transcript.' },
@@ -160,6 +164,8 @@ INSERT OR REPLACE INTO documents (id,canonical_url,title,markdown,fetched_at,exc
 VALUES ('${videoDocId}','${cu}','Smoke Video','${markdown}','${now}','','','Smoke',NULL,NULL,'smokehash','video','${meta}','${transcript}','${now}','${now}',1,NULL);
 INSERT OR REPLACE INTO media_assets (id,document_id,original_url,local_path,kind,width,height,created_at,updated_at,rev,deleted_at)
 VALUES ('${aid}','${videoDocId}','${cu}#audio','media/${aid}.m4a','audio',NULL,NULL,'${now}','${now}',0,NULL);
+INSERT OR REPLACE INTO media_assets (id,document_id,original_url,local_path,kind,width,height,created_at,updated_at,rev,deleted_at)
+VALUES ('${vid}','${videoDocId}','${cu}#video','media/${vid}.mp4','video',NULL,NULL,'${now}','${now}',0,NULL);
 INSERT OR REPLACE INTO read_states (id,device_id,document_id,scroll_y,created_at,updated_at,rev,deleted_at)
 VALUES ('${rsid}','${deviceId}','${videoDocId}',0,'${now}','${now}',0,NULL);
 `

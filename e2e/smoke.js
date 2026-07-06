@@ -78,6 +78,10 @@ async function runSmoke() {
   // Auto-export: the seeded video Document must land on disk as markdown.
   errors.push(...await runExportChecks(token))
 
+  // Native-video serve endpoint: full-file 200 + range 206 (seek), + idempotent
+  // queue-video when the asset already exists.
+  errors.push(...await runVideoApiChecks(token))
+
   return errors
 }
 
@@ -146,6 +150,51 @@ async function runExportChecks(token) {
     else console.log('  PASS [export] _index.md built')
   } catch (e) {
     out.push(`[export] disk check threw: ${e.message}`)
+  }
+
+  return out
+}
+
+// runVideoApiChecks validates the server-served native video endpoints against the
+// seeded video-kind media asset (the web/native player streams from these).
+async function runVideoApiChecks(token) {
+  const auth = { Authorization: `Bearer ${token}` }
+  const videoUrl = `${BASE_URL}/api/v1/documents/${VIDEO_DOC_ID}/video`
+  const out = []
+
+  // 1. Full-file GET → 200 with a video content type.
+  try {
+    const res = await fetch(videoUrl)
+    if (res.status !== 200) out.push(`[video-api] GET /video: expected 200, got ${res.status}`)
+    else if (!(res.headers.get('content-type') || '').startsWith('video/')) {
+      out.push(`[video-api] GET /video: content-type not video/* (${res.headers.get('content-type')})`)
+    } else console.log('  PASS [video-api] GET /video → 200 video/*')
+  } catch (e) {
+    out.push(`[video-api] GET /video threw: ${e.message}`)
+  }
+
+  // 2. Range request → 206 Partial Content (native/web seek relies on this).
+  try {
+    const res = await fetch(videoUrl, { headers: { Range: 'bytes=0-1023' } })
+    if (res.status !== 206) out.push(`[video-api] Range GET /video: expected 206, got ${res.status}`)
+    else console.log('  PASS [video-api] Range GET /video → 206')
+    // Drain the body so the socket closes cleanly.
+    await res.arrayBuffer()
+  } catch (e) {
+    out.push(`[video-api] Range GET /video threw: ${e.message}`)
+  }
+
+  // 3. queue-video when the asset already exists → 2xx no-op ("ready").
+  try {
+    const res = await fetch(`${BASE_URL}/api/v1/documents/${VIDEO_DOC_ID}/queue-video`, { method: 'POST', headers: auth })
+    if (!res.ok) out.push(`[video-api] queue-video: expected 2xx, got ${res.status}`)
+    else {
+      const body = await res.json()
+      if (body.status !== 'ready') out.push(`[video-api] queue-video: expected status "ready", got "${body.status}"`)
+      else console.log('  PASS [video-api] queue-video (asset exists) → ready no-op')
+    }
+  } catch (e) {
+    out.push(`[video-api] queue-video threw: ${e.message}`)
   }
 
   return out

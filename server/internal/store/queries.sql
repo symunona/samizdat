@@ -289,6 +289,13 @@ WHERE kind = 'run_pipeline'
   AND status IN ('queued', 'running', 'paused')
   AND deleted_at IS NULL;
 
+-- name: CountActiveFetchVideoJobsForDoc :one
+SELECT COUNT(*) FROM jobs
+WHERE kind = 'fetch_video'
+  AND json_extract(payload, '$.document_id') = ?
+  AND status IN ('queued', 'running', 'paused')
+  AND deleted_at IS NULL;
+
 -- name: ClearCompletedJobs :execresult
 UPDATE jobs SET deleted_at = ?, updated_at = ?
 WHERE status IN ('done', 'dead', 'paused') AND deleted_at IS NULL;

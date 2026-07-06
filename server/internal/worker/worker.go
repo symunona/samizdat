@@ -195,6 +195,8 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 		result, err = handleScrapeURL(ctx, w.q, job, w.browser, w.extractorReg, w.creds, w.cacheDir, w.ytdlp)
 	case "fetch_assets":
 		result, err = handleFetchAssets(ctx, w.q, job, w.cacheDir)
+	case "fetch_video":
+		result, err = handleFetchVideo(ctx, w.q, job, w.cacheDir, w.ytdlp)
 	case "poll_feed":
 		result, err = handlePollFeed(ctx, w.q, job, w.browser, w.extractorReg)
 	case "run_pipeline":

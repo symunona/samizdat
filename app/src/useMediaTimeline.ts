@@ -1,14 +1,17 @@
 // useMediaTimeline — one playback timeline shared by the bottom seeker/transcript
-// and the (optional) YouTube video view. It merges TWO backends behind the existing
+// and the (optional) video view. It merges TWO backends behind the existing
 // `AudioControl` shape so the seeker + transcript code never branch on which one is
 // playing:
 //   • audio backend  — the platform-split `useAudio` (offline local file OR stream)
-//   • youtube backend — the platform-split `YtPlayer` component, driven by ref +
-//                       reporting progress via `onStatus` (state lives here)
+//   • video  backend — a `YtPlayerHandle`-shaped component (the native server-video
+//                       `ServerVideoPlayer` OR the YouTube embed `YtPlayer`), driven
+//                       by ref + reporting progress via `onStatus` (state lives here)
 //
 // `videoActive` picks the backend. Rate is owned here and fanned out to both so speed
 // stays synced. A handoff effect prevents double audio: entering the video pauses the
-// <audio> element (YT provides the sound); leaving it resumes audio from YT's position.
+// <audio> element (the video carries the sound); leaving it resumes audio from the
+// video's position. The caller composes `hasVideo` — the timeline doesn't care whether
+// the mounted backend is the server stream or the embed; both satisfy the same handle.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { useAudio } from './useAudio'
@@ -24,15 +27,16 @@ export type MediaTimeline = AudioControl & {
 
 export function useMediaTimeline(opts: {
   audioUrl: string
-  ytId: string | undefined
+  // A video backend (server stream or YT embed) is mounted and ready to sound.
+  hasVideo: boolean
   showVideo: boolean
   // Now-playing info for the lock screen while the audio backend is sounding.
   meta?: AudioMeta
 }): MediaTimeline {
-  const { audioUrl, ytId, showVideo, meta } = opts
+  const { audioUrl, hasVideo, showVideo, meta } = opts
   const audio = useAudio(audioUrl)
 
-  const videoActive = showVideo && !!ytId
+  const videoActive = showVideo && hasVideo
   const [yt, setYt] = useState<YtStatus>({ playing: false, positionMs: 0, durationMs: 0 })
   const ytRef = useRef<YtPlayerHandle | null>(null)
 

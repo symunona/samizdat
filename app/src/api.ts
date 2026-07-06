@@ -169,6 +169,32 @@ export function audioDocUrl(serverUrl: string, id: string): string {
   return `${base(serverUrl)}/api/v1/documents/${encodeURIComponent(id)}/audio`
 }
 
+// videoDocUrl returns the streaming URL for a video Document's server-fetched
+// video asset (played natively — no YouTube embed). 404 until fetched.
+export function videoDocUrl(serverUrl: string, id: string): string {
+  return `${base(serverUrl)}/api/v1/documents/${encodeURIComponent(id)}/video`
+}
+
+// probeVideoReady reports whether a native video stream has been fetched for the
+// Document yet (HEAD the media endpoint — unauthenticated, like the <video> src).
+export async function probeVideoReady(serverUrl: string, id: string): Promise<boolean> {
+  try {
+    const res = await fetch(videoDocUrl(serverUrl, id), { method: 'HEAD' })
+    return res.ok
+  } catch { return false }
+}
+
+// queueVideo asks the server to download a native playable stream for the
+// Document (idempotent). Returns the server's status: "ready" | "pending".
+export type QueueVideoResult = { status: 'ready' | 'pending'; queued: number }
+export async function queueVideo(serverUrl: string, token: string, id: string): Promise<QueueVideoResult> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(id)}/queue-video`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<QueueVideoResult>(res, 'queue-video')
+}
+
 export async function fetchDocument(serverUrl: string, token: string, id: string): Promise<Document> {
   const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(id)}`, {
     headers: { Authorization: `Bearer ${token}` },

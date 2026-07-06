@@ -107,6 +107,21 @@ func (q *Queries) ClearQueuedJobs(ctx context.Context, arg ClearQueuedJobsParams
 	return q.db.ExecContext(ctx, clearQueuedJobs, arg.DeletedAt, arg.UpdatedAt)
 }
 
+const countActiveFetchVideoJobsForDoc = `-- name: CountActiveFetchVideoJobsForDoc :one
+SELECT COUNT(*) FROM jobs
+WHERE kind = 'fetch_video'
+  AND json_extract(payload, '$.document_id') = ?
+  AND status IN ('queued', 'running', 'paused')
+  AND deleted_at IS NULL
+`
+
+func (q *Queries) CountActiveFetchVideoJobsForDoc(ctx context.Context, payload string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countActiveFetchVideoJobsForDoc, payload)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countActivePollFeedJobsForFeed = `-- name: CountActivePollFeedJobsForFeed :one
 SELECT COUNT(*) FROM jobs
 WHERE kind = 'poll_feed'

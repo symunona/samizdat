@@ -242,3 +242,68 @@ func (h *documentsHandler) queuePipelines(w http.ResponseWriter, r *http.Request
 
 	writeJSON(w, http.StatusOK, map[string]int{"queued": queued, "skipped": skipped})
 }
+
+// POST /api/v1/documents/{id}/queue-video
+// Enqueues a fetch_video job to download a native playable stream for this video
+// Document, so the app can play it without the YouTube embed. Idempotent (mirrors
+// queue-pipelines): no-op "ready" if the video asset already exists, "queued":0 if
+// a fetch is already in flight.
+func (h *documentsHandler) queueVideo(w http.ResponseWriter, r *http.Request) {
+	docID := r.PathValue("id")
+	if docID == "" {
+		writeErr(w, http.StatusBadRequest, "missing id")
+		return
+	}
+	doc, err := h.q.GetDocumentByID(r.Context(), docID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "document not found")
+		return
+	}
+
+	// Already fetched — nothing to do.
+	if _, err := h.q.GetMediaAssetByDocumentAndKind(r.Context(), store.GetMediaAssetByDocumentAndKindParams{
+		DocumentID: docID,
+		Kind:       "video",
+	}); err == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "queued": 0})
+		return
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	// Don't stack duplicate fetches while one is already in flight.
+	active, err := h.q.CountActiveFetchVideoJobsForDoc(r.Context(), docID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if active > 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "pending", "queued": 0})
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	var parentJobID *string
+	if p := r.URL.Query().Get("parent_job_id"); p != "" {
+		parentJobID = &p
+	}
+	payload, _ := json.Marshal(map[string]string{
+		"document_id":    docID,
+		"document_title": doc.Title,
+	})
+	if _, err := h.q.InsertJob(r.Context(), store.InsertJobParams{
+		ID:          uuid.NewString(),
+		Kind:        "fetch_video",
+		Payload:     string(payload),
+		RunAfter:    now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		ParentJobID: parentJobID,
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "pending", "queued": 1})
+}

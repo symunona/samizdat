@@ -2,8 +2,38 @@
 created: 2026-07-02
 topic: Native video playback (NewPipe-style) — replace YouTube IFrame embed
 excerpt: Play video Documents from a server-served stream via a native player instead of the YouTube IFrame embed, eliminating error 152 / ads / embed fragility. Mirror the existing yt-dlp audio pipeline.
-status: planned
+status: done (web path e2e-green; native expo-video path implemented + typecheck/build-green, awaiting device verification)
 ---
+
+## Status / outcome (2026-07-02)
+
+Implemented end-to-end (full on-demand fetch/poll UX, not the reduced slice):
+- **Server:** `fetch_video` job kind + `handleFetchVideo`/`fetchDocVideo` in
+  `youtube.go` (yt-dlp muxed-mp4 ≤720p / merge ≤480p, `--merge-output-format mp4`,
+  proxy-routed, `media_assets` kind="video"; idempotent). `POST /documents/{id}/queue-video`
+  (idempotent: "ready" if asset exists, dedups in-flight fetches via new
+  `CountActiveFetchVideoJobsForDoc` query) + `GET /documents/{id}/video`
+  (`serveDocVideo`, range-capable, forces `video/mp4`). Routes wired in `router.go`.
+- **App:** `ServerVideoPlayer.tsx` (native, expo-video `useVideoPlayer`+`VideoView`)
+  + `ServerVideoPlayer.web.tsx` (HTML5 `<video>`), both satisfying the existing
+  `YtPlayerHandle`/`YtStatus` contract. `useMediaTimeline` now takes a composed
+  `hasVideo` flag (backend-agnostic). `VideoDocument` probes `/video` on watch,
+  auto-`queue-video` + polls until ready, prefers the native stream, falls back to
+  the `YtPlayer` embed on failure/timeout; `embedDisabled` now covers 152 & 153 with
+  softened copy. `expo-video` dep + `app.json` plugin added.
+- **Tests:** `e2e/smoke.js` seeds a `video`-kind asset + file and asserts
+  `GET /video` → 200 `video/*`, Range → 206, and `queue-video` (asset exists) → ready
+  no-op. All green.
+
+Gates: `just build` ✓ green · `just e2e` ✓ green (incl. new video-api checks) ·
+`just lint` — my changes add ZERO new issues (go vet clean, eslint 0 errors, spec
+parity clean, knip/golangci counts unchanged), but the full `just lint` was already
+RED on the branch baseline (pre-existing knip unused-exports + ~85 golangci issues).
+
+**Deferred to user (device verify):** native expo-video on-device playback (open
+the Johnny Harris doc, let it fetch, confirm native playback + no error 152 via
+`just device-logs`). Not runnable here — no device build. Also still out of scope:
+ingest-time pre-fetch, resolution picker, storage GC, adaptive/DASH.
 
 # Native video playback — kill the YouTube embed (and error 152)
 
