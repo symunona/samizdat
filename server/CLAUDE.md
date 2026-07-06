@@ -96,8 +96,8 @@ CREATE TABLE IF NOT EXISTS documents (
   ...
   content_hash    TEXT NOT NULL DEFAULT '',
   media_type      TEXT NOT NULL DEFAULT 'article',  -- 'article' | 'video'
-  media_metadata  TEXT NOT NULL DEFAULT '',         -- JSON: {provider, external_id, duration_ms, transcript_status}
-  transcript      TEXT NOT NULL DEFAULT '',         -- JSON: [{start_ms,end_ms,text}] (video only)
+  media_metadata  TEXT NOT NULL DEFAULT '',         -- JSON: {provider, external_id, duration_ms, transcript_status, orig_lang, transcript_langs}
+  transcript      TEXT NOT NULL DEFAULT '',         -- JSON: {lang: [{start_ms,end_ms,text}]} (video only; legacy rows may be a bare array)
   ...
 );
 
@@ -165,8 +165,8 @@ Banned: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`
 ## Document media types
 - **`media_type = 'article'`** — default. HTML scrape via Playwright + Trafilatura.
 - **`media_type = 'video'`** — YouTube/podcast ingest via yt-dlp. Fields:
-  - `media_metadata`: JSON `{provider, external_id, duration_ms, transcript_status}` where `transcript_status` ∈ `"subs" | "auto" | "none"`.
-  - `transcript`: JSON `[{start_ms, end_ms, text}]` segments (empty array `[]` when none).
+  - `media_metadata`: JSON `{provider, external_id, duration_ms, transcript_status, orig_lang, transcript_langs}` where `transcript_status` ∈ `"subs" | "auto" | "none"` (of the original track), `orig_lang` is the original language code, and `transcript_langs` lists all languages present.
+  - `transcript`: JSON **lang-keyed map** `{lang: [{start_ms, end_ms, text}]}` (empty object `{}` when none). Legacy rows may still hold a bare array `[...]`; the app parsers accept both.
   - `markdown`: flattened transcript text (one segment per line); falls back to video description when no transcript.
 
 ## Scraper paywall auth (per-domain login)
@@ -206,10 +206,11 @@ so gated articles render full-text. Config lives in the existing per-domain seam
 ## YouTube ingest pipeline
 - Triggered by `scrape_url` jobs for any YouTube URL (all forms: watch, youtu.be, shorts, embed, music, m.).
 - **Canonical form**: always `https://www.youtube.com/watch?v=<id>` — canonicalization happens before DB dedup.
-- **yt-dlp invocation**: one session for audio + metadata + subtitles. Flags: `-f bestaudio -x --audio-format m4a --write-info-json --write-subs --write-auto-subs --sub-langs en.*,en,en-orig --sub-format vtt --convert-subs vtt`.
-- **Transcript preference**: manual subs → auto-captions → none.
+- **Two-pass yt-dlp**: (1) probe `yt-dlp -J --skip-download` reads the video's original `language` (no media); (2) download pass fetches `-f bestaudio -x --audio-format m4a --write-subs --write-auto-subs --sub-format vtt --convert-subs vtt` with `--sub-langs` **computed** from the language policy (`internal/langpref`), never a hardcoded `en`. Blindly requesting `en` pulled YouTube's machine-translation of non-English videos; the probe lets us keep the original.
+- **Language policy** (`server_settings` key `language_prefs`, `langpref.Prefs`): `native_langs` (keep original, no translation) · `translate_to_english` (non-native orig → also fetch en) · `always_store_langs` (always unioned in). `prefs.Wanted(origLang)` returns the requested tracks, original first. Edited in the app's Settings → Transcript Languages.
+- **Transcript preference**: per language, manual subs → auto-captions. status (in `media_metadata`) reflects the original language's track.
 - **Audio asset**: stored as `media_assets` row with `kind="audio"`, accessible at `GET /api/v1/documents/{id}/audio` (range-request capable via `http.ServeFile`).
-- **Intermediate files** (info.json, .vtt) are deleted after processing; only the .m4a is kept.
+- **Per-language `.vtt` files are KEPT** in the media cache (design rule 1 — the lang-keyed transcript map is rebuildable from them without re-fetching). The probe writes no info.json, so there is nothing to clean up.
 - **Post-ingest**: calls `finishDocument()` (shared with article scraper) — enqueues `fetch_assets` and triggers matching pipelines.
 
 ## yt-dlp config (`[ytdlp]` in TOML)

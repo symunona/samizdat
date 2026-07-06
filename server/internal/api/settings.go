@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/symunona/samizdat/server/internal/langpref"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
 )
@@ -20,6 +21,7 @@ type llmUsageSummary struct {
 type settingsPayload struct {
 	PollingEnabled bool            `json:"polling_enabled"`
 	AutoMarkRead   bool            `json:"auto_mark_read"`
+	LanguagePrefs  langpref.Prefs  `json:"language_prefs"`
 	LLMUsage       llmUsageSummary `json:"llm_usage"`
 }
 
@@ -30,8 +32,11 @@ func (h *settingsHandler) get(w http.ResponseWriter, r *http.Request) {
 	autoVal, err := h.q.GetSetting(r.Context(), "auto_mark_read")
 	autoMarkRead := err != nil || autoVal != "false"
 
+	langRaw, _ := h.q.GetSetting(r.Context(), langpref.SettingKey)
+	prefs := langpref.Parse(langRaw)
+
 	usage := h.llmUsage(r)
-	writeJSON(w, http.StatusOK, settingsPayload{PollingEnabled: polling, AutoMarkRead: autoMarkRead, LLMUsage: usage})
+	writeJSON(w, http.StatusOK, settingsPayload{PollingEnabled: polling, AutoMarkRead: autoMarkRead, LanguagePrefs: prefs, LLMUsage: usage})
 }
 
 func (h *settingsHandler) llmUsage(r *http.Request) llmUsageSummary {
@@ -74,8 +79,9 @@ func toInt64(v interface{}) int64 {
 // partial patches (one field at a time), so absent fields must be left as-is.
 func (h *settingsHandler) put(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		PollingEnabled *bool `json:"polling_enabled"`
-		AutoMarkRead   *bool `json:"auto_mark_read"`
+		PollingEnabled *bool           `json:"polling_enabled"`
+		AutoMarkRead   *bool           `json:"auto_mark_read"`
+		LanguagePrefs  *langpref.Prefs `json:"language_prefs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
@@ -94,6 +100,13 @@ func (h *settingsHandler) put(w http.ResponseWriter, r *http.Request) {
 	if !upsert("polling_enabled", body.PollingEnabled) || !upsert("auto_mark_read", body.AutoMarkRead) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
+	}
+	if body.LanguagePrefs != nil {
+		blob, _ := json.Marshal(body.LanguagePrefs)
+		if h.q.UpsertSetting(r.Context(), store.UpsertSettingParams{Key: langpref.SettingKey, Value: string(blob)}) != nil {
+			writeErr(w, http.StatusInternalServerError, "db error")
+			return
+		}
 	}
 	h.get(w, r)
 }

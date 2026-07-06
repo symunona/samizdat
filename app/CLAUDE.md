@@ -293,8 +293,14 @@ auto-scroll (`mediaTime` message) keeps following with **no** change to the tran
 ### Time-anchored annotations
 `Annotation` now has a `media_ts_ms` field. When creating an annotation on a video document, `positionMs` is captured at the time the user taps "add note" and sent as `media_ts_ms`. Tapping an existing annotation seeks audio to its timestamp.
 
-### `parseTranscript` / `parseMediaMetadata` helpers
-Both live in `src/api.ts` and safely parse the JSON string fields `Document.transcript` and `Document.media_metadata`. Always use these helpers — never `JSON.parse` the fields inline.
+### Transcript helpers + language selector
+`Document.transcript` is a **lang-keyed map** `{lang: [segments]}` (legacy rows may be a bare array). `src/api.ts` helpers, always used — never `JSON.parse` inline:
+- `parseTranscripts(doc)` → `Record<lang, TranscriptSegment[]>` (accepts both map and legacy array).
+- `transcriptLangs(doc)` → languages present, **original first** (from `media_metadata.orig_lang`).
+- `parseTranscript(doc, lang?)` → one track: requested `lang`, else original, else first.
+- `parseMediaMetadata(doc)` → `{provider, external_id, duration_ms, transcript_status, orig_lang, transcript_langs, description}`.
+
+`VideoDocument` shows a **language pill selector** above the transcript when >1 track exists; default = original (so a machine translation is never surfaced unasked). Ingest policy is set server-side in Settings → Transcript Languages (`AppSettings.language_prefs`).
 
 ### YouTube video ID
 `meta.external_id` from `parseMediaMetadata` is the YouTube video ID, fed to `YtPlayer` (see

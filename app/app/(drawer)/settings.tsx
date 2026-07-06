@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, mintExtensionToken, androidApkUrl, ApiError } from '../../src/api'
-import type { DeviceInfo, AppSettings } from '../../src/api'
+import type { DeviceInfo, AppSettings, LanguagePrefs } from '../../src/api'
 import { APP_VERSION, APP_VERSION_CODE, isUpdateAvailable } from '../../src/appVersion'
 import { useLatestBuild } from '../../src/useUpdate'
 import { fetchYtdlpProxyStatus } from '../../src/proxyStatus'
@@ -48,6 +48,26 @@ function formatRelative(iso: string): string {
   } catch { return iso }
 }
 
+// browserLangs derives base language codes from the platform locale (navigator on
+// web/RN-Web; empty on native, where the user seeds the list manually).
+function browserLangs(): string[] {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const nav: any = (globalThis as any).navigator
+    const list: string[] = nav?.languages || (nav?.language ? [nav.language] : [])
+    const base = list.map((l) => String(l).toLowerCase().split(/[-_]/)[0]).filter(Boolean)
+    return [...new Set(base)]
+  } catch { return [] }
+}
+
+// addLang appends a normalized base language code to a list (no dups); returns the
+// same reference unchanged when nothing was added.
+function addLang(list: string[], raw: string): string[] {
+  const l = raw.toLowerCase().trim().split(/[-_]/)[0]
+  if (!l || list.includes(l)) return list
+  return [...list, l]
+}
+
 export default function SettingsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
@@ -68,6 +88,10 @@ export default function SettingsScreen() {
   const [revoking, setRevoking] = useState<Set<string>>(new Set())
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [settingsLoading, setSettingsLoading] = useState(false)
+  const [langSaving, setLangSaving] = useState(false)
+  const [nativeInput, setNativeInput] = useState('')
+  const [alwaysInput, setAlwaysInput] = useState('')
+  const langSeededRef = useRef(false)
   const [urlLastUsed, setUrlLastUsed] = useState<Record<string, string>>({})
   const [proxyStatus, setProxyStatus] = useState<YtdlpProxyStatus | null>(null)
   const [proxyChecking, setProxyChecking] = useState(false)
@@ -229,6 +253,33 @@ export default function SettingsScreen() {
     }
   }
 
+  const saveLangPrefs = useCallback(async (next: LanguagePrefs) => {
+    if (!activeUrl || !token) return
+    setLangSaving(true)
+    setSettings((prev) => (prev ? { ...prev, language_prefs: next } : prev)) // optimistic
+    try {
+      const r = await updateSettings(activeUrl, token, { language_prefs: next })
+      setSettings(r)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to update languages', 'error')
+      loadSettings()
+    } finally {
+      setLangSaving(false)
+    }
+  }, [activeUrl, token, toast, loadSettings])
+
+  // Seed the native-language list from the platform locale the first time we see an
+  // empty policy, so a fresh install defaults to "keep the languages I read native".
+  useEffect(() => {
+    if (!settings || langSeededRef.current) return
+    langSeededRef.current = true
+    const lp = settings.language_prefs
+    if (lp && (lp.native_langs ?? []).length === 0) {
+      const seed = browserLangs()
+      if (seed.length) saveLangPrefs({ ...lp, native_langs: seed })
+    }
+  }, [settings, saveLangPrefs])
+
   function handleProbe() {
     setProbing(true)
     probe()
@@ -316,6 +367,53 @@ export default function SettingsScreen() {
 
   const dotColor = status === 'connected' ? theme.colors.online : status === 'disconnected' ? theme.colors.error : theme.colors.placeholder
   const extDotColor = extStatus === 'connected' ? theme.colors.online : extStatus === 'unpaired' ? theme.colors.accent : theme.colors.placeholder
+
+  // Chip editor for one language list (native / always-store), shared by both rows.
+  const renderChipEditor = (
+    langKey: 'native_langs' | 'always_store_langs',
+    input: string,
+    setInput: (v: string) => void,
+  ) => {
+    const lp = settings?.language_prefs
+    if (!lp) return null
+    const list = lp[langKey] ?? []
+    const commit = () => {
+      const next = addLang(list, input)
+      setInput('')
+      if (next !== list) saveLangPrefs({ ...lp, [langKey]: next })
+    }
+    return (
+      <>
+        <View style={s.langChips}>
+          {list.map((l) => (
+            <View key={l} style={s.langChip}>
+              <Text style={s.langChipText}>{l.toUpperCase()}</Text>
+              <Pressable onPress={() => saveLangPrefs({ ...lp, [langKey]: list.filter((x) => x !== l) })} hitSlop={6}>
+                <Ionicons name="close" size={13} color={theme.colors.muted} />
+              </Pressable>
+            </View>
+          ))}
+          {list.length === 0 ? <Text style={s.langEmpty}>none</Text> : null}
+        </View>
+        <View style={s.langAddRow}>
+          <TextInput
+            value={input}
+            onChangeText={setInput}
+            placeholder="add code e.g. hu"
+            placeholderTextColor={theme.colors.muted}
+            style={s.langInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="done"
+            onSubmitEditing={commit}
+          />
+          <Pressable onPress={commit} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
+            <Text style={s.refreshBtnText}>Add</Text>
+          </Pressable>
+        </View>
+      </>
+    )
+  }
 
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.content}>
@@ -468,6 +566,42 @@ export default function SettingsScreen() {
               />
           }
         </View>
+      </View>
+
+      {/* Transcript languages */}
+      <View style={s.card}>
+        <View style={s.cardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.cardTitle}>Transcript Languages</Text>
+            <Text style={s.cardSubtitle}>Keep the original transcript for languages you read; translate the rest to English.</Text>
+          </View>
+          {langSaving ? <ActivityIndicator size="small" color={theme.colors.accent} /> : null}
+        </View>
+        {settings === null ? (
+          <ActivityIndicator size="small" color={theme.colors.accent} />
+        ) : (
+          <>
+            <Text style={s.langGroupLabel}>Keep native (no translation)</Text>
+            {renderChipEditor('native_langs', nativeInput, setNativeInput)}
+
+            <View style={[s.cardHeader, { marginTop: theme.spacing.md }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={s.langGroupLabel}>Translate others to English</Text>
+                <Text style={s.cardSubtitle}>When a video&apos;s language isn&apos;t in your list, also fetch an English translation.</Text>
+              </View>
+              <Switch
+                value={settings.language_prefs.translate_to_english}
+                onValueChange={(v) => saveLangPrefs({ ...settings.language_prefs, translate_to_english: v })}
+                disabled={langSaving}
+                trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+                thumbColor={theme.colors.background}
+              />
+            </View>
+
+            <Text style={[s.langGroupLabel, { marginTop: theme.spacing.md }]}>Always also store</Text>
+            {renderChipEditor('always_store_langs', alwaysInput, setAlwaysInput)}
+          </>
+        )}
       </View>
 
       {/* Debug log streaming */}
@@ -845,6 +979,22 @@ function buildStyles(t: Theme) {
     refreshBtnPressed: { opacity: 0.7 },
     refreshBtnDisabled: { borderColor: t.colors.border },
     refreshBtnText: { color: t.colors.accent, fontSize: 13, fontWeight: '600' },
+    // Transcript-language editor
+    langGroupLabel: { color: t.colors.text, fontSize: 13, fontWeight: '600', marginTop: t.spacing.sm },
+    langChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: t.spacing.xs },
+    langChip: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      paddingLeft: 10, paddingRight: 6, paddingVertical: 3, borderRadius: 12,
+      borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.background,
+    },
+    langChipText: { color: t.colors.text, fontSize: 12, fontWeight: '700' },
+    langEmpty: { color: t.colors.muted, fontSize: 12, fontStyle: 'italic' },
+    langAddRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm, marginTop: t.spacing.xs },
+    langInput: {
+      flex: 1, color: t.colors.text, fontSize: 13,
+      paddingHorizontal: t.spacing.sm, paddingVertical: t.spacing.xs,
+      borderRadius: t.radius.sm, borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.background,
+    },
     disconnectBtn: {
       marginTop: t.spacing.xs,
       paddingVertical: t.spacing.sm,

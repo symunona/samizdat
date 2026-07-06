@@ -2,7 +2,7 @@
 created: 2026-07-06
 topic: YouTube transcript language preferences + in-app lang selector
 excerpt: Stop auto-translating non-English videos. Detect original language, keep native per user prefs, translate to English only when asked. Store transcripts lang-keyed; add a Settings language section and a per-video transcript language selector.
-status: APPROVED 2026-07-06 — reindex=persist VTTs in cache; two-pass probe confirmed; ready to branch
+status: DONE 2026-07-06 — implemented on feat/transcript-lang-prefs; server two-pass + lang-keyed map, Settings language section, video lang selector; unit + e2e + agent-browser interaction tests green. Found+fixed a null-slice crash (server now emits [] not null). Awaiting user review before squash-merge.
 ---
 
 # Transcript Language Preferences

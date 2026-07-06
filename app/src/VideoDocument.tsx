@@ -35,6 +35,7 @@ import {
   probeVideoReady,
   queueVideo,
   parseTranscript,
+  transcriptLangs,
   parseMediaMetadata,
   fetchReadingProgress,
   saveMediaPosition,
@@ -149,8 +150,14 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const playerW = Math.round(playerH * 16 / 9)
   const playerDims = useMemo(() => ({ width: playerW, height: playerH }), [playerW, playerH])
 
-  const segments = useMemo(() => parseTranscript(doc), [doc])
   const meta = useMemo(() => parseMediaMetadata(doc), [doc])
+  // Available transcript languages (original first). The selector lets the reader
+  // switch; default is the original language so we never surface a translation
+  // unasked-for.
+  const langs = useMemo(() => transcriptLangs(doc), [doc])
+  const [selLang, setSelLang] = useState<string>('')
+  const activeLang = selLang && langs.includes(selLang) ? selLang : (langs[0] || '')
+  const segments = useMemo(() => parseTranscript(doc, activeLang || undefined), [doc, activeLang])
 
   const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [highlights, setHighlights] = useState<HighlightWithDoc[]>([])
@@ -779,6 +786,21 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
               <Ionicons name="arrow-down" size={20} color={theme.colors.background} />
             </Pressable>
           ) : null}
+          {/* Transcript language selector — only when more than one track exists. */}
+          {tab === 'transcript' && langs.length > 1 ? (
+            <View style={s.langBar}>
+              {langs.map(l => {
+                const active = l === activeLang
+                return (
+                  <Pressable key={l} onPress={() => setSelLang(l)} style={[s.langPill, active && s.langPillActive]} hitSlop={4}>
+                    <Text style={[s.langPillText, active && s.langPillTextActive]}>
+                      {l.toUpperCase()}{l === meta.orig_lang ? ' ·orig' : ''}
+                    </Text>
+                  </Pressable>
+                )
+              })}
+            </View>
+          ) : null}
           <View style={[s.tabPanel, tab !== 'transcript' && s.tabPanelHidden]}>
           {Platform.OS === 'web' ? (
             <iframe
@@ -1104,6 +1126,19 @@ function buildStyles(t: Theme) {
     tabPanel: { flex: 1, backgroundColor: t.colors.background },
     tabPanelHidden: { display: 'none' },
     panelPad: { padding: t.spacing.lg, gap: t.spacing.md },
+    // Transcript language selector pills (only shown with >1 track).
+    langBar: {
+      flexDirection: 'row', flexWrap: 'wrap', gap: 6,
+      paddingHorizontal: t.spacing.md, paddingVertical: 6,
+      borderBottomWidth: 1, borderBottomColor: t.colors.border, backgroundColor: t.colors.surface,
+    },
+    langPill: {
+      paddingHorizontal: 10, paddingVertical: 3, borderRadius: 12,
+      borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.background,
+    },
+    langPillActive: { borderColor: t.colors.accent, backgroundColor: t.colors.accent },
+    langPillText: { color: t.colors.muted, fontSize: 11, fontWeight: '700' },
+    langPillTextActive: { color: t.colors.background },
     // Floating "scroll to the playing line" button, top-right of the transcript.
     resumeBtn: {
       position: 'absolute', top: t.spacing.md, right: t.spacing.md, zIndex: 10,

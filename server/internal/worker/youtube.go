@@ -12,10 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/symunona/samizdat/server/internal/config"
+	"github.com/symunona/samizdat/server/internal/langpref"
 	"github.com/symunona/samizdat/server/internal/store"
 	"github.com/symunona/samizdat/server/internal/transcript"
 )
@@ -83,16 +85,19 @@ type ytInfo struct {
 	Duration          float64                    `json:"duration"`    // seconds
 	Thumbnail         string                     `json:"thumbnail"`
 	Description       string                     `json:"description"`
+	Language          string                     `json:"language"` // original language tag, e.g. "hu"
 	Subtitles         map[string]json.RawMessage `json:"subtitles"`
 	AutomaticCaptions map[string]json.RawMessage `json:"automatic_captions"`
 }
 
 type ytMediaMetadata struct {
-	Provider         string `json:"provider"`
-	ExternalID       string `json:"external_id"`
-	DurationMs       int64  `json:"duration_ms"`
-	TranscriptStatus string `json:"transcript_status"` // subs | auto | none
-	Description      string `json:"description,omitempty"`
+	Provider         string   `json:"provider"`
+	ExternalID       string   `json:"external_id"`
+	DurationMs       int64    `json:"duration_ms"`
+	TranscriptStatus string   `json:"transcript_status"`          // subs | auto | none (for orig_lang)
+	OrigLang         string   `json:"orig_lang,omitempty"`        // original transcript language, e.g. "hu"
+	TranscriptLangs  []string `json:"transcript_langs,omitempty"` // all languages present in transcript map
+	Description      string   `json:"description,omitempty"`
 }
 
 // handleYouTube ingests a YouTube URL into a video Document: audio-only download
@@ -112,15 +117,27 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 	audioAssetID := IDFromURL(canonical + "#audio")
 	base := filepath.Join(mediaDir, audioAssetID)
 
-	// One yt-dlp session: audio + metadata + subtitles. Minimizes bot exposure.
+	// Probe pass: read metadata (crucially the original language) WITHOUT
+	// downloading media, so we can decide which subtitle tracks to request.
+	// Blindly requesting "en" pulled YouTube's machine-translation for
+	// non-English videos; now we keep the original per the user's language prefs.
+	info, err := probeYTInfo(ctx, bin, canonical, cfg)
+	if err != nil {
+		return "", err
+	}
+	prefsRaw, _ := q.GetSetting(ctx, langpref.SettingKey)
+	prefs := langpref.Parse(prefsRaw)
+	wanted := prefs.Wanted(info.Language) // wanted[0] == original language
+	origLang := wanted[0]
+
+	// Download pass: audio + the wanted subtitle tracks in one session.
 	// Re-encode to 64k AAC: transparent for speech, ~half the disk/sync size on
 	// the 4GB box vs bestaudio (see docs/youtube-ingest.md).
 	args := []string{
 		"-f", "bestaudio",
 		"-x", "--audio-format", "m4a", "--audio-quality", "64K",
-		"--write-info-json",
 		"--write-subs", "--write-auto-subs",
-		"--sub-langs", "en.*,en,en-orig",
+		"--sub-langs", buildSubLangs(wanted),
 		"--sub-format", "vtt", "--convert-subs", "vtt",
 		"--no-playlist", "--no-progress",
 		"-o", base + ".%(ext)s",
@@ -133,17 +150,11 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 	}
 	args = append(args, canonical)
 
-	logScraper.Printf("yt-dlp %s (proxy=%q)", canonical, cfg.Proxy)
+	logScraper.Printf("yt-dlp %s (proxy=%q langs=%v)", canonical, cfg.Proxy, wanted)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", classifyYTDLPError(err, string(out), cfg)
-	}
-
-	// Parse metadata from the written info.json.
-	info, err := readYTInfo(base + ".info.json")
-	if err != nil {
-		return "", fmt.Errorf("yt-dlp info: %w", err)
 	}
 
 	// Locate the downloaded audio file (ext should be .m4a).
@@ -157,17 +168,25 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 		}
 	}
 
-	// Transcript: prefer manual subs, fall back to auto-captions.
-	segs, status := loadTranscript(base, info)
-	transcriptJSON := "[]"
-	if len(segs) > 0 {
-		b, _ := json.Marshal(segs)
+	// Transcript: lang-keyed map {lang: [segments]}. Per language, manual subs
+	// win over auto-captions. status reflects the ORIGINAL language's track.
+	transcriptMap, status := loadTranscripts(base, wanted, info)
+	transcriptJSON := "{}"
+	if len(transcriptMap) > 0 {
+		b, _ := json.Marshal(transcriptMap)
 		transcriptJSON = string(b)
 	}
+	langs := make([]string, 0, len(transcriptMap))
+	for l := range transcriptMap {
+		langs = append(langs, l)
+	}
+	sort.Strings(langs)
+	origSegs := transcriptMap[origLang]
 
-	// Body markdown = flattened transcript (so Pipeline/Highlight/Annotation work);
+	// Body markdown = flattened ORIGINAL transcript (so Pipeline/Highlight/
+	// Annotation work on the native language, never a machine translation);
 	// fall back to the video description when there's no transcript.
-	md := transcript.FlattenText(segs)
+	md := transcript.FlattenText(origSegs)
 	if strings.TrimSpace(md) == "" {
 		md = strings.TrimSpace(info.Description)
 	}
@@ -191,6 +210,8 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 		ExternalID:       videoID,
 		DurationMs:       int64(info.Duration * 1000),
 		TranscriptStatus: status,
+		OrigLang:         origLang,
+		TranscriptLangs:  langs,
 		Description:      strings.TrimSpace(info.Description),
 	}
 	metaJSON, _ := json.Marshal(meta)
@@ -241,21 +262,19 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 		return "", fmt.Errorf("insert audio asset: %w", err)
 	}
 
-	// Drop intermediate files (info.json + subtitle vtts); keep only the audio.
-	_ = os.Remove(base + ".info.json")
-	for _, f := range globAll(base+".*.vtt", base+".vtt") {
-		_ = os.Remove(f)
-	}
+	// Keep the per-language .vtt files in the media cache: they make the
+	// lang-keyed transcript map rebuildable (design rule 1) without re-fetching.
+	// The probe pass writes no info.json, so there is nothing else to clean up.
 
-	logScraper.Printf("youtube document %s: %q transcript=%s segs=%d dur=%dms",
-		doc.ID[:8], title, status, len(segs), meta.DurationMs)
+	logScraper.Printf("youtube document %s: %q orig=%s transcript=%s langs=%v segs=%d dur=%dms",
+		doc.ID[:8], title, origLang, status, langs, len(origSegs), meta.DurationMs)
 
 	// Reuse the shared finalize: thumbnail download + pipeline triggers.
 	finishDocument(ctx, q, job, doc, title, manual)
 
 	res, _ := json.Marshal(map[string]any{
 		"document_id": doc.ID, "title": title, "media_type": "video",
-		"transcript": status, "segments": len(segs),
+		"transcript": status, "orig_lang": origLang, "langs": langs, "segments": len(origSegs),
 	})
 	return string(res), nil
 }
@@ -366,55 +385,98 @@ func fetchDocVideo(ctx context.Context, q *store.Queries, canonical, videoID, ca
 	return string(res), nil
 }
 
-// readYTInfo reads and parses a yt-dlp --write-info-json file.
-func readYTInfo(path string) (*ytInfo, error) {
-	b, err := os.ReadFile(path)
+// probeYTInfo dumps a video's metadata (yt-dlp -J) without downloading media, so
+// the ingest can read the original language before deciding which subtitle tracks
+// to request. One lightweight extra hit per ingest — worth it to stop translating
+// non-English videos by default.
+func probeYTInfo(ctx context.Context, bin, canonical string, cfg config.YTDLPSection) (*ytInfo, error) {
+	args := []string{"-J", "--skip-download", "--no-playlist", "--no-progress"}
+	if cfg.Proxy != "" {
+		args = append(args, "--proxy", cfg.Proxy)
+	}
+	if cfg.Cookies != "" {
+		args = append(args, "--cookies", cfg.Cookies)
+	}
+	args = append(args, canonical)
+
+	logScraper.Printf("yt-dlp probe %s (proxy=%q)", canonical, cfg.Proxy)
+	cmd := exec.CommandContext(ctx, bin, args...)
+	out, err := cmd.Output() // -J writes the info JSON to stdout
 	if err != nil {
-		return nil, fmt.Errorf("read info.json: %w", err)
+		stderr := ""
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = string(ee.Stderr)
+		}
+		return nil, classifyYTDLPError(err, stderr, cfg)
 	}
 	var info ytInfo
-	if err := json.Unmarshal(b, &info); err != nil {
-		return nil, fmt.Errorf("parse info.json: %w", err)
+	if err := json.Unmarshal(out, &info); err != nil {
+		return nil, fmt.Errorf("parse yt-dlp -J: %w", err)
 	}
 	return &info, nil
 }
 
-// loadTranscript picks the best subtitle file written next to base and parses it.
-// Manual subs (info.Subtitles) win over auto-captions (info.AutomaticCaptions).
-func loadTranscript(base string, info *ytInfo) ([]transcript.Segment, string) {
-	hasManualEN := hasENKey(info.Subtitles)
-	hasAutoEN := hasENKey(info.AutomaticCaptions)
+// buildSubLangs turns wanted base language codes into a yt-dlp --sub-langs value.
+// For each language we request the plain tag plus its "-orig" variant (yt-dlp
+// names an original track "<lang>-orig" when it also offers translations).
+func buildSubLangs(wanted []string) string {
+	pats := make([]string, 0, len(wanted)*2)
+	for _, l := range wanted {
+		pats = append(pats, l, l+"-orig")
+	}
+	return strings.Join(pats, ",")
+}
 
-	// yt-dlp writes "<base>.<lang>.vtt"; prefer plain "en", then any "en*".
-	candidates := []string{base + ".en.vtt", base + ".en-orig.vtt"}
-	if m := firstMatch(base + ".en*.vtt"); m != "" {
+// loadTranscripts parses the per-language .vtt files written next to base into a
+// lang-keyed map. Per language, manual subs win over auto-captions. The returned
+// status reflects the original language's track (wanted[0]): subs | auto | none.
+func loadTranscripts(base string, wanted []string, info *ytInfo) (map[string][]transcript.Segment, string) {
+	out := make(map[string][]transcript.Segment, len(wanted))
+	status := "none"
+	for i, lang := range wanted {
+		segs := readLangVTT(base, lang)
+		if len(segs) == 0 {
+			continue
+		}
+		out[lang] = segs
+		if i == 0 { // original language
+			if hasLangKey(info.Subtitles, lang) {
+				status = "subs"
+			} else {
+				status = "auto"
+			}
+		}
+	}
+	return out, status
+}
+
+// readLangVTT finds and parses the first non-empty .vtt for a base language code.
+func readLangVTT(base, lang string) []transcript.Segment {
+	candidates := []string{base + "." + lang + ".vtt", base + "." + lang + "-orig.vtt"}
+	if m := firstMatch(base + "." + lang + "*.vtt"); m != "" {
 		candidates = append(candidates, m)
 	}
-	if m := firstMatch(base + ".*.vtt"); m != "" {
-		candidates = append(candidates, m)
-	}
+	seen := map[string]bool{}
 	for _, p := range candidates {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
 		data, err := os.ReadFile(p)
 		if err != nil {
 			continue
 		}
-		segs := transcript.ParseVTT(string(data))
-		if len(segs) > 0 {
-			if hasManualEN {
-				return segs, "subs"
-			}
-			return segs, "auto"
+		if segs := transcript.ParseVTT(string(data)); len(segs) > 0 {
+			return segs
 		}
 	}
-	if hasManualEN || hasAutoEN {
-		return nil, "none" // declared but unreadable
-	}
-	return nil, "none"
+	return nil
 }
 
-func hasENKey(m map[string]json.RawMessage) bool {
+// hasLangKey reports whether a subtitle map declares a track for base lang.
+func hasLangKey(m map[string]json.RawMessage, lang string) bool {
 	for k := range m {
-		if k == "en" || strings.HasPrefix(k, "en-") || strings.HasPrefix(k, "en.") {
+		if langpref.BaseLang(k) == lang {
 			return true
 		}
 	}
@@ -428,16 +490,6 @@ func firstMatch(pattern string) string {
 		return matches[0]
 	}
 	return ""
-}
-
-// globAll returns the union of filesystem matches for the given patterns.
-func globAll(patterns ...string) []string {
-	var out []string
-	for _, p := range patterns {
-		m, _ := filepath.Glob(p)
-		out = append(out, m...)
-	}
-	return out
 }
 
 // classifyYTDLPError turns raw yt-dlp failures into actionable operator messages.

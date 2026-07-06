@@ -146,16 +146,52 @@ export type MediaMetadata = {
   external_id?: string
   duration_ms?: number
   transcript_status?: 'subs' | 'auto' | 'none'
+  orig_lang?: string
+  transcript_langs?: string[]
   description?: string
 }
 
-// parseTranscript safely parses the Document.transcript JSON string.
-export function parseTranscript(doc: Document): TranscriptSegment[] {
-  if (!doc.transcript) return []
+// parseTranscripts parses Document.transcript into a lang-keyed segment map.
+// Accepts both the current object form {lang: [segments]} and the legacy bare
+// array (keyed under the original language, or "orig" when unknown).
+export function parseTranscripts(doc: Document): Record<string, TranscriptSegment[]> {
+  if (!doc.transcript) return {}
   try {
     const v = JSON.parse(doc.transcript)
-    return Array.isArray(v) ? (v as TranscriptSegment[]) : []
-  } catch { return [] }
+    if (Array.isArray(v)) {
+      if (v.length === 0) return {}
+      const lang = parseMediaMetadata(doc).orig_lang || 'orig'
+      return { [lang]: v as TranscriptSegment[] }
+    }
+    if (v && typeof v === 'object') {
+      const out: Record<string, TranscriptSegment[]> = {}
+      for (const k of Object.keys(v)) if (Array.isArray(v[k])) out[k] = v[k]
+      return out
+    }
+    return {}
+  } catch { return {} }
+}
+
+// transcriptLangs returns the languages present in a Document's transcript,
+// original language first.
+export function transcriptLangs(doc: Document): string[] {
+  const map = parseTranscripts(doc)
+  const keys = Object.keys(map)
+  const orig = parseMediaMetadata(doc).orig_lang
+  if (orig && keys.includes(orig)) return [orig, ...keys.filter(k => k !== orig)]
+  return keys
+}
+
+// parseTranscript returns the segments for one language: the requested lang, else
+// the original language, else the first available track.
+export function parseTranscript(doc: Document, lang?: string): TranscriptSegment[] {
+  const map = parseTranscripts(doc)
+  const keys = Object.keys(map)
+  if (keys.length === 0) return []
+  if (lang && map[lang]) return map[lang]
+  const orig = parseMediaMetadata(doc).orig_lang
+  if (orig && map[orig]) return map[orig]
+  return map[keys[0]]
 }
 
 // parseMediaMetadata safely parses the Document.media_metadata JSON string.
@@ -866,9 +902,17 @@ export type LLMUsageSummary = {
   total_cost_usd: number
 }
 
+// LanguagePrefs mirrors the server's transcript language policy (langpref.Prefs).
+export type LanguagePrefs = {
+  native_langs: string[]
+  translate_to_english: boolean
+  always_store_langs: string[]
+}
+
 export type AppSettings = {
   polling_enabled: boolean
   auto_mark_read: boolean
+  language_prefs: LanguagePrefs
   llm_usage: LLMUsageSummary
 }
 
