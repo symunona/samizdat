@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert, useWindowDimensions } from 'react-native'
+import { View, Text, FlatList, StyleSheet, Pressable, Alert, useWindowDimensions } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useRouter, useNavigation } from 'expo-router'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
@@ -12,6 +12,8 @@ import TagSelectorModal from '../../src/TagSelectorModal'
 import AnnotationPanel from '../../src/AnnotationPanel'
 import LinkActionSheet from '../../src/LinkActionSheet'
 import { useScrapeQueue } from '../../src/ScrapeQueueContext'
+import { useSyncStatus } from '../../src/store/hooks'
+import FeedSkeleton from '../../src/FeedSkeleton'
 
 export default function FeedScreen() {
   const { theme } = useUnistyles()
@@ -19,6 +21,7 @@ export default function FeedScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { activeUrl, token, status } = useConnection()
+  const { status: syncStatus, lastSyncedAt } = useSyncStatus()
   const { height: windowHeight } = useWindowDimensions()
   const { startScrape } = useScrapeQueue()
 
@@ -142,6 +145,12 @@ export default function FeedScreen() {
   useEffect(() => {
     if (status === 'connected') load()
   }, [status, load])
+
+  // A sync may pull new highlights server-side; re-fetch once it settles so the
+  // skeleton resolves to real cards instead of dropping straight to the empty state.
+  useEffect(() => {
+    if (status === 'connected' && lastSyncedAt) load()
+  }, [lastSyncedAt, status, load])
 
   const handlePin = useCallback(async (item: HighlightWithDoc) => {
     if (!activeUrl || !token) return
@@ -292,12 +301,10 @@ export default function FeedScreen() {
     )
   }, [actionLoading, archivedIds, deletingIds, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
 
-  if (loading && highlights.length === 0) {
-    return (
-      <View style={s.center}>
-        <ActivityIndicator color={theme.colors.accent} />
-      </View>
-    )
+  // Still loading, or a sync is in flight that may yet produce highlights →
+  // skeleton, not the empty state. Only drop to "No highlights yet" once both settle.
+  if (highlights.length === 0 && (loading || syncStatus === 'syncing')) {
+    return <FeedSkeleton />
   }
 
   if (error) {
@@ -311,7 +318,7 @@ export default function FeedScreen() {
     )
   }
 
-  if (!loading && highlights.length === 0) {
+  if (highlights.length === 0) {
     return (
       <View style={s.center}>
         <Text style={s.placeholder}>No highlights yet.</Text>
