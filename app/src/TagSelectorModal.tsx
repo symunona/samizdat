@@ -37,6 +37,9 @@ type Props = {
   objectId: string
   objectType: 'document' | 'annotation' | 'highlight'
   onClose: () => void
+  // Fires with the object's full applied-tag list after every add/remove/create,
+  // so the caller can patch its list in place (the modal doesn't refetch the feed).
+  onChanged?: (objectId: string, tags: Tag[]) => void
 }
 
 const TAG_COLORS = ['default', 'red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink']
@@ -54,7 +57,7 @@ function tagDotColor(color: string): string {
   }
 }
 
-export default function TagSelectorModal({ visible, objectId, objectType, onClose }: Props) {
+export default function TagSelectorModal({ visible, objectId, objectType, onClose, onChanged }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const { activeUrl, token } = useConnection()
@@ -97,11 +100,18 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
     }
   }, [visible, load])
 
+  // Resolve an applied-id set to full Tag objects (order = allTags) and notify the caller.
+  const emitChanged = useCallback((ids: Set<string>, extra: Tag[] = []) => {
+    const pool = [...allTags, ...extra]
+    onChanged?.(objectId, pool.filter(t => ids.has(t.id)))
+  }, [allTags, objectId, onChanged])
+
   const toggleTag = useCallback(async (tag: Tag) => {
     if (!activeUrl || !token) return
     const applied = appliedIds.has(tag.id)
     setToggling(prev => new Set(prev).add(tag.id))
     try {
+      const next = new Set(appliedIds)
       if (applied) {
         if (objectType === 'document') {
           await removeDocumentTag(activeUrl, token, objectId, tag.id)
@@ -110,7 +120,7 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
         } else {
           await removeHighlightTag(activeUrl, token, objectId, tag.id)
         }
-        setAppliedIds(prev => { const s = new Set(prev); s.delete(tag.id); return s })
+        next.delete(tag.id)
       } else {
         if (objectType === 'document') {
           await addDocumentTag(activeUrl, token, objectId, tag.id)
@@ -119,14 +129,16 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
         } else {
           await addHighlightTag(activeUrl, token, objectId, tag.id)
         }
-        setAppliedIds(prev => new Set(prev).add(tag.id))
+        next.add(tag.id)
       }
+      setAppliedIds(next)
+      emitChanged(next)
     } catch (e) {
       log.error('toggleTag', e)
     } finally {
       setToggling(prev => { const s = new Set(prev); s.delete(tag.id); return s })
     }
-  }, [activeUrl, token, objectId, objectType, appliedIds])
+  }, [activeUrl, token, objectId, objectType, appliedIds, emitChanged])
 
   const handleCreateTag = useCallback(async () => {
     if (!activeUrl || !token || !newTagName.trim()) return
@@ -142,13 +154,15 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
       } else {
         await addHighlightTag(activeUrl, token, objectId, tag.id)
       }
-      setAppliedIds(prev => new Set(prev).add(tag.id))
+      const next = new Set(appliedIds).add(tag.id)
+      setAppliedIds(next)
+      emitChanged(next, [tag])
     } catch (e) {
       log.error('createTag', e)
     } finally {
       setCreating(false)
     }
-  }, [activeUrl, token, newTagName, newTagColor, objectId, objectType])
+  }, [activeUrl, token, newTagName, newTagColor, objectId, objectType, appliedIds, emitChanged])
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>

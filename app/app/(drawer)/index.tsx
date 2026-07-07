@@ -382,6 +382,9 @@ export default function FeedScreen() {
         visible={tagModalId !== null}
         objectId={tagModalId ?? ''}
         objectType="highlight"
+        onChanged={(id, tags) =>
+          setHighlights(prev => prev.map(h => h.id === id ? { ...h, tags } : h))
+        }
         onClose={() => setTagModalId(null)}
       />
       <AnnotationPanel
