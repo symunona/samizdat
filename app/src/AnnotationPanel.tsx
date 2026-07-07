@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
+  InteractionManager,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -43,6 +44,16 @@ export default function AnnotationPanel({ visible, mode, existing, onSave, onDel
   const s = useMemo(() => buildStyles(theme), [theme])
   const [note, setNote] = useState(existing?.note ?? '')
   const [moreOpen, setMoreOpen] = useState(false)
+  const inputRef = useRef<TextInput>(null)
+
+  // Native soft-keyboard fix: bare `autoFocus` fires mid slide-animation, so the
+  // input focuses (cursor blinks) but the OS never raises the IME until a 2nd tap.
+  // Modal `onShow` fires after the entrance settles; focus then reliably shows the
+  // keyboard. Web has no such handshake — `autoFocus` alone is enough there.
+  function handleShow() {
+    if (Platform.OS === 'web') return
+    InteractionManager.runAfterInteractions(() => inputRef.current?.focus())
+  }
 
   useMemo(() => {
     if (visible) {
@@ -62,7 +73,7 @@ export default function AnnotationPanel({ visible, mode, existing, onSave, onDel
   }
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel}>
+    <Modal visible={visible} transparent animationType="slide" onShow={handleShow} onRequestClose={onCancel}>
       <TouchableWithoutFeedback onPress={() => { setMoreOpen(false); onCancel() }}>
         <View style={s.backdrop} />
       </TouchableWithoutFeedback>
@@ -80,13 +91,14 @@ export default function AnnotationPanel({ visible, mode, existing, onSave, onDel
 
           {/* Note input */}
           <TextInput
+            ref={inputRef}
             style={s.noteInput}
             placeholder="Add a note…"
             placeholderTextColor={theme.colors.placeholder}
             multiline
             value={note}
             onChangeText={setNote}
-            autoFocus
+            autoFocus={Platform.OS === 'web'}
             blurOnSubmit={false}
           />
 

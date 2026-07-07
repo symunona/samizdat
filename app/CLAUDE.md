@@ -190,6 +190,34 @@ The `/api/v1/debug/logs` beacon is fire-and-forget: `e2e/smoke.js` ignores its
 `requestfailed` events (a full-page nav legitimately aborts a send) so a debug
 side-channel can never gate the frontend.
 
+## UX RN Platform specifics
+
+### Soft keyboard won't rise on autoFocus inside an animated Modal (native)
+A `TextInput` with bare `autoFocus` inside `<Modal animationType="slide">` focuses on
+native (cursor blinks) but the OS **does not raise the soft keyboard** — a second tap is
+needed. The `autoFocus` fires while the Modal window is still animating in, before it's
+the active input window, so `showSoftInput` never runs. Web has no native Modal/IME
+handshake, so `autoFocus` alone works there (the overlay just shifts above the browser
+keyboard). Known RN issue: react-native-modal #516, react-native-screens #89 / #472.
+
+**Fix:** don't rely on `autoFocus` for native. Focus via a `ref` from the Modal's
+`onShow` (fires after the entrance animation), deferred with
+`InteractionManager.runAfterInteractions` so focus lands only once the view has settled.
+Keep `autoFocus` for web (`autoFocus={Platform.OS === 'web'}`). See `AnnotationPanel.tsx`.
+
+```tsx
+const inputRef = useRef<TextInput>(null)
+function handleShow() {
+  if (Platform.OS === 'web') return
+  InteractionManager.runAfterInteractions(() => inputRef.current?.focus())
+}
+<Modal animationType="slide" onShow={handleShow} …>
+  <TextInput ref={inputRef} autoFocus={Platform.OS === 'web'} … />
+```
+
+This is **native-only** — headless web e2e can't exercise the soft keyboard; verify on a
+device after build.
+
 ## "Web vs mobile" = touch vs non-touch, not Platform.OS
 
 `Platform.OS === 'web'` is true for ALL browsers — desktop Chrome and mobile Safari alike. Never use it to mean "desktop". To branch on touch capability use `window.matchMedia('(pointer: coarse').matches`. Mobile web and native app must behave identically; `Platform.OS === 'web'` silently breaks one of them.
