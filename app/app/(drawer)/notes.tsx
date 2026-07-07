@@ -10,9 +10,10 @@ import {
   View,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { router } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { useConnection } from '../../src/ConnectionContext'
-import { useNotes, useSyncStatus, type NoteWithTags } from '../../src/store/hooks'
+import { useAnnotations, useSyncStatus, type AnnotationWithContext } from '../../src/store/hooks'
 import { forceSync } from '../../src/store/syncEngine'
 import { createNote, updateAnnotation, deleteAnnotation } from '../../src/api'
 import AnnotationPanel, { type ExistingAnnotation } from '../../src/AnnotationPanel'
@@ -36,7 +37,7 @@ export default function NotesScreen() {
   const s = useMemo(() => buildStyles(theme), [theme])
   const { activeUrl, token, status } = useConnection()
 
-  const notes = useNotes()
+  const notes = useAnnotations()
   const { status: syncStatus, error: syncError } = useSyncStatus()
   const [refreshing, setRefreshing] = useState(false)
 
@@ -62,7 +63,13 @@ export default function NotesScreen() {
     setPanelOpen(true)
   }
 
-  function openEdit(n: NoteWithTags) {
+  // Standalone notes edit in place; document-anchored annotations open their
+  // source document scrolled to the anchor (webview focuses mark[data-ann-id]).
+  function openItem(n: AnnotationWithContext) {
+    if (n.document_id) {
+      router.push(`/document/${n.document_id}?from=/notes&highlight=${n.id}`)
+      return
+    }
     setEditing({ id: n.id, exact: '', note: n.note, color: n.color })
     setPanelOpen(true)
   }
@@ -104,11 +111,24 @@ export default function NotesScreen() {
     if (ready) await forceSync(activeUrl, token)
   }
 
-  function renderItem({ item }: { item: NoteWithTags }) {
-    const preview = item.note.trim() || '(empty note)'
+  function renderItem({ item }: { item: AnnotationWithContext }) {
+    const anchored = !!item.document_id
+    const preview = item.note.trim() || (anchored ? '' : '(empty note)')
     return (
-      <Pressable style={s.item} onPress={() => openEdit(item)}>
-        <Text style={s.itemNote} numberOfLines={4}>{preview}</Text>
+      <Pressable style={s.item} onPress={() => openItem(item)}>
+        {anchored && item.exact.trim().length > 0 && (
+          <Text style={s.itemQuote} numberOfLines={3}>{item.exact.trim()}</Text>
+        )}
+        {preview.length > 0 && (
+          <Text style={s.itemNote} numberOfLines={4}>{preview}</Text>
+        )}
+        {anchored && (
+          <View style={s.sourceRow}>
+            <Ionicons name="document-text-outline" size={13} color={theme.colors.muted} />
+            <Text style={s.sourceText} numberOfLines={1}>{item.docTitle ?? 'Source document'}</Text>
+            <Ionicons name="chevron-forward" size={13} color={theme.colors.muted} />
+          </View>
+        )}
         {item.tags.length > 0 && (
           <View style={s.chips}>
             {item.tags.map((t) => (
@@ -144,7 +164,7 @@ export default function NotesScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={theme.colors.accent} />
           }
           ListEmptyComponent={
-            <Text style={s.emptyText}>No notes yet. Tap + to write a note — it isn&apos;t tied to any document.</Text>
+            <Text style={s.emptyText}>No notes or annotations yet. Tap + to write a note, or highlight text in a document.</Text>
           }
           ItemSeparatorComponent={() => <View style={s.separator} />}
         />
@@ -190,7 +210,13 @@ function buildStyles(t: Theme) {
     emptyText: { color: t.colors.muted, fontSize: 15, textAlign: 'center', lineHeight: 22 },
     separator: { height: 1, backgroundColor: t.colors.border, marginLeft: t.spacing.md },
     item: { paddingHorizontal: t.spacing.md, paddingVertical: t.spacing.md, backgroundColor: t.colors.background, gap: t.spacing.sm },
+    itemQuote: {
+      color: t.colors.text, fontSize: 14, lineHeight: 20, fontStyle: 'italic',
+      borderLeftWidth: 3, borderLeftColor: t.colors.border, paddingLeft: t.spacing.sm,
+    },
     itemNote: { color: t.colors.text, fontSize: 15, lineHeight: 21 },
+    sourceRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+    sourceText: { color: t.colors.muted, fontSize: 12, flexShrink: 1 },
     chips: { flexDirection: 'row', flexWrap: 'wrap', gap: t.spacing.xs, alignItems: 'center' },
     chip: {
       flexDirection: 'row', alignItems: 'center', gap: 5,

@@ -344,7 +344,7 @@ returns a "changed" value on every render → **infinite render loop / white cra
 smoke tests and only breaks with real rows). `useDocuments` is safe because it only
 `.filter().sort()`s raw store refs. For derived shapes (counts, joined tags), select
 the **raw store slices** (`s => s.tags`, `s => s.annotationTags`, … — stable refs) and
-build the derived array in a `useMemo`. See `useNotes`/`useTagsWithCounts` in
+build the derived array in a `useMemo`. See `useAnnotations`/`useTagsWithCounts` in
 `src/store/hooks.ts`.
 
 Native-only — the share flow can't be exercised headless; test on a device after build.
