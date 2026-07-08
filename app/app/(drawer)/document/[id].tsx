@@ -524,6 +524,11 @@ export default function DocumentViewer() {
         </View>
       ) : htmlContent ? (
         <View style={[s.contentArea, { marginTop: 56 + insets.top }]}>
+          {doc?.error_reason ? (
+            <View style={s.docErrorBanner}>
+              <Text style={s.docErrorBannerText}>⚠ {doc.error_reason} — no summary generated</Text>
+            </View>
+          ) : null}
           <PendingPipelineBanner docId={id} />
           {Platform.OS === 'web' ? (
             <View style={s.webView}>
@@ -547,6 +552,12 @@ export default function DocumentViewer() {
               onShouldStartLoadWithRequest={(req) => req.navigationType !== 'click'}
             />
           )}
+        </View>
+      ) : doc?.error_reason ? (
+        <View style={[s.centered, { marginTop: 56 + insets.top }]}>
+          <View style={s.docErrorBanner}>
+            <Text style={s.docErrorBannerText}>⚠ {doc.error_reason} — no summary generated</Text>
+          </View>
         </View>
       ) : null}
 
@@ -711,6 +722,15 @@ function buildStyles(t: Theme) {
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
     retryText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
     contentArea: { flex: 1, marginTop: 56 },
+    docErrorBanner: {
+      backgroundColor: t.colors.error + '1f',
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.error + '55',
+      borderRadius: t.radius.sm,
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.sm,
+    },
+    docErrorBannerText: { color: t.colors.error, fontSize: 13, fontWeight: '700', textAlign: 'center' },
     webView: { flex: 1, backgroundColor: t.colors.background },
     progressBar: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, overflow: 'hidden' },
     progressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: t.colors.accent, opacity: 0.6 },

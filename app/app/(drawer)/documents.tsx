@@ -255,6 +255,11 @@ export default function DocumentsScreen() {
           <Text style={s.itemTitle} numberOfLines={2}>{displayTitle}</Text>
           <Text style={s.itemUrl} numberOfLines={1}>{item.canonical_url}</Text>
           <Text style={s.itemDate}>Fetched {formatDate(item.fetched_at)}</Text>
+          {item.error_reason ? (
+            <View style={s.errorBadge}>
+              <Text style={s.errorBadgeText}>⚠ {item.error_reason}</Text>
+            </View>
+          ) : null}
           {((item.highlight_count && item.highlight_count > 0) || (item.annotation_count && item.annotation_count > 0)) ? (
             <View style={s.badgeRow}>
               {item.highlight_count && item.highlight_count > 0 ? (
@@ -473,6 +478,17 @@ function buildStyles(t: Theme) {
     itemUrl: { color: t.colors.muted, fontSize: 12, fontFamily: 'monospace', marginBottom: 2 },
     itemDate: { color: t.colors.placeholder, fontSize: 11 },
     badgeRow: { flexDirection: 'row', gap: 8, marginTop: 2 },
+    errorBadge: {
+      alignSelf: 'flex-start',
+      marginTop: 4,
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      borderRadius: t.radius.sm,
+      backgroundColor: t.colors.error + '22',
+      borderWidth: 1,
+      borderColor: t.colors.error + '55',
+    },
+    errorBadgeText: { color: t.colors.error, fontSize: 11, fontWeight: '700' },
     annBadge: { color: '#e8743b', fontSize: 11, fontWeight: '600' },
     hlBadge: { color: '#7dd3fc', fontSize: 11, fontWeight: '600' },
     itemRow: {

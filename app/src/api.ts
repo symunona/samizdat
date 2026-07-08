@@ -129,6 +129,7 @@ export type Document = {
   media_type?: 'article' | 'video'
   media_metadata?: string
   transcript?: string
+  error_reason?: string
   annotation_count?: number
   highlight_count?: number
   capture_ms?: number
