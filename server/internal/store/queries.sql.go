@@ -492,7 +492,7 @@ func (q *Queries) GetDeviceByTokenHash(ctx context.Context, tokenHash string) (D
 }
 
 const getDocumentByCanonicalURL = `-- name: GetDocumentByCanonicalURL :one
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, error_reason, created_at, updated_at, rev, deleted_at FROM documents WHERE canonical_url = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl string) (Document, error) {
@@ -513,6 +513,7 @@ func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl st
 		&i.MediaType,
 		&i.MediaMetadata,
 		&i.Transcript,
+		&i.ErrorReason,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -522,7 +523,7 @@ func (q *Queries) GetDocumentByCanonicalURL(ctx context.Context, canonicalUrl st
 }
 
 const getDocumentByID = `-- name: GetDocumentByID :one
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, error_reason, created_at, updated_at, rev, deleted_at FROM documents WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetDocumentByID(ctx context.Context, id string) (Document, error) {
@@ -543,6 +544,7 @@ func (q *Queries) GetDocumentByID(ctx context.Context, id string) (Document, err
 		&i.MediaType,
 		&i.MediaMetadata,
 		&i.Transcript,
+		&i.ErrorReason,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,
@@ -1883,7 +1885,7 @@ func (q *Queries) ListDocumentTagsSince(ctx context.Context, updatedAt string) (
 }
 
 const listDocuments = `-- name: ListDocuments :many
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, error_reason, created_at, updated_at, rev, deleted_at FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50
 `
 
 func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
@@ -1910,6 +1912,7 @@ func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
 			&i.MediaType,
 			&i.MediaMetadata,
 			&i.Transcript,
+			&i.ErrorReason,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -1931,7 +1934,7 @@ func (q *Queries) ListDocuments(ctx context.Context) ([]Document, error) {
 const listDocumentsByFeed = `-- name: ListDocumentsByFeed :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
        d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash,
-       d.media_type, d.media_metadata, d.transcript, d.created_at, d.updated_at,
+       d.media_type, d.media_metadata, d.transcript, d.error_reason, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 WHERE d.source_feed_id = ? AND d.deleted_at IS NULL
@@ -1962,6 +1965,7 @@ func (q *Queries) ListDocumentsByFeed(ctx context.Context, sourceFeedID *string)
 			&i.MediaType,
 			&i.MediaMetadata,
 			&i.Transcript,
+			&i.ErrorReason,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -1983,7 +1987,7 @@ func (q *Queries) ListDocumentsByFeed(ctx context.Context, sourceFeedID *string)
 const listDocumentsByPipeline = `-- name: ListDocumentsByPipeline :many
 SELECT DISTINCT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
        d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash,
-       d.media_type, d.media_metadata, d.transcript, d.created_at, d.updated_at,
+       d.media_type, d.media_metadata, d.transcript, d.error_reason, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 JOIN pipeline_runs pr ON pr.document_id = d.id
@@ -2016,6 +2020,7 @@ func (q *Queries) ListDocumentsByPipeline(ctx context.Context, pipelineID string
 			&i.MediaType,
 			&i.MediaMetadata,
 			&i.Transcript,
+			&i.ErrorReason,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -2035,7 +2040,7 @@ func (q *Queries) ListDocumentsByPipeline(ctx context.Context, pipelineID string
 }
 
 const listDocumentsByTag = `-- name: ListDocumentsByTag :many
-SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt, d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.media_type, d.media_metadata, d.transcript, d.created_at, d.updated_at, d.rev, d.deleted_at FROM documents d
+SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt, d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.media_type, d.media_metadata, d.transcript, d.error_reason, d.created_at, d.updated_at, d.rev, d.deleted_at FROM documents d
 JOIN document_tags dt ON dt.document_id = d.id
 WHERE dt.tag_id = ? AND dt.deleted_at IS NULL AND d.deleted_at IS NULL
 ORDER BY d.created_at DESC
@@ -2065,6 +2070,7 @@ func (q *Queries) ListDocumentsByTag(ctx context.Context, tagID string) ([]Docum
 			&i.MediaType,
 			&i.MediaMetadata,
 			&i.Transcript,
+			&i.ErrorReason,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -2085,7 +2091,7 @@ func (q *Queries) ListDocumentsByTag(ctx context.Context, tagID string) ([]Docum
 
 const listDocumentsSince = `-- name: ListDocumentsSince :many
 
-SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at FROM documents WHERE updated_at >= ? ORDER BY updated_at ASC
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, error_reason, created_at, updated_at, rev, deleted_at FROM documents WHERE updated_at >= ? ORDER BY updated_at ASC
 `
 
 // Differential sync queries (returns all rows changed after since, including tombstones)
@@ -2118,6 +2124,7 @@ func (q *Queries) ListDocumentsSince(ctx context.Context, updatedAt string) ([]D
 			&i.MediaType,
 			&i.MediaMetadata,
 			&i.Transcript,
+			&i.ErrorReason,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -2138,7 +2145,7 @@ func (q *Queries) ListDocumentsSince(ctx context.Context, updatedAt string) ([]D
 
 const listDocumentsWithAnnotationCount = `-- name: ListDocumentsWithAnnotationCount :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.error_reason, d.created_at, d.updated_at,
        d.rev, d.deleted_at,
        COALESCE(COUNT(DISTINCT a.id), 0) AS annotation_count,
        COALESCE(COUNT(DISTINCT h.id), 0) AS highlight_count
@@ -2162,6 +2169,7 @@ type ListDocumentsWithAnnotationCountRow struct {
 	PublishedAt     *string     `json:"published_at"`
 	SourceFeedID    *string     `json:"source_feed_id"`
 	ContentHash     string      `json:"content_hash"`
+	ErrorReason     string      `json:"error_reason"`
 	CreatedAt       string      `json:"created_at"`
 	UpdatedAt       string      `json:"updated_at"`
 	Rev             int64       `json:"rev"`
@@ -2191,6 +2199,7 @@ func (q *Queries) ListDocumentsWithAnnotationCount(ctx context.Context) ([]ListD
 			&i.PublishedAt,
 			&i.SourceFeedID,
 			&i.ContentHash,
+			&i.ErrorReason,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Rev,
@@ -3730,6 +3739,21 @@ func (q *Queries) ListTagsWithCounts(ctx context.Context) ([]ListTagsWithCountsR
 	return items, nil
 }
 
+const markDocumentError = `-- name: MarkDocumentError :exec
+UPDATE documents SET error_reason = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type MarkDocumentErrorParams struct {
+	ErrorReason string `json:"error_reason"`
+	UpdatedAt   string `json:"updated_at"`
+	ID          string `json:"id"`
+}
+
+func (q *Queries) MarkDocumentError(ctx context.Context, arg MarkDocumentErrorParams) error {
+	_, err := q.db.ExecContext(ctx, markDocumentError, arg.ErrorReason, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const markFeedPolled = `-- name: MarkFeedPolled :exec
 UPDATE feeds SET last_polled_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
 `
@@ -4292,9 +4316,12 @@ ON CONFLICT(canonical_url) DO UPDATE SET
   media_type     = excluded.media_type,
   media_metadata = excluded.media_metadata,
   transcript     = excluded.transcript,
+  -- A fresh successful scrape is presumed healthy; false-parse detection re-sets
+  -- error_reason afterwards if the new content is still junk.
+  error_reason   = '',
   updated_at     = excluded.updated_at,
   rev            = documents.rev + 1
-RETURNING id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, created_at, updated_at, rev, deleted_at
+RETURNING id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, error_reason, created_at, updated_at, rev, deleted_at
 `
 
 type UpsertDocumentParams struct {
@@ -4351,6 +4378,7 @@ func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) 
 		&i.MediaType,
 		&i.MediaMetadata,
 		&i.Transcript,
+		&i.ErrorReason,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Rev,

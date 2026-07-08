@@ -58,6 +58,7 @@ type Document struct {
 	MediaType     string  `json:"media_type"`
 	MediaMetadata string  `json:"media_metadata"`
 	Transcript    string  `json:"transcript"`
+	ErrorReason   string  `json:"error_reason"`
 	CreatedAt     string  `json:"created_at"`
 	UpdatedAt     string  `json:"updated_at"`
 	Rev           int64   `json:"rev"`

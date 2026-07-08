@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS documents (
     media_type      TEXT NOT NULL DEFAULT 'article',
     media_metadata  TEXT NOT NULL DEFAULT '',
     transcript      TEXT NOT NULL DEFAULT '',
+    error_reason    TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     rev             INTEGER NOT NULL DEFAULT 0,
@@ -376,6 +377,8 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE jobs ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0`,
 		// last video/audio playback position (ms) — server-backed cross-device resume
 		`ALTER TABLE read_states ADD COLUMN media_pos_ms INTEGER NOT NULL DEFAULT 0`,
+		// false-parse flag: bot-protection / login-wall / empty-stub scrapes
+		`ALTER TABLE documents ADD COLUMN error_reason TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {

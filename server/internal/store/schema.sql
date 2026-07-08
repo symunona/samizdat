@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS documents (
     media_type      TEXT NOT NULL DEFAULT 'article',  -- 'article' | 'video'
     media_metadata  TEXT NOT NULL DEFAULT '',         -- JSON: {provider, external_id, duration_ms, transcript_status}
     transcript      TEXT NOT NULL DEFAULT '',         -- JSON: [{start_ms,end_ms,text}] (video only)
+    error_reason    TEXT NOT NULL DEFAULT '',         -- '' = healthy; 'bot protection' | 'could not parse document'
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     rev             INTEGER NOT NULL DEFAULT 0,

@@ -110,12 +110,18 @@ ON CONFLICT(canonical_url) DO UPDATE SET
   media_type     = excluded.media_type,
   media_metadata = excluded.media_metadata,
   transcript     = excluded.transcript,
+  -- A fresh successful scrape is presumed healthy; false-parse detection re-sets
+  -- error_reason afterwards if the new content is still junk.
+  error_reason   = '',
   updated_at     = excluded.updated_at,
   rev            = documents.rev + 1
 RETURNING *;
 
 -- name: UpdateDocumentExcerptHero :exec
 UPDATE documents SET excerpt = ?, hero_image_url = ?, author = ?, updated_at = ? WHERE id = ?;
+
+-- name: MarkDocumentError :exec
+UPDATE documents SET error_reason = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
 -- name: ListDocuments :many
 SELECT * FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 50;
@@ -417,7 +423,7 @@ ORDER BY a.created_at DESC;
 
 -- name: ListDocumentsWithAnnotationCount :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
-       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.created_at, d.updated_at,
+       d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash, d.error_reason, d.created_at, d.updated_at,
        d.rev, d.deleted_at,
        COALESCE(COUNT(DISTINCT a.id), 0) AS annotation_count,
        COALESCE(COUNT(DISTINCT h.id), 0) AS highlight_count
@@ -651,7 +657,7 @@ SELECT COUNT(*) FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND d
 -- name: ListDocumentsByPipeline :many
 SELECT DISTINCT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
        d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash,
-       d.media_type, d.media_metadata, d.transcript, d.created_at, d.updated_at,
+       d.media_type, d.media_metadata, d.transcript, d.error_reason, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 JOIN pipeline_runs pr ON pr.document_id = d.id
@@ -662,7 +668,7 @@ LIMIT 200;
 -- name: ListDocumentsByFeed :many
 SELECT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
        d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash,
-       d.media_type, d.media_metadata, d.transcript, d.created_at, d.updated_at,
+       d.media_type, d.media_metadata, d.transcript, d.error_reason, d.created_at, d.updated_at,
        d.rev, d.deleted_at
 FROM documents d
 WHERE d.source_feed_id = ? AND d.deleted_at IS NULL
