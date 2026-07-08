@@ -19,12 +19,22 @@ function markDocumentLinks(html: string, docsByUrl: Record<string, string>): str
   })
 }
 
+// Media is stored as a relative /api/v1/media/<id> URL. In the native WebView the page
+// origin (loadDataWithBaseURL) doesn't reliably resolve those, so make img srcs absolute
+// against the server base URL — belt-and-suspenders with the WebView's baseUrl.
+function absolutizeImgs(html: string, baseUrl: string): string {
+  if (!baseUrl) return html
+  const b = baseUrl.replace(/\/+$/, '')
+  return html.replace(/(<img\b[^>]*?\bsrc=")(\/[^"]*)"/g, (_m, pre: string, path: string) => `${pre}${b}${path}"`)
+}
+
 export function buildDocumentHtml(
   markdown: string,
   title: string,
   docsByUrl: Record<string, string>,
+  baseUrl = '',
 ): string {
-  const bodyHtml = markDocumentLinks(mdToHtml(markdown), docsByUrl)
+  const bodyHtml = absolutizeImgs(markDocumentLinks(mdToHtml(markdown), docsByUrl), baseUrl)
   return wrapViewerHtml(title, bodyHtml)
 }
 

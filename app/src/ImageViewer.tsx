@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import type { GestureResponderEvent, NativeSyntheticEvent, ImageErrorEventData } from 'react-native'
 import { createLogger } from './logger'
+import { useConnection } from './ConnectionContext'
 
 const log = createLogger('image')
 
@@ -14,36 +15,38 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window')
 
 export default function ImageViewer({ src, alt }: Props) {
   const [open, setOpen] = useState(false)
+  const { activeUrl } = useConnection()
+
+  // Media is served as a RELATIVE URL (/api/v1/media/<id>, rewritten from the original
+  // CDN by the extract-images step). RN <Image> needs an ABSOLUTE uri on native — a
+  // relative path has no origin to resolve against (it works on web via the page origin),
+  // so it fails and reports a degenerate 1×1. Prefix the server base URL.
+  const resolvedSrc = src && src.startsWith('/') && activeUrl ? `${activeUrl.replace(/\/+$/, '')}${src}` : src
 
   const handleThumbPress = useCallback((e: GestureResponderEvent) => {
     e.stopPropagation()
     setOpen(true)
   }, [])
 
-  // Diagnostics (device channel): distinguish "never rendered / bad src" vs "loaded but
-  // invisible" vs "load failed" on a physical device, which web can't reproduce.
+  // Diagnostics (device channel) — temporary, to confirm the fix loads real dimensions.
   const handleError = useCallback((e: NativeSyntheticEvent<ImageErrorEventData>) => {
-    log.warn('image ERROR', { src: src.slice(0, 140), error: e?.nativeEvent?.error })
-  }, [src])
-  const handleLoadStart = useCallback(() => {
-    log.log('image start', { src: src.slice(0, 140) })
-  }, [src])
+    log.warn('image ERROR', { src: resolvedSrc.slice(0, 140), error: e?.nativeEvent?.error })
+  }, [resolvedSrc])
   const handleLoad = useCallback((e: NativeSyntheticEvent<{ source?: { width?: number; height?: number } }>) => {
-    log.log('image OK', { w: e?.nativeEvent?.source?.width, h: e?.nativeEvent?.source?.height, src: src.slice(0, 80) })
-  }, [src])
+    log.log('image OK', { w: e?.nativeEvent?.source?.width, h: e?.nativeEvent?.source?.height, src: resolvedSrc.slice(0, 80) })
+  }, [resolvedSrc])
 
-  if (!src) { log.warn('image EMPTY src (markdown gave no url)'); return null }
+  if (!src) return null
 
   return (
     <>
       <Pressable onPress={handleThumbPress} style={s.thumbWrap}>
         <Image
-          source={{ uri: src }}
+          source={{ uri: resolvedSrc }}
           style={s.thumb}
           resizeMode="contain"
           accessibilityLabel={alt}
           onError={handleError}
-          onLoadStart={handleLoadStart}
           onLoad={handleLoad}
         />
       </Pressable>
@@ -58,7 +61,7 @@ export default function ImageViewer({ src, alt }: Props) {
           <View style={s.backdrop}>
             {Platform.OS === 'web' ? (
               <Image
-                source={{ uri: src }}
+                source={{ uri: resolvedSrc }}
                 style={s.fullImage}
                 resizeMode="contain"
                 accessibilityLabel={alt}
@@ -74,7 +77,7 @@ export default function ImageViewer({ src, alt }: Props) {
                 showsHorizontalScrollIndicator={false}
               >
                 <Image
-                  source={{ uri: src }}
+                  source={{ uri: resolvedSrc }}
                   style={s.fullImage}
                   resizeMode="contain"
                   accessibilityLabel={alt}

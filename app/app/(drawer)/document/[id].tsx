@@ -241,12 +241,12 @@ export default function DocumentViewer() {
       }))
     setDoc(d)
     setDocTags(tagsFrom(st.documentTags[id]))
-    applyHtml(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
+    applyHtml(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl, activeUrl ?? ''))
     setAnnotations(anns)
     setHighlights(hls)
     setSourceFeed(null)
     return true
-  }, [id, applyHtml])
+  }, [id, applyHtml, activeUrl])
 
   const load = useCallback(async (background = false) => {
     if (!activeUrl || !token) return
@@ -272,7 +272,7 @@ export default function DocumentViewer() {
       // not the article WebView — skip the article HTML build. Only replace the HTML
       // when it actually changed, so the background refresh doesn't reload the WebView
       // (and wipe freshly-injected annotation marks) after a store-first render.
-      applyHtml(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
+      applyHtml(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl, activeUrl ?? ''))
       setAnnotations(anns)
       setHighlights(hl)
       if (d.source_feed_id) {
