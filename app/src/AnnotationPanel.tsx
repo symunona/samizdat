@@ -56,16 +56,18 @@ export default function AnnotationPanel({ visible, mode, existing, onSave, onDel
     return () => { subShow.remove(); subHide.remove() }
   }, [])
 
-  // Raise the keyboard when the sheet opens: a bare `autoFocus` fires mid Modal
-  // slide-animation and the OS never raises the IME. Focus from `onShow` (after the
-  // entrance), deferred with a timeout so the Modal window is the active input window
-  // when focus lands — more deterministic than InteractionManager, which can fire
-  // before the window is IME-ready. Web needs no handshake (autoFocus is enough).
+  // Raise the keyboard when the sheet opens. onShow gives an early attempt; the delayed
+  // attempt below (keyed on `visible`) is the reliable one — it fires AFTER the ~300ms
+  // Modal slide-animation, once the Modal window is the active input window, which an
+  // onShow/InteractionManager focus can miss by firing too early. Web uses autoFocus.
   function handleShow() {
-    if (Platform.OS === 'web') return
-    inputRef.current?.focus()
-    setTimeout(() => inputRef.current?.focus(), 250)
+    if (Platform.OS !== 'web') inputRef.current?.focus()
   }
+  useEffect(() => {
+    if (!visible || Platform.OS === 'web') return
+    const t = setTimeout(() => inputRef.current?.focus(), 400)
+    return () => clearTimeout(t)
+  }, [visible])
 
   useMemo(() => {
     if (visible) {
