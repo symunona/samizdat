@@ -20,13 +20,19 @@ export default function ImageViewer({ src, alt }: Props) {
     setOpen(true)
   }, [])
 
-  // Report load failures to the device debug channel so a broken image on a physical
-  // device (which web can't reproduce) tells us WHY — the src + the native error.
+  // Diagnostics (device channel): distinguish "never rendered / bad src" vs "loaded but
+  // invisible" vs "load failed" on a physical device, which web can't reproduce.
   const handleError = useCallback((e: NativeSyntheticEvent<ImageErrorEventData>) => {
-    log.warn('image load failed', { src: src.slice(0, 140), error: e?.nativeEvent?.error })
+    log.warn('image ERROR', { src: src.slice(0, 140), error: e?.nativeEvent?.error })
+  }, [src])
+  const handleLoadStart = useCallback(() => {
+    log.log('image start', { src: src.slice(0, 140) })
+  }, [src])
+  const handleLoad = useCallback((e: NativeSyntheticEvent<{ source?: { width?: number; height?: number } }>) => {
+    log.log('image OK', { w: e?.nativeEvent?.source?.width, h: e?.nativeEvent?.source?.height, src: src.slice(0, 80) })
   }, [src])
 
-  if (!src) return null
+  if (!src) { log.warn('image EMPTY src (markdown gave no url)'); return null }
 
   return (
     <>
@@ -37,6 +43,8 @@ export default function ImageViewer({ src, alt }: Props) {
           resizeMode="contain"
           accessibilityLabel={alt}
           onError={handleError}
+          onLoadStart={handleLoadStart}
+          onLoad={handleLoad}
         />
       </Pressable>
       {open && (
