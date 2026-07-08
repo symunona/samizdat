@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { View, Text, FlatList, StyleSheet, Pressable, Alert, useWindowDimensions } from 'react-native'
+import { View, Text, FlatList, StyleSheet, Pressable, Alert, Platform, useWindowDimensions } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useRouter, useNavigation } from 'expo-router'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
@@ -93,6 +93,13 @@ export default function FeedScreen() {
 
   const swipeRefs = useRef<Map<string, SwipeableMethods | null>>(new Map())
   const deleteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  // Scroll-preservation across a sync-injected prepend. New highlights sort
+  // newest-first to the top, so a sync landing mid-read shoves the list down.
+  // `maintainVisibleContentPosition` (below) anchors the visible cards on native;
+  // web gets the same for free from the browser's overflow-anchor. This flag just
+  // gates the scroll-past archive logic off during the resulting programmatic jump
+  // so the auto-adjust isn't mistaken for a fast user scroll (see onScroll).
+  const preservingScrollRef = useRef(false)
   // scroll-to-archive tracking
   const scrollYRef = useRef(0)
   const itemFirstSeenYRef = useRef<Map<string, number>>(new Map())
@@ -148,8 +155,19 @@ export default function FeedScreen() {
 
   // A sync may pull new highlights server-side; re-fetch once it settles so the
   // skeleton resolves to real cards instead of dropping straight to the empty state.
+  // If the user has scrolled off the top, arm scroll-preservation: the injected
+  // cards prepend and maintainVisibleContentPosition (native) / overflow-anchor (web)
+  // shift the offset to hold their place — suppress the archive logic through it, and
+  // clear the archive Y-baselines since that shift invalidates them.
   useEffect(() => {
-    if (status === 'connected' && lastSyncedAt) load()
+    if (status !== 'connected' || !lastSyncedAt) return
+    if (scrollYRef.current > 4) {
+      preservingScrollRef.current = true
+      pendingArchiveRef.current.clear()
+      itemFirstSeenYRef.current.clear()
+      setTimeout(() => { preservingScrollRef.current = false }, 1200)
+    }
+    load()
   }, [lastSyncedAt, status, load])
 
   const handlePin = useCallback(async (item: HighlightWithDoc) => {
@@ -337,9 +355,16 @@ export default function FeedScreen() {
         renderItem={renderItem}
         onRefresh={load}
         refreshing={loading}
+        // Hold the reader's place when a sync prepends newer highlights. Native-only:
+        // RNW doesn't implement it (passing it there would warn on an unknown DOM prop),
+        // and web already gets equivalent behaviour from the browser's overflow-anchor.
+        maintainVisibleContentPosition={Platform.OS === 'web' ? undefined : { minIndexForVisible: 1 }}
         onScroll={(e) => {
           const y = e.nativeEvent.contentOffset.y
           scrollYRef.current = y
+          // Programmatic re-anchor after a sync prepend — don't let the jump read as
+          // a fast user scroll (velocity) or trip scroll-past archiving.
+          if (preservingScrollRef.current) { lastScrollRef.current = { y, t: Date.now() }; return }
           if (!autoMarkRead) return // auto-mark-as-read off → never scroll-archive
           // velocity (px/ms); fast downward scroll mass-archives — offer bulk undo
           const now = Date.now()
