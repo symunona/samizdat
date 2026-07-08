@@ -53,6 +53,7 @@ func (h *documentsHandler) list(w http.ResponseWriter, r *http.Request) {
 				HeroImageUrl: row.HeroImageUrl,
 				Author:       row.Author,
 				SourceFeedID: row.SourceFeedID,
+				ErrorReason:  row.ErrorReason,
 				CreatedAt:    row.CreatedAt,
 				UpdatedAt:    row.UpdatedAt,
 				Rev:          row.Rev,

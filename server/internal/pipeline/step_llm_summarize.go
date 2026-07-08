@@ -17,6 +17,11 @@ func init() {
 	Register("llm_summarize", handleLLMSummarize)
 }
 
+// notParseableToken is the sentinel the summarizer emits when it judges the input
+// to be a bot page / login wall / empty stub rather than real article content —
+// the LLM layer of false-parse detection, catching cases the heuristic misses.
+const notParseableToken = "__NOT_PARSEABLE__"
+
 type llmSummarizeConfig struct {
 	Model    string `json:"model"`
 	Prompt   string `json:"prompt"`
@@ -32,7 +37,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 		c.Model = "claude-haiku-4-5-20251001"
 	}
 	if c.Prompt == "" {
-		c.Prompt = "Summarize as caveman. Rules: drop all articles (a/an/the), drop filler words (just/really/basically/actually/simply/notably), drop hedges (seems/appears/might), no pleasantries, no intro, no outro. Fragments OK. Short synonyms (big not extensive, fix not implement a solution). Max 3 bullets. Pattern: [thing] [action] [why it matters]. Bold the key topic/name of each bullet: **keyword** where it naturally lands — one bold per bullet. Boring or thin = one line. Never start with 'This article'. NO heading and NO title line — do not repeat or restate the article title; start straight with the first bullet (the title is shown separately). IMPORTANT: if content is empty, image-only, or has no meaningful text to summarize, return exactly empty string — nothing else."
+		c.Prompt = "Summarize as caveman. Rules: drop all articles (a/an/the), drop filler words (just/really/basically/actually/simply/notably), drop hedges (seems/appears/might), no pleasantries, no intro, no outro. Fragments OK. Short synonyms (big not extensive, fix not implement a solution). Max 3 bullets. Pattern: [thing] [action] [why it matters]. Bold the key topic/name of each bullet: **keyword** where it naturally lands — one bold per bullet. Boring or thin = one line. Never start with 'This article'. NO heading and NO title line — do not repeat or restate the article title; start straight with the first bullet (the title is shown separately). IMPORTANT: if content is empty, image-only, or has no meaningful text to summarize, return exactly empty string — nothing else. If the input is NOT a real article — a bot check ('checking your browser', 'verify you are human'), a login or paywall wall, a CAPTCHA, or an error/teaser stub with no article body — respond with EXACTLY " + notParseableToken + " on a single line and nothing else."
 	}
 
 	// Use step-level provider if specified, otherwise fall back to global client.
@@ -80,6 +85,22 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	})
 
 	reply = strings.TrimSpace(reply)
+
+	// LLM layer of false-parse detection: the model flagged this as a bot page /
+	// login wall / empty stub. Flag the Document and fail permanently — no highlight,
+	// and the worker won't retry (re-running would just re-burn tokens).
+	if strings.HasPrefix(reply, notParseableToken) {
+		now := time.Now().UTC().Format(time.RFC3339)
+		if err := q.MarkDocumentError(ctx, store.MarkDocumentErrorParams{
+			ErrorReason: ReasonUnparseable,
+			UpdatedAt:   now,
+			ID:          run.DocumentID,
+		}); err != nil {
+			return StepResult{}, fmt.Errorf("llm_summarize: mark document error: %w", err)
+		}
+		return StepResult{}, &FalseParseError{Reason: ReasonUnparseable}
+	}
+
 	// Drop any leading heading / echoed title so the card doesn't show a double
 	// title (the Highlight.Title field already carries doc.Title).
 	reply = StripLeadingTitle(reply, doc.Title)

@@ -46,6 +46,16 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, db *sql.DB, job st
 		return "", fmt.Errorf("get document: %w", err)
 	}
 
+	// False-parse gate (article docs only): don't spend a run — or LLM tokens — on a
+	// bot-challenge / login-wall / empty-stub Document. Flag it and fail permanently.
+	// Video (transcript) Documents have a different content model and are exempt.
+	if doc.MediaType != "video" {
+		if fpe := pipeline.DetectFalseParse(doc.Title, doc.Markdown); fpe != nil {
+			logPipeline.Warnf("false parse for document %s: %s — skipping pipeline", p.DocumentID[:8], fpe.Reason)
+			return "", flagFalseParse(ctx, q, doc.ID, fpe)
+		}
+	}
+
 	// Skip guard: unless forced, reuse an existing DONE run when the document
 	// content is unchanged since that run — avoids needless duplicate regeneration.
 	// An empty hash (legacy doc, never re-scraped) never matches, so it never skips.

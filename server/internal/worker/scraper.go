@@ -251,6 +251,15 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 
 	logScraper.Printf("upserted document %s for %s", doc.ID[:8], canonical)
 
+	// False-parse gate: a bot challenge / login wall / near-empty stub is not real
+	// article content. Flag the Document and fail the job permanently (no retry —
+	// re-scraping a blocked/paywalled URL is what design rule 3 forbids) instead of
+	// letting the pipeline extract junk highlights.
+	if fpe := pipeline.DetectFalseParse(title, md); fpe != nil {
+		logScraper.Warnf("false parse for %s: %s — flagging document, no pipeline", canonical, fpe.Reason)
+		return "", flagFalseParse(ctx, q, doc.ID, fpe)
+	}
+
 	finishDocument(ctx, q, job, doc, title, p.Manual)
 
 	jobResult, _ := json.Marshal(map[string]string{"document_id": doc.ID, "title": title})

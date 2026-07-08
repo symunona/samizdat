@@ -91,6 +91,22 @@ func (w *Worker) ExtractorRegistry() extractor.Registry {
 	return w.extractorReg
 }
 
+// flagFalseParse records a false-parse reason on the Document (so it's visibly
+// flagged and not treated as good content) and returns the *FalseParseError the
+// worker recognises as a permanent job failure. Shared by the scrape and
+// pipeline detection sites.
+func flagFalseParse(ctx context.Context, q *store.Queries, docID string, fpe *pipeline.FalseParseError) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := q.MarkDocumentError(ctx, store.MarkDocumentErrorParams{
+		ErrorReason: fpe.Reason,
+		UpdatedAt:   now,
+		ID:          docID,
+	}); err != nil {
+		logWorker.Errorf("mark document %s error: %v", docID[:8], err)
+	}
+	return fpe
+}
+
 // FetchHTML fetches the fully-rendered HTML for the given URL via the browser
 // pool (no persisted auth session — used for preview/dry-run only).
 func (w *Worker) FetchHTML(url string) (string, error) {
@@ -219,9 +235,20 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 
 	logWorker.Errorf("job %s (%s) attempt %d failed in %s: %v", job.ID[:8], job.Kind, job.Attempts, elapsed, err)
 
+	// A false-parse (bot-protection / login-wall / empty-stub Document) is a
+	// PERMANENT failure: retrying just re-scrapes a blocked/paywalled URL or
+	// re-burns LLM tokens. Fail straight to dead with the clean reason as
+	// last_error; the detection site already flagged the Document.
+	var fpe *pipeline.FalseParseError
+	permanent := errors.As(err, &fpe)
+	lastErr := err.Error()
+	if permanent {
+		lastErr = fpe.Reason
+	}
+
 	// Record the error message on the job for operator visibility.
 	if e := w.q.MarkJobLastError(ctx, store.MarkJobLastErrorParams{
-		LastError: err.Error(),
+		LastError: lastErr,
 		UpdatedAt: now,
 		ID:        job.ID,
 	}); e != nil {
@@ -229,7 +256,7 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	}
 
 	status := "queued"
-	if job.Attempts >= maxAttempts {
+	if permanent || job.Attempts >= maxAttempts {
 		status = "dead"
 	}
 	backoff := time.Duration(math.Pow(2, float64(job.Attempts-1))) * 30 * time.Second
