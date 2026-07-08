@@ -1,6 +1,9 @@
 import { useCallback, useState } from 'react'
 import { Dimensions, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
-import type { GestureResponderEvent } from 'react-native'
+import type { GestureResponderEvent, NativeSyntheticEvent, ImageErrorEventData } from 'react-native'
+import { createLogger } from './logger'
+
+const log = createLogger('image')
 
 type Props = {
   src: string
@@ -17,6 +20,12 @@ export default function ImageViewer({ src, alt }: Props) {
     setOpen(true)
   }, [])
 
+  // Report load failures to the device debug channel so a broken image on a physical
+  // device (which web can't reproduce) tells us WHY — the src + the native error.
+  const handleError = useCallback((e: NativeSyntheticEvent<ImageErrorEventData>) => {
+    log.warn('image load failed', { src: src.slice(0, 140), error: e?.nativeEvent?.error })
+  }, [src])
+
   if (!src) return null
 
   return (
@@ -27,6 +36,7 @@ export default function ImageViewer({ src, alt }: Props) {
           style={s.thumb}
           resizeMode="contain"
           accessibilityLabel={alt}
+          onError={handleError}
         />
       </Pressable>
       {open && (
