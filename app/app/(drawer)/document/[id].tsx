@@ -204,6 +204,38 @@ export default function DocumentViewer() {
     setAnnVisible(true)
   }, [])
 
+  // Offline fallback: the sync replica pulls the FULL document set (markdown,
+  // highlights, annotations, tags) down on every sync and persists it in
+  // AsyncStorage, so a cached article reads without the network. Rebuilds the whole
+  // view from the store; returns false when this document isn't in the local cache.
+  const loadFromStore = useCallback((): boolean => {
+    const st = useSyncStore.getState()
+    const d = st.documents[id]
+    if (!d || d.deleted_at) return false
+    const docsByUrl: Record<string, string> = {}
+    for (const doc of Object.values(st.documents)) {
+      if (!doc.deleted_at) docsByUrl[doc.canonical_url] = doc.id
+    }
+    const tagsFrom = (ids?: string[]): Tag[] =>
+      (ids ?? []).map(tid => st.tags[tid]).filter((t): t is Tag => !!t)
+    const anns = Object.values(st.annotations).filter(a => a.document_id === id && !a.deleted_at)
+    const hls: HighlightWithDoc[] = Object.values(st.highlights)
+      .filter(h => h.document_id === id && !h.deleted_at && !h.archived_at)
+      .map(h => ({
+        ...h,
+        document_title: d.title,
+        document_url: d.canonical_url,
+        tags: tagsFrom(st.highlightTags[h.id]),
+      }))
+    setDoc(d)
+    setDocTags(tagsFrom(st.documentTags[id]))
+    setHtmlContent(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
+    setAnnotations(anns)
+    setHighlights(hls)
+    setSourceFeed(null)
+    return true
+  }, [id])
+
   const load = useCallback(async () => {
     if (!activeUrl || !token) return
     isDocLoadedRef.current = false
@@ -238,19 +270,25 @@ export default function DocumentViewer() {
         savedProgressRef.current = progress.scroll_y
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load document')
+      // Network hiccup / offline — fall back to the cached copy before erroring.
+      if (loadFromStore()) setError(null)
+      else setError(e instanceof Error ? e.message : 'Failed to load document')
     } finally {
       setLoading(false)
     }
-  }, [activeUrl, token, id])
+  }, [activeUrl, token, id, loadFromStore])
 
   useEffect(() => {
     if (status === 'connected') load()
-    else if (status === 'disconnected') { setError('Not connected'); setLoading(false) }
+    // Offline: read straight from the cache; only error if it isn't stored.
+    else if (status === 'disconnected') {
+      if (!loadFromStore()) setError('Not connected — this document isn’t saved offline')
+      setLoading(false)
+    }
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     }
-  }, [id, status, load])
+  }, [id, status, load, loadFromStore])
 
   const handleHeaderLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
     headerHeightRef.current = e.nativeEvent.layout.height
