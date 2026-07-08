@@ -114,9 +114,11 @@ func (h *highlightsHandler) listByDocument(w http.ResponseWriter, r *http.Reques
 	}
 	out := make([]highlightWithDoc, 0, len(rows))
 	for _, hl := range rows {
+		tags, _ := h.q.ListTagsByHighlight(r.Context(), hl.ID)
 		out = append(out, highlightWithDoc{
 			Highlight: hl,
 			BodyHTML:  renderMarkdown(hl.Body),
+			Tags:      tags,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

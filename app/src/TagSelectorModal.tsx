@@ -31,6 +31,7 @@ import {
   createTag,
 } from './api'
 import type { Tag } from './api'
+import { TAG_COLORS, tagColor } from './tagColor'
 
 type Props = {
   visible: boolean
@@ -40,21 +41,6 @@ type Props = {
   // Fires with the object's full applied-tag list after every add/remove/create,
   // so the caller can patch its list in place (the modal doesn't refetch the feed).
   onChanged?: (objectId: string, tags: Tag[]) => void
-}
-
-const TAG_COLORS = ['default', 'red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink']
-
-function tagDotColor(color: string): string {
-  switch (color) {
-    case 'red': return '#f87171'
-    case 'orange': return '#e8743b'
-    case 'yellow': return '#facc15'
-    case 'green': return '#4ade80'
-    case 'blue': return '#60a5fa'
-    case 'purple': return '#a78bfa'
-    case 'pink': return '#f472b6'
-    default: return '#9ca3af'
-  }
 }
 
 export default function TagSelectorModal({ visible, objectId, objectType, onClose, onChanged }: Props) {
@@ -198,7 +184,7 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
                     onPress={() => toggleTag(item)}
                     disabled={isToggling}
                   >
-                    <View style={[s.dot, { backgroundColor: tagDotColor(item.color) }]} />
+                    <View style={[s.dot, { backgroundColor: tagColor(item.color) }]} />
                     <Text style={[s.tagName, isApplied && s.tagNameApplied]}>{item.name}</Text>
                     {isToggling ? (
                       <ActivityIndicator size="small" color={theme.colors.accent} />
@@ -242,7 +228,7 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
               {TAG_COLORS.map(c => (
                 <Pressable
                   key={c}
-                  style={[s.colorDot, { backgroundColor: tagDotColor(c) }, newTagColor === c && s.colorDotSelected]}
+                  style={[s.colorDot, { backgroundColor: tagColor(c) }, newTagColor === c && s.colorDotSelected]}
                   onPress={() => setNewTagColor(c)}
                 />
               ))}

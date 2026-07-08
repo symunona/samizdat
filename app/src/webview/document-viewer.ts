@@ -3,8 +3,11 @@
 // Only dependency-free imports allowed (esbuild --bundle inlines them); never
 // pull in react-native-unistyles here — keep the WebView bundle lean.
 import { iconButtonSpec as IB } from '../iconButtonSpec'
+import { tagColor } from '../tagColor'
 
 // ── Types ────────────────────────────────────────────────────────────────────
+
+type HlTag = { id: string; name: string; color: string }
 
 type HlData = {
   id: string
@@ -12,6 +15,7 @@ type HlData = {
   title: string
   bodyHtml: string
   pinned: 0 | 1
+  tags?: HlTag[]
 }
 
 type ThemeData = {
@@ -149,6 +153,10 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 .hl-icon-btn svg{width:${IB.size}px;height:${IB.size}px;display:block}
 .hl-delete-btn:hover{color:#b91c1c}
 .hl-spacer{flex:1}
+/* Tag-name chips — mirror the RN HighlightCard tag row (src/HighlightCard.tsx).
+   Sit above the footer, wrap on overflow, tap opens the tag selector (hl_tags). */
+.hl-tags{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px 0}
+.hl-tag-chip{padding:2px 8px;border-radius:10px;border:1px solid;font-size:11px;font-weight:600;cursor:pointer;background:transparent;line-height:1.4}
 `
 
 function injectBaseStyles(): void {
@@ -238,6 +246,26 @@ function renderHighlightCard(hl: HlData): HTMLElement {
 
   card.appendChild(header)
   card.appendChild(body)
+
+  // Tag-name chips above the footer (mirrors HighlightCard.tsx). Each chip carries
+  // data-action="tags" so a tap opens the tag selector, same as the Tags button.
+  if (hl.tags && hl.tags.length > 0) {
+    const tagRow = document.createElement('div')
+    tagRow.className = 'hl-tags'
+    for (const tag of hl.tags) {
+      const chip = document.createElement('button')
+      chip.className = 'hl-tag-chip'
+      chip.dataset.id = hl.id
+      chip.dataset.action = 'tags'
+      const c = tagColor(tag.color)
+      chip.style.borderColor = c
+      chip.style.color = c
+      chip.textContent = `#${tag.name}`
+      tagRow.appendChild(chip)
+    }
+    card.appendChild(tagRow)
+  }
+
   card.appendChild(footer)
   return card
 }
@@ -668,6 +696,7 @@ document.addEventListener('click', (e: MouseEvent) => {
     ;(document.getElementById('ann-btn') as HTMLButtonElement).style.display = 'none'
     sendMsg({ type: 'selection', data: _pendingSel })
     _pendingSel = null
+    _lastSelText = ''
     window.getSelection()?.removeAllRanges()
     return
   }
@@ -770,13 +799,33 @@ window.addEventListener('scroll', () => {
 // ── Text selection ────────────────────────────────────────────────────────────
 
 let _pendingSel: SelectionData | null = null
+let _lastSelText = '' // change-detection so the poll only acts/logs on a real change
+let _pollUntil = 0    // keep the touch poll alive until this time (extended on each change)
 
-function handleSelection(): void {
+// TEMP native-selection diagnostics — streams to the device-log channel (`just
+// device-logs`) so the Android WebView selection path can be observed on a real
+// phone. The RN host forwards {type:'debug'} to its logger. Flip _DBG off (or strip
+// the dbg() calls) once the native repro is confirmed.
+const _DBG = true
+function dbg(...parts: unknown[]): void {
+  if (!_DBG) return
+  const s = parts.map(p => (typeof p === 'string' ? p : JSON.stringify(p))).join(' ')
+  sendMsg({ type: 'debug', msg: '[dv-sel] ' + s })
+}
+
+// handleSelection is idempotent and cheap — it may be called from many triggers
+// (mouseup / touchend / selectionchange / the touch poll below). `reason` is only
+// for the diagnostic log; work is gated on the selection actually having changed.
+function handleSelection(reason: string): void {
   const sel = window.getSelection()
+  const annBtn = document.getElementById('ann-btn')
   if (!sel || sel.isCollapsed || !sel.toString().trim()) {
-    const annBtn = document.getElementById('ann-btn')
-    if (annBtn) annBtn.style.display = 'none'
-    _pendingSel = null
+    if (_lastSelText !== '') {
+      _lastSelText = ''
+      _pendingSel = null
+      if (annBtn) annBtn.style.display = 'none'
+      dbg('clear via', reason)
+    }
     return
   }
   const raw = sel.toString()
@@ -792,8 +841,12 @@ function handleSelection(): void {
   const seg = startEl?.closest<HTMLElement>('.seg[data-start-ms]')
   const media_ts_ms = seg ? Number(seg.dataset.startMs) || 0 : undefined
   _pendingSel = { exact, prefix: ctx.prefix, suffix: ctx.suffix, pos_start: start, pos_end: start + exact.length, media_ts_ms }
-  const annBtn = document.getElementById('ann-btn')
   if (annBtn) positionAnnButton(annBtn, range)
+  if (exact !== _lastSelText) {
+    _lastSelText = exact
+    _pollUntil = Date.now() + 2500 // selection still moving (handle drag) — keep polling
+    dbg('show via', reason, 'len:' + exact.length)
+  }
 }
 
 // Place the Annotate button next to the selection instead of pinning it to a
@@ -818,11 +871,47 @@ function positionAnnButton(btn: HTMLElement, range: Range): void {
   btn.style.top = `${Math.round(top)}px`
 }
 
-document.addEventListener('touchend', () => {
-  setTimeout(handleSelection, 100)
+// Desktop: mouseup fires with a complete selection — instant + reliable.
+document.addEventListener('mouseup', () => handleSelection('mouseup'))
+document.addEventListener('touchend', () => { dbg('touchend'); setTimeout(() => handleSelection('touchend'), 60) })
+
+// selectionchange fires on both mouse and touch when the range changes; debounced so
+// a drag's rapid fire doesn't thrash the button. On desktop this is the workhorse for
+// live re-positioning; on Android WebView its firing is inconsistent (hence the poll).
+let _selTimer: ReturnType<typeof setTimeout> | null = null
+document.addEventListener('selectionchange', () => {
+  dbg('selectionchange')
+  if (_selTimer) clearTimeout(_selTimer)
+  _selTimer = setTimeout(() => handleSelection('selectionchange'), 120)
 })
 
-document.addEventListener('mouseup', handleSelection)
+// THE native fix — a touch-gated poll. On Android's RN WebView a long-press + handle
+// drag selection routinely fires NEITHER `mouseup` NOR a document `touchend` (the
+// native text-selection ActionMode swallows them), and `selectionchange` support is
+// version-dependent — so the button never surfaced until an unrelated gesture (a
+// scroll) happened to emit a `touchend` that re-ran handleSelection ("only shows
+// after I scroll"). Polling `getSelection()` for a short window around every touch is
+// the one mechanism that surfaces the button immediately regardless of which DOM
+// events the WebView chooses to fire. Runs only after a touch, so desktop never polls.
+let _pollTimer: ReturnType<typeof setInterval> | null = null
+function pumpSelPoll(): void {
+  // Extend the window on every touch AND on every selection change (handleSelection
+  // bumps _pollUntil) so the poll survives a slow handle-drag of any duration, then
+  // stops 2.5s after the selection finally settles.
+  _pollUntil = Date.now() + 2500
+  if (_pollTimer) return
+  dbg('poll start')
+  _pollTimer = setInterval(() => {
+    handleSelection('poll')
+    if (Date.now() > _pollUntil) {
+      if (_pollTimer) clearInterval(_pollTimer)
+      _pollTimer = null
+      dbg('poll stop')
+    }
+  }, 140)
+}
+document.addEventListener('touchstart', pumpSelPoll, { passive: true })
+document.addEventListener('touchend', pumpSelPoll, { passive: true })
 
 // ── Highlight card swipe (star / delete) ────────────────────────────────────────
 // Mirrors the RN feed's swipe-triage (src/HighlightCard.tsx): drag a highlight

@@ -8,6 +8,7 @@ import MarkdownBody from './MarkdownBody'
 import NoteEditButton from './NoteEditButton'
 import IconButton from './IconButton'
 import { isTouchDevice } from './touch'
+import { tagColor } from './tagColor'
 
 const MAX_BODY_HEIGHT = 400
 
@@ -110,9 +111,14 @@ export default function HighlightCard({
       {item.tags && item.tags.length > 0 && (
         <View style={s.tagRow}>
           {item.tags.map(tag => (
-            <View key={tag.id} style={[s.tagChip, { borderColor: tag.color || theme.colors.border }]}>
-              <Text style={[s.tagText, { color: tag.color || theme.colors.muted }]}>#{tag.name}</Text>
-            </View>
+            <Pressable
+              key={tag.id}
+              style={[s.tagChip, { borderColor: tagColor(tag.color) }]}
+              onPress={onTags}
+              hitSlop={4}
+            >
+              <Text style={[s.tagText, { color: tagColor(tag.color) }]}>#{tag.name}</Text>
+            </Pressable>
           ))}
         </View>
       )}
