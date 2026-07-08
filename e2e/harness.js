@@ -137,6 +137,22 @@ VALUES ('${q(id)}','${q(canonicalUrl)}','${q(title)}','${q(markdown)}','${now}',
   console.log('  seeded text document', id)
 }
 
+// Seed a false-parse Document (a bot-protection / login-wall scrape that the
+// engine flagged) so the Documents-list error badge is exercised by the smoke
+// test. error_reason is the visible flag; no highlights are created.
+export function seedFalseParseDoc({ id, reason, canonicalUrl }) {
+  const now = new Date().toISOString()
+  const q = s => s.replace(/'/g, "''")
+  const sql = `
+INSERT OR REPLACE INTO documents (id,canonical_url,title,markdown,fetched_at,excerpt,hero_image_url,author,published_at,source_feed_id,content_hash,media_type,media_metadata,transcript,error_reason,created_at,updated_at,rev,deleted_at)
+VALUES ('${q(id)}','${q(canonicalUrl)}','Checking your browser','Checking your browser before accessing.','${now}','','','',NULL,NULL,'${q(id)}hash','article','','','${q(reason)}','${now}','${now}',1,NULL);
+`
+  const sqlFile = '/tmp/samizdat-test/seed-falseparse.sql'
+  fs.writeFileSync(sqlFile, sql)
+  execSync(`sqlite3 ${TEST_DB} < ${sqlFile}`)
+  console.log('  seeded false-parse document', id, `(${reason})`)
+}
+
 // Seed the video Document used by the smoke test's player + export checks.
 export function seedVideoDoc(deviceId, videoDocId) {
   const aid = 'eeeeeeee-0000-4000-8000-0000000000a1'

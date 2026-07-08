@@ -13,12 +13,16 @@ import fs from 'node:fs'
 import { join } from 'node:path'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
-  newConnectedPage, seedVideoDoc, makeCleanup,
+  newConnectedPage, seedVideoDoc, seedFalseParseDoc, makeCleanup,
 } from './harness.js'
 
 // A fixed video Document id seeded into the test DB so the video player screen
 // (transcript + audio + seeker) is exercised by the smoke test.
 const VIDEO_DOC_ID = 'eeeeeeee-0000-4000-8000-000000000001'
+
+// A flagged (bot-protection) Document so the Documents-list error badge renders.
+const FALSE_PARSE_DOC_ID = 'eeeeeeee-0000-4000-8000-000000000002'
+const FALSE_PARSE_REASON = 'bot protection'
 
 // Pages to visit: [path, description]
 const PAGES = [
@@ -47,6 +51,11 @@ async function runSmoke() {
   serverProc = await startServer()
   const { token, deviceId } = await pairDevice('smoke-test-device')
   seedVideoDoc(deviceId, VIDEO_DOC_ID)
+  seedFalseParseDoc({
+    id: FALSE_PARSE_DOC_ID,
+    reason: FALSE_PARSE_REASON,
+    canonicalUrl: 'https://blocked.example.com/article',
+  })
 
   console.log('  launching browser...')
   browser = await launchBrowser()
@@ -72,6 +81,9 @@ async function runSmoke() {
     }
   }
 
+  // False-parse UI: the flagged Document must show its error badge in the list.
+  errors.push(...await runFalseParseUiCheck(browser, token, deviceId))
+
   // API contract checks for the rerun-cascade feature (no LLM / network needed;
   // deep cascade semantics are covered by the Go store/pipeline tests).
   errors.push(...await runJobsApiChecks(token))
@@ -84,6 +96,33 @@ async function runSmoke() {
   errors.push(...await runVideoApiChecks(token))
 
   return errors
+}
+
+// runFalseParseUiCheck drives the real Documents screen and asserts the flagged
+// Document's error badge is VISIBLE (not just an API row) — a silent UI failure
+// would still return HTTP 200, so we assert the rendered text.
+async function runFalseParseUiCheck(browser, token, deviceId) {
+  const out = []
+  const { page, errors: pageErrors } = await newConnectedPage(browser, token, deviceId)
+  try {
+    await page.goto(`${BASE_URL}/documents`, { waitUntil: 'networkidle2', timeout: 15000 })
+    // Poll for the badge text — the doc arrives via a background sync pull.
+    let found = false
+    for (let i = 0; i < 20 && !found; i++) {
+      await sleep(500)
+      found = await page.evaluate(
+        (reason) => document.body.innerText.toLowerCase().includes(reason),
+        FALSE_PARSE_REASON,
+      )
+    }
+    if (found) console.log('  PASS [false-parse] error badge visible on Documents list')
+    else out.push(`[false-parse] error badge "${FALSE_PARSE_REASON}" not visible on /documents`)
+  } catch (e) {
+    out.push(`[false-parse] ${e.message}`)
+  }
+  out.push(...pageErrors.map(e => `[false-parse] ${e}`))
+  await page.close()
+  return out
 }
 
 // runExportChecks polls the export stats endpoint until the seeded Document is
@@ -242,6 +281,7 @@ async function main() {
     if (errors.length > 0) {
       console.error('\n=== FAILED ===')
       console.error(`${errors.length} error(s) found.`)
+      for (const e of errors) console.error(`  - ${e}`)
       process.exitCode = 1
     } else {
       console.log('\n=== PASSED ===')
