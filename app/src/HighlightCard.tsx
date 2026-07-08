@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 
 const CLIP_CHAR_THRESHOLD = 800
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import type { HighlightWithDoc } from './api'
 import MarkdownBody from './MarkdownBody'
+import HighlightDetail from './HighlightDetail'
 import NoteEditButton from './NoteEditButton'
 import IconButton from './IconButton'
 import { isTouchDevice } from './touch'
@@ -88,37 +89,17 @@ export default function HighlightCard({
         )}
       </Pressable>
 
-      {modalOpen && (
-        <Modal transparent animationType="fade" onRequestClose={() => setModalOpen(false)}>
-          {/* Tap zones (per UX spec):
-              - greyed backdrop above the sheet = back (closes)
-              - header (title + ↗) = open the document
-              - ✕ top-right = close
-              - body = ScrollView only; it owns the touch responder so it scrolls
-                and neither navigates nor closes on tap. The sheet is a plain View
-                (a Pressable wrapper here swallows the scroll gesture on mobile). */}
-          <View style={s.modalRoot}>
-            {/* Backdrop is a sibling BEHIND the sheet (not its parent), so taps on the
-                sheet body can't bubble up to it and close — only the exposed greyed
-                strip above the sheet triggers back/close. */}
-            <Pressable style={s.modalBackdropFill} onPress={() => setModalOpen(false)} />
-            <View style={s.modalSheet}>
-              <Pressable style={s.modalHeader} onPress={goToDoc}>
-                <Text style={s.modalTitle} numberOfLines={2}>{item.title}</Text>
-                <IconButton name="open-outline" onPress={goToDoc} size={18} hitSlop={8} />
-                <Pressable style={s.modalCloseBtn} onPress={() => setModalOpen(false)} hitSlop={10}>
-                  <Text style={s.modalCloseText}>✕</Text>
-                </Pressable>
-              </Pressable>
-              <ScrollView style={s.modalScroll} contentContainerStyle={s.modalScrollContent}>
-                <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={(id) => { setModalOpen(false); onDocumentPress?.(id) }} onLinkAction={onLinkAction}>
-                  {item.body}
-                </MarkdownBody>
-              </ScrollView>
-            </View>
-          </View>
-        </Modal>
-      )}
+      {/* The "more" overlay is a selectable WebView/iframe (HighlightDetail): select
+          text → create a highlight-anchored annotation, existing ones render as marks.
+          Same tap zones as before (backdrop=close, header=open doc, body=content). */}
+      <HighlightDetail
+        item={item}
+        visible={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onOpenDoc={goToDoc}
+        onDocumentPress={(id) => { setModalOpen(false); onDocumentPress?.(id) }}
+        onLinkAction={onLinkAction}
+      />
 
       {item.tags && item.tags.length > 0 && (
         <View style={s.tagRow}>
@@ -208,40 +189,5 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.accent,
       overflow: 'hidden',
     },
-    modalRoot: {
-      flex: 1,
-      justifyContent: 'flex-end',
-    },
-    modalBackdropFill: {
-      position: 'absolute',
-      top: 0, left: 0, right: 0, bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.6)',
-    },
-    modalSheet: {
-      backgroundColor: t.colors.surface,
-      borderTopLeftRadius: 16,
-      borderTopRightRadius: 16,
-      maxHeight: '85%',
-      paddingTop: 16,
-    },
-    modalHeader: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      paddingHorizontal: 16,
-      paddingBottom: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: t.colors.border,
-      gap: 8,
-    },
-    modalTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '700' },
-    modalCloseBtn: {
-      width: 28,
-      height: 28,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    modalCloseText: { color: t.colors.muted, fontSize: 18 },
-    modalScroll: { flexShrink: 1 },
-    modalScrollContent: { padding: 16 },
   })
 }
