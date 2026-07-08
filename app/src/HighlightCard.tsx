@@ -62,6 +62,8 @@ export default function HighlightCard({
         <Pressable style={s.titlePress} onPress={onPress}>
           <Text style={s.hlTitle} numberOfLines={1}>{item.title}</Text>
         </Pressable>
+        {/* Affordance: the header opens the source document. */}
+        {onPress ? <IconButton name="open-outline" onPress={onPress} size={16} hitSlop={6} /> : null}
         {busy
           ? <ActivityIndicator size="small" color={theme.colors.accent} />
           : onPin && !touch
@@ -88,23 +90,33 @@ export default function HighlightCard({
 
       {modalOpen && (
         <Modal transparent animationType="fade" onRequestClose={() => setModalOpen(false)}>
-          <Pressable style={s.modalBackdrop} onPress={() => setModalOpen(false)}>
-            {/* Sheet press → goToDoc: title & body are non-Pressable, so taps bubble here.
-                Only the ✕ Pressable (and markdown links) intercept. */}
-            <Pressable style={s.modalSheet} onPress={goToDoc}>
-              <View style={s.modalHeader}>
+          {/* Tap zones (per UX spec):
+              - greyed backdrop above the sheet = back (closes)
+              - header (title + ↗) = open the document
+              - ✕ top-right = close
+              - body = ScrollView only; it owns the touch responder so it scrolls
+                and neither navigates nor closes on tap. The sheet is a plain View
+                (a Pressable wrapper here swallows the scroll gesture on mobile). */}
+          <View style={s.modalRoot}>
+            {/* Backdrop is a sibling BEHIND the sheet (not its parent), so taps on the
+                sheet body can't bubble up to it and close — only the exposed greyed
+                strip above the sheet triggers back/close. */}
+            <Pressable style={s.modalBackdropFill} onPress={() => setModalOpen(false)} />
+            <View style={s.modalSheet}>
+              <Pressable style={s.modalHeader} onPress={goToDoc}>
                 <Text style={s.modalTitle} numberOfLines={2}>{item.title}</Text>
+                <IconButton name="open-outline" onPress={goToDoc} size={18} hitSlop={8} />
                 <Pressable style={s.modalCloseBtn} onPress={() => setModalOpen(false)} hitSlop={10}>
                   <Text style={s.modalCloseText}>✕</Text>
                 </Pressable>
-              </View>
+              </Pressable>
               <ScrollView style={s.modalScroll} contentContainerStyle={s.modalScrollContent}>
                 <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={(id) => { setModalOpen(false); onDocumentPress?.(id) }} onLinkAction={onLinkAction}>
                   {item.body}
                 </MarkdownBody>
               </ScrollView>
-            </Pressable>
-          </Pressable>
+            </View>
+          </View>
         </Modal>
       )}
 
@@ -196,10 +208,14 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.accent,
       overflow: 'hidden',
     },
-    modalBackdrop: {
+    modalRoot: {
       flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.6)',
       justifyContent: 'flex-end',
+    },
+    modalBackdropFill: {
+      position: 'absolute',
+      top: 0, left: 0, right: 0, bottom: 0,
+      backgroundColor: 'rgba(0,0,0,0.6)',
     },
     modalSheet: {
       backgroundColor: t.colors.surface,
