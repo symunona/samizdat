@@ -57,10 +57,6 @@ type ParsedMsg = {
   href?: string
   doc_id?: string
   msg?: string
-  count?: number
-  ok?: boolean
-  w?: number
-  src?: string
 }
 
 export default function DocumentViewer() {
@@ -338,14 +334,6 @@ export default function DocumentViewer() {
       // Diagnostic line forwarded from the document-viewer WebView (native selection
       // path). Flows through the logger sink to the device-log channel (just device-logs).
       log.log(msg.msg ?? '')
-      return
-    }
-    // Image diagnostics from the article HTML (temporary): how many <img> and each
-    // one's load/error + src, so we can see why article images fail on a device.
-    if (msg.type === 'img_diag') { log.log('webview imgs', { count: msg.count }); return }
-    if (msg.type === 'img_diag_one') {
-      if (msg.ok) log.log('webview img OK', { w: msg.w, src: msg.src })
-      else log.warn('webview img ERROR', { src: msg.src })
       return
     }
     if (msg.type === 'ready') {

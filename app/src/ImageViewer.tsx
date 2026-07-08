@@ -28,12 +28,10 @@ export default function ImageViewer({ src, alt }: Props) {
     setOpen(true)
   }, [])
 
-  // Diagnostics (device channel) — temporary, to confirm the fix loads real dimensions.
+  // Safety net: report a genuine image load failure (src + native error) to the device
+  // channel. Fires only on error, so no per-image noise.
   const handleError = useCallback((e: NativeSyntheticEvent<ImageErrorEventData>) => {
-    log.warn('image ERROR', { src: resolvedSrc.slice(0, 140), error: e?.nativeEvent?.error })
-  }, [resolvedSrc])
-  const handleLoad = useCallback((e: NativeSyntheticEvent<{ source?: { width?: number; height?: number } }>) => {
-    log.log('image OK', { w: e?.nativeEvent?.source?.width, h: e?.nativeEvent?.source?.height, src: resolvedSrc.slice(0, 80) })
+    log.warn('image load failed', { src: resolvedSrc.slice(0, 140), error: e?.nativeEvent?.error })
   }, [resolvedSrc])
 
   if (!src) return null
@@ -47,7 +45,6 @@ export default function ImageViewer({ src, alt }: Props) {
           resizeMode="contain"
           accessibilityLabel={alt}
           onError={handleError}
-          onLoad={handleLoad}
         />
       </Pressable>
       {open && (

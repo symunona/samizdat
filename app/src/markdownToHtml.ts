@@ -80,21 +80,6 @@ function wrapViewerHtml(title: string, bodyHtml: string): string {
 <div id="sam-article">${bodyHtml}</div>
 <div id="ann-gutter"></div>
 <button id="ann-btn">Annotate</button>
-<script>
-(function(){
-  function post(o){try{var s=JSON.stringify(o);window.ReactNativeWebView?window.ReactNativeWebView.postMessage(s):(window.parent&&window.parent!==window&&window.parent.postMessage(s,'*'))}catch(e){}}
-  function report(){
-    var imgs=[].slice.call(document.querySelectorAll('#sam-article img'));
-    post({type:'img_diag',count:imgs.length});
-    imgs.forEach(function(img){
-      function done(ok){post({type:'img_diag_one',ok:ok,w:img.naturalWidth,src:(img.currentSrc||img.src||'').slice(0,120)})}
-      if(img.complete){done(img.naturalWidth>0)}
-      else{img.addEventListener('load',function(){done(true)});img.addEventListener('error',function(){done(false)})}
-    });
-  }
-  if(document.readyState!=='loading')report();else document.addEventListener('DOMContentLoaded',report);
-})();
-</script>
 </body>
 </html>`
 }
