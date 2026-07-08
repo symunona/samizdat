@@ -92,6 +92,19 @@ export default function DocumentViewer() {
   const headerVisibleRef = useRef(true)
   const lastScrollFracRef = useRef(0)
   const isDocLoadedRef = useRef(false)
+  const htmlContentRef = useRef<string | null>(null)
+
+  // Set the article HTML, but ONLY when it actually changed — a same-value refresh must
+  // not reload the WebView (which would wipe injected annotation marks). Resetting
+  // isDocLoadedRef=false is tied to a real reload here: the WebView flips it back true on
+  // its next 'ready'. Setting it false on a no-op refresh would strand it (no reload =
+  // no 'ready') and the annotations effect would stop syncing marks.
+  const applyHtml = useCallback((html: string | null) => {
+    if (htmlContentRef.current === html) return
+    htmlContentRef.current = html
+    isDocLoadedRef.current = false
+    setHtmlContent(html)
+  }, [])
 
   // Highlights state
   const [highlights, setHighlights] = useState<HighlightWithDoc[]>([])
@@ -224,17 +237,17 @@ export default function DocumentViewer() {
       }))
     setDoc(d)
     setDocTags(tagsFrom(st.documentTags[id]))
-    setHtmlContent(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
+    applyHtml(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
     setAnnotations(anns)
     setHighlights(hls)
     setSourceFeed(null)
     return true
-  }, [id])
+  }, [id, applyHtml])
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (background = false) => {
     if (!activeUrl || !token) return
-    isDocLoadedRef.current = false
-    setLoading(true)
+    // Background refresh (we already rendered the cached copy) → no full-screen spinner.
+    if (!background) setLoading(true)
     setError(null)
     try {
       const storeDocs = useSyncStore.getState().documents
@@ -252,8 +265,10 @@ export default function DocumentViewer() {
       setDoc(d)
       setDocTags(dtags)
       // Video Documents render in a dedicated player screen (VideoDocument),
-      // not the article WebView — skip the article HTML build.
-      setHtmlContent(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
+      // not the article WebView — skip the article HTML build. Only replace the HTML
+      // when it actually changed, so the background refresh doesn't reload the WebView
+      // (and wipe freshly-injected annotation marks) after a store-first render.
+      applyHtml(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
       setAnnotations(anns)
       setHighlights(hl)
       if (d.source_feed_id) {
@@ -267,18 +282,21 @@ export default function DocumentViewer() {
     } catch (e: unknown) {
       // Network hiccup / offline — fall back to the cached copy before erroring.
       if (loadFromStore()) setError(null)
-      else setError(e instanceof Error ? e.message : 'Failed to load document')
+      else if (!background) setError(e instanceof Error ? e.message : 'Failed to load document')
     } finally {
       setLoading(false)
     }
-  }, [activeUrl, token, id, loadFromStore])
+  }, [activeUrl, token, id, loadFromStore, applyHtml])
 
   useEffect(() => {
-    if (status === 'connected') load()
-    // Offline: read straight from the cache; only error if it isn't stored.
-    else if (status === 'disconnected') {
-      if (!loadFromStore()) setError('Not connected — this document isn’t saved offline')
+    // Store-first: render the cached copy instantly (snappy, offline-ready, and no flash
+    // of the previously-open article), then refresh from the network in the background.
+    const cached = loadFromStore()
+    if (status === 'connected') {
+      load(cached) // silent refresh when we already showed cache; spinner only if not cached
+    } else if (status === 'disconnected') {
       setLoading(false)
+      setError(cached ? null : 'Not connected — this document isn’t saved offline')
     }
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
@@ -480,8 +498,12 @@ export default function DocumentViewer() {
   const progressPct = Math.round(scrollProgress * 100)
 
   // Video/podcast Documents get a dedicated player + transcript screen.
-  if (doc && doc.media_type === 'video') {
-    return <VideoDocument doc={doc} from={from} />
+  // Only trust doc/htmlContent when they belong to the CURRENT id — otherwise the
+  // previous article flashes for a frame during navigation before the effect reloads.
+  const docForId = doc && doc.id === id ? doc : null
+
+  if (docForId && docForId.media_type === 'video') {
+    return <VideoDocument doc={docForId} from={from} />
   }
 
   return (
@@ -490,10 +512,10 @@ export default function DocumentViewer() {
         <Pressable onPress={() => router.navigate((from as string) ?? '/documents')} style={s.backBtn} hitSlop={12}>
           <Text style={s.backText}>←</Text>
         </Pressable>
-        {doc && (
-          <Text style={s.headerTitle} numberOfLines={1}>{doc.title || doc.canonical_url}</Text>
+        {docForId && (
+          <Text style={s.headerTitle} numberOfLines={1}>{docForId.title || docForId.canonical_url}</Text>
         )}
-        {doc && (
+        {docForId && (
           <Pressable onPress={openInWeb} style={s.openWebBtn} hitSlop={12}>
             <Ionicons name="open-outline" size={22} color={theme.colors.accent} />
           </Pressable>
@@ -503,18 +525,11 @@ export default function DocumentViewer() {
         </Pressable>
       </Animated.View>
 
-      {loading ? (
-        <View style={s.centered}><ActivityIndicator color={theme.colors.accent} size="large" /></View>
-      ) : error ? (
-        <View style={s.centered}>
-          <Text style={s.errorText}>{error}</Text>
-          <Pressable onPress={load} style={s.retryBtn}><Text style={s.retryText}>Retry</Text></Pressable>
-        </View>
-      ) : htmlContent ? (
+      {docForId && htmlContent ? (
         <View style={[s.contentArea, { marginTop: 56 + insets.top }]}>
-          {doc?.error_reason ? (
+          {docForId.error_reason ? (
             <View style={s.docErrorBanner}>
-              <Text style={s.docErrorBannerText}>⚠ {doc.error_reason} — no summary generated</Text>
+              <Text style={s.docErrorBannerText}>⚠ {docForId.error_reason} — no summary generated</Text>
             </View>
           ) : null}
           <PendingPipelineBanner docId={id} />
@@ -535,21 +550,31 @@ export default function DocumentViewer() {
               onMessage={handleMessage}
               originWhitelist={['*']}
               allowsInlineMediaPlayback
+              // Article images are absolute CDN URLs; allow them regardless of the
+              // page's (baseUrl) scheme so they aren't blocked as mixed content on Android.
+              mixedContentMode="always"
               scrollEnabled
               showsVerticalScrollIndicator={false}
               onShouldStartLoadWithRequest={(req) => req.navigationType !== 'click'}
             />
           )}
         </View>
-      ) : doc?.error_reason ? (
+      ) : loading ? (
+        <View style={s.centered}><ActivityIndicator color={theme.colors.accent} size="large" /></View>
+      ) : error ? (
+        <View style={s.centered}>
+          <Text style={s.errorText}>{error}</Text>
+          <Pressable onPress={() => load()} style={s.retryBtn}><Text style={s.retryText}>Retry</Text></Pressable>
+        </View>
+      ) : docForId?.error_reason ? (
         <View style={[s.centered, { marginTop: 56 + insets.top }]}>
           <View style={s.docErrorBanner}>
-            <Text style={s.docErrorBannerText}>⚠ {doc.error_reason} — no summary generated</Text>
+            <Text style={s.docErrorBannerText}>⚠ {docForId.error_reason} — no summary generated</Text>
           </View>
         </View>
       ) : null}
 
-      {doc && (
+      {docForId && (
         <View style={s.progressBar}>
           <View style={[s.progressFill, { width: `${progressPct}%` as `${number}%` }]} />
         </View>
