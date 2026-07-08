@@ -42,7 +42,7 @@ import type { PendingSelection, ExistingAnnotation } from '../../../src/Annotati
 import TagSelectorModal from '../../../src/TagSelectorModal'
 import LinkActionSheet from '../../../src/LinkActionSheet'
 import { useScrapeQueue } from '../../../src/ScrapeQueueContext'
-import { buildDocumentHtml } from '../../../src/markdownToHtml'
+import { buildDocumentHtml, mdToHtml } from '../../../src/markdownToHtml'
 import { useSyncStore } from '../../../src/store/syncStore'
 import VideoDocument from '../../../src/VideoDocument'
 import PendingPipelineBanner from '../../../src/PendingPipelineBanner'
@@ -231,6 +231,9 @@ export default function DocumentViewer() {
       .filter(h => h.document_id === id && !h.deleted_at && !h.archived_at)
       .map(h => ({
         ...h,
+        // Synced store rows have no server-rendered body_html — render it so the WebView
+        // highlight cards show formatted markdown, not raw source.
+        body_html: h.body_html ?? mdToHtml(h.body),
         document_title: d.title,
         document_url: d.canonical_url,
         tags: tagsFrom(st.highlightTags[h.id]),
