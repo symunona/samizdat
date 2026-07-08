@@ -1,8 +1,6 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  InteractionManager,
   Keyboard,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -45,14 +43,28 @@ export default function AnnotationPanel({ visible, mode, existing, onSave, onDel
   const [note, setNote] = useState(existing?.note ?? '')
   const [moreOpen, setMoreOpen] = useState(false)
   const inputRef = useRef<TextInput>(null)
+  const [kbHeight, setKbHeight] = useState(0)
 
-  // Native soft-keyboard fix: bare `autoFocus` fires mid slide-animation, so the
-  // input focuses (cursor blinks) but the OS never raises the IME until a 2nd tap.
-  // Modal `onShow` fires after the entrance settles; focus then reliably shows the
-  // keyboard. Web has no such handshake — `autoFocus` alone is enough there.
+  // Lift the sheet above the soft keyboard. KeyboardAvoidingView is a no-op inside an
+  // Android <Modal> — the Modal is a separate window that doesn't resize for the IME —
+  // so track the keyboard height ourselves and pad the sheet up by it (both platforms).
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'
+    const subShow = Keyboard.addListener(showEvt, e => setKbHeight(e.endCoordinates?.height ?? 0))
+    const subHide = Keyboard.addListener(hideEvt, () => setKbHeight(0))
+    return () => { subShow.remove(); subHide.remove() }
+  }, [])
+
+  // Raise the keyboard when the sheet opens: a bare `autoFocus` fires mid Modal
+  // slide-animation and the OS never raises the IME. Focus from `onShow` (after the
+  // entrance), deferred with a timeout so the Modal window is the active input window
+  // when focus lands — more deterministic than InteractionManager, which can fire
+  // before the window is IME-ready. Web needs no handshake (autoFocus is enough).
   function handleShow() {
     if (Platform.OS === 'web') return
-    InteractionManager.runAfterInteractions(() => inputRef.current?.focus())
+    inputRef.current?.focus()
+    setTimeout(() => inputRef.current?.focus(), 250)
   }
 
   useMemo(() => {
@@ -77,8 +89,8 @@ export default function AnnotationPanel({ visible, mode, existing, onSave, onDel
       <TouchableWithoutFeedback onPress={() => { setMoreOpen(false); onCancel() }}>
         <View style={s.backdrop} />
       </TouchableWithoutFeedback>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={s.kav}>
-        <View style={s.panel}>
+      <View style={s.kav}>
+        <View style={[s.panel, { marginBottom: kbHeight }]}>
 
           {/* Header */}
           <View style={s.header}>
@@ -141,7 +153,7 @@ export default function AnnotationPanel({ visible, mode, existing, onSave, onDel
 
           </View>
         </View>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   )
 }

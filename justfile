@@ -498,7 +498,7 @@ check-modal-focus:
       if grep -qE "autoFocus=\{Platform\.OS === 'web'\}" "$f"; then
         missing=""
         grep -q 'onShow='          "$f" || missing="$missing Modal-onShow"
-        grep -q 'InteractionManager' "$f" || missing="$missing InteractionManager"
+        grep -qE 'InteractionManager|setTimeout' "$f" || missing="$missing deferred-focus(InteractionManager/setTimeout)"
         grep -qE '\.focus\(\)'     "$f" || missing="$missing ref.focus()"
         if [ -n "$missing" ]; then
           echo "ERROR: $f — web-guarded autoFocus but missing the native focus path:$missing"

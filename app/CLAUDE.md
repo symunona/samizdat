@@ -215,22 +215,34 @@ handshake, so `autoFocus` alone works there (the overlay just shifts above the b
 keyboard). Known RN issue: react-native-modal #516, react-native-screens #89 / #472.
 
 **Fix:** don't rely on `autoFocus` for native. Focus via a `ref` from the Modal's
-`onShow` (fires after the entrance animation), deferred with
-`InteractionManager.runAfterInteractions` so focus lands only once the view has settled.
-Keep `autoFocus` for web (`autoFocus={Platform.OS === 'web'}`). See `AnnotationPanel.tsx`.
+`onShow` (fires after the entrance animation), deferred with a `setTimeout` so focus lands
+only once the Modal window is the active input window. (An earlier version used
+`InteractionManager.runAfterInteractions`; that reportedly did NOT raise the IME on some
+devices — it can fire before the window is IME-ready — so a fixed timeout is more
+deterministic. The `check-modal-focus` lint accepts either.) Keep `autoFocus` for web.
 
 ```tsx
 const inputRef = useRef<TextInput>(null)
 function handleShow() {
   if (Platform.OS === 'web') return
-  InteractionManager.runAfterInteractions(() => inputRef.current?.focus())
+  inputRef.current?.focus()
+  setTimeout(() => inputRef.current?.focus(), 250)
 }
 <Modal animationType="slide" onShow={handleShow} …>
   <TextInput ref={inputRef} autoFocus={Platform.OS === 'web'} … />
 ```
 
-This is **native-only** — headless web e2e can't exercise the soft keyboard; verify on a
-device after build.
+### The sheet hides behind the keyboard (native Modal)
+`KeyboardAvoidingView` is a **no-op inside an Android `<Modal>`** — the Modal is a separate
+window that doesn't resize for the IME, and `behavior={undefined}` (the common Android
+default) does nothing regardless. A bottom sheet with a `TextInput` therefore stays put and
+the keyboard covers it. **Fix:** track the keyboard height with `Keyboard.addListener`
+(`keyboardDidShow`/`Hide` on Android, `keyboardWillShow`/`Hide` on iOS) and lift the sheet
+by it (`marginBottom: kbHeight`) — do NOT use `KeyboardAvoidingView`. See `AnnotationPanel.tsx`.
+
+Both are **native-only** — headless web e2e can't exercise the soft keyboard, and there is no
+emulator/adb in this repo's build env, so these can only be verified on a physical device
+after `just build-android`. Do not claim them working from web tests.
 
 ## "Web vs mobile" = touch vs non-touch, not Platform.OS
 
