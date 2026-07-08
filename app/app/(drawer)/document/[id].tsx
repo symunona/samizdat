@@ -29,15 +29,16 @@ import {
   createAnnotation,
   updateAnnotation,
   deleteAnnotation,
-  deleteDocument,
   lookupDocumentByURL,
   fetchDocumentHighlights,
   deleteHighlight,
   pinHighlight,
   fetchFeed,
   queueDocumentPipelines,
+  fetchDocumentTags,
 } from '../../../src/api'
-import type { Document, Annotation, HighlightWithDoc, Feed } from '../../../src/api'
+import type { Document, Annotation, HighlightWithDoc, Feed, Tag } from '../../../src/api'
+import { tagColor } from '../../../src/tagColor'
 import { useConnection } from '../../../src/ConnectionContext'
 import { useToast } from '../../../src/ToastContext'
 import { saveTheme } from '../../../src/storage'
@@ -60,6 +61,7 @@ type ParsedMsg = {
   id?: string
   href?: string
   doc_id?: string
+  msg?: string
 }
 
 export default function DocumentViewer() {
@@ -151,13 +153,10 @@ export default function DocumentViewer() {
 
   // Meta panel state
   const [metaVisible, setMetaVisible] = useState(false)
-  const [deleteConfirm, setDeleteConfirm] = useState(false)
-  const [deleting, setDeleting] = useState(false)
   const metaAnim = useRef(new Animated.Value(320)).current
 
   const openMetaPanel = useCallback(() => {
     setMetaVisible(true)
-    setDeleteConfirm(false)
     metaAnim.setValue(320)
     Animated.timing(metaAnim, { toValue: 0, duration: 220, useNativeDriver: true }).start()
   }, [metaAnim])
@@ -165,23 +164,8 @@ export default function DocumentViewer() {
   const closeMetaPanel = useCallback(() => {
     Animated.timing(metaAnim, { toValue: 320, duration: 180, useNativeDriver: true }).start(() => {
       setMetaVisible(false)
-      setDeleteConfirm(false)
     })
   }, [metaAnim])
-
-  const handleDeleteDocument = useCallback(async () => {
-    if (!activeUrl || !token) return
-    setDeleting(true)
-    try {
-      await deleteDocument(activeUrl, token, id)
-      closeMetaPanel()
-      router.replace((from as string) ?? '/documents')
-    } catch (e) {
-      log.error('delete failed', e)
-      setDeleting(false)
-      setDeleteConfirm(false)
-    }
-  }, [activeUrl, token, id, router, from, closeMetaPanel])
 
   // Annotation panel state
   const [annVisible, setAnnVisible] = useState(false)
@@ -193,6 +177,7 @@ export default function DocumentViewer() {
   const [tagModalVisible, setTagModalVisible] = useState(false)
   const [tagTargetId, setTagTargetId] = useState<string>('')
   const [tagTargetType, setTagTargetType] = useState<'document' | 'annotation' | 'highlight'>('annotation')
+  const [docTags, setDocTags] = useState<Tag[]>([])
 
   // Link action modal state
   const [linkUrl, setLinkUrl] = useState<string | null>(null)
@@ -230,13 +215,15 @@ export default function DocumentViewer() {
       for (const d of Object.values(storeDocs)) {
         if (!d.deleted_at) docsByUrl[d.canonical_url] = d.id
       }
-      const [d, progress, anns, hl] = await Promise.all([
+      const [d, progress, anns, hl, dtags] = await Promise.all([
         fetchDocument(activeUrl, token, id),
         fetchReadingProgress(activeUrl, token, id),
         fetchAnnotations(activeUrl, token, id),
         fetchDocumentHighlights(activeUrl, token, id),
+        fetchDocumentTags(activeUrl, token, id),
       ])
       setDoc(d)
+      setDocTags(dtags)
       // Video Documents render in a dedicated player screen (VideoDocument),
       // not the article WebView — skip the article HTML build.
       setHtmlContent(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl))
@@ -288,9 +275,16 @@ export default function DocumentViewer() {
       title: h.title,
       bodyHtml: h.body_html ?? h.body,
       pinned: h.pinned as 0 | 1,
+      tags: (h.tags ?? []).map(t => ({ id: t.id, name: t.name, color: t.color })),
     })), [])
 
   const handleParsedMessage = useCallback((msg: ParsedMsg) => {
+    if (msg.type === 'debug') {
+      // Diagnostic line forwarded from the document-viewer WebView (native selection
+      // path). Flows through the logger sink to the device-log channel (just device-logs).
+      log.log(msg.msg ?? '')
+      return
+    }
     if (msg.type === 'ready') {
       isDocLoadedRef.current = true
       sendToWebView({
@@ -538,28 +532,19 @@ export default function DocumentViewer() {
         visible={tagModalVisible}
         objectId={tagTargetId}
         objectType={tagTargetType}
+        onChanged={(objId, tags) => {
+          if (tagTargetType === 'document') {
+            setDocTags(tags)
+          } else if (tagTargetType === 'highlight') {
+            setHighlights(prev => {
+              const updated = prev.map(h => h.id === objId ? { ...h, tags } : h)
+              sendToWebView({ type: 'setHighlights', highlights: toHlData(updated), expanded: hlExpanded })
+              return updated
+            })
+          }
+        }}
         onClose={() => setTagModalVisible(false)}
       />
-
-      {deleteConfirm && !metaVisible && (
-        <Pressable style={s.linkOverlay} onPress={() => { if (!deleting) setDeleteConfirm(false) }}>
-          <Pressable style={s.linkSheet} onPress={e => e.stopPropagation()}>
-            <Text style={s.linkHost}>Delete document?</Text>
-            <Text style={s.linkHref}>This document won't be scraped again.</Text>
-            <Pressable
-              style={[s.linkBtn, s.deleteConfirmBtn, deleting && s.btnDisabled]}
-              onPress={handleDeleteDocument}
-              disabled={deleting}
-            >
-              {deleting ? <ActivityIndicator size="small" color="#fff" /> : null}
-              <Text style={s.deleteConfirmBtnText}>{deleting ? 'Deleting…' : 'Confirm delete'}</Text>
-            </Pressable>
-            <Pressable style={s.linkBtnCancel} onPress={() => setDeleteConfirm(false)} disabled={deleting}>
-              <Text style={s.linkBtnCancelText}>Cancel</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      )}
 
       <LinkActionSheet
         url={linkUrl}
@@ -581,6 +566,20 @@ export default function DocumentViewer() {
                 <Text style={s.metaClose}>×</Text>
               </Pressable>
             </View>
+            {docTags.length > 0 && (
+              <View style={s.docTagRow}>
+                {docTags.map(tag => (
+                  <Pressable
+                    key={tag.id}
+                    style={[s.docTagChip, { borderColor: tagColor(tag.color) }]}
+                    onPress={handleOpenDocTags}
+                    hitSlop={4}
+                  >
+                    <Text style={[s.docTagText, { color: tagColor(tag.color) }]}>#{tag.name}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
             <View style={s.metaActions}>
               <Pressable style={s.metaActionPrimary} onPress={handleAddDocNote}>
                 <Ionicons name="create-outline" size={13} color="#fff" />
@@ -599,23 +598,7 @@ export default function DocumentViewer() {
                   : <Text style={s.metaActionPipelineText}>▶ Pipeline</Text>
                 }
               </Pressable>
-              <Pressable style={s.metaActionDelete} onPress={() => setDeleteConfirm(true)}>
-                <Text style={s.metaActionDeleteText}>🗑</Text>
-              </Pressable>
             </View>
-            {deleteConfirm && (
-              <View style={[s.confirmRow, { marginBottom: theme.spacing.md }]}>
-                <Text style={s.confirmText}>Delete this document? It won't be scraped again.</Text>
-                <View style={s.confirmBtns}>
-                  <Pressable style={s.cancelBtn} onPress={() => setDeleteConfirm(false)} disabled={deleting}>
-                    <Text style={s.cancelBtnText}>Cancel</Text>
-                  </Pressable>
-                  <Pressable style={[s.deleteBtn, deleting && s.btnDisabled]} onPress={handleDeleteDocument} disabled={deleting}>
-                    <Text style={s.deleteBtnText}>{deleting ? 'Deleting…' : 'Confirm delete'}</Text>
-                  </Pressable>
-                </View>
-              </View>
-            )}
             <View style={s.metaDivider} />
             <View style={s.metaRow}>
               <Text style={s.metaLabel}>URL</Text>
@@ -685,8 +668,6 @@ function buildStyles(t: Theme) {
     openWebBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuBtn: { flexShrink: 0, padding: t.spacing.sm },
     menuText: { color: t.colors.text, fontSize: 22, fontWeight: '400', lineHeight: 24 },
-    deleteConfirmBtn: { backgroundColor: '#b91c1c' },
-    deleteConfirmBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
     centered: { flex: 1, marginTop: 56, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
     errorText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
@@ -722,44 +703,20 @@ function buildStyles(t: Theme) {
       paddingVertical: t.spacing.sm, paddingHorizontal: t.spacing.md,
     },
     viewWebBtnText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
-    deleteBtn: {
-      backgroundColor: '#b91c1c',
-      borderRadius: 8,
-      paddingVertical: t.spacing.sm,
-      paddingHorizontal: t.spacing.md,
-      alignItems: 'center',
-    },
-    deleteBtnText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-    confirmRow: { gap: t.spacing.sm },
-    confirmText: { color: t.colors.text, fontSize: 13, lineHeight: 18 },
-    confirmBtns: { flexDirection: 'row', gap: t.spacing.sm },
-    cancelBtn: {
-      flex: 1, borderRadius: 8, borderWidth: 1, borderColor: t.colors.border,
-      paddingVertical: t.spacing.sm, alignItems: 'center',
-    },
-    cancelBtnText: { color: t.colors.text, fontSize: 15, fontWeight: '500' },
     btnDisabled: { opacity: 0.5 },
-    linkOverlay: {
-      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 30,
-      justifyContent: 'flex-end',
+    docTagRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginBottom: t.spacing.sm,
     },
-    linkSheet: {
-      backgroundColor: t.colors.surface,
-      borderTopLeftRadius: 14, borderTopRightRadius: 14,
-      borderTopWidth: 1, borderTopColor: t.colors.border,
-      padding: t.spacing.lg,
-      paddingBottom: t.spacing.xl + 8,
-      gap: t.spacing.sm,
+    docTagChip: {
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+      borderRadius: 10,
+      borderWidth: 1,
     },
-    linkHost: { color: t.colors.text, fontSize: 16, fontWeight: '700' },
-    linkHref: { color: t.colors.muted, fontSize: 12, marginBottom: t.spacing.sm },
-    linkBtn: {
-      borderRadius: 10, paddingVertical: t.spacing.md, paddingHorizontal: t.spacing.lg,
-      alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: t.spacing.sm,
-    },
-    linkBtnCancel: { alignItems: 'center', paddingVertical: t.spacing.sm },
-    linkBtnCancelText: { color: t.colors.muted, fontSize: 14 },
+    docTagText: { fontSize: 11, fontWeight: '600' },
     metaActions: {
       flexDirection: 'row',
       flexWrap: 'wrap',
@@ -795,15 +752,5 @@ function buildStyles(t: Theme) {
       justifyContent: 'center',
     },
     metaActionPipelineText: { color: '#a78bfa', fontSize: 12, fontWeight: '700' },
-    metaActionDelete: {
-      width: 30,
-      height: 30,
-      borderRadius: 6,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: t.colors.border,
-    },
-    metaActionDeleteText: { fontSize: 14, color: t.colors.muted },
   })
 }
