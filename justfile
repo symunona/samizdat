@@ -397,6 +397,8 @@ e2e-int: build-server
 [group('quality')]
 [doc('E2E offline test: outbox unit tests + offline→reconnect→server-synced walkthrough')]
 e2e-offline: build-server
+    @echo "Running chunked-storage unit tests (Android CursorWindow guard)..."
+    node e2e/chunked-storage-unit.mjs
     @echo "Running outbox unit tests (pure, no network)..."
     node e2e/outbox-unit.mjs
     @echo "Running offline walkthrough (port 8766, fresh /tmp/samizdat-test DB)..."

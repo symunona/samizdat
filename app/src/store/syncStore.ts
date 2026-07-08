@@ -1,6 +1,9 @@
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { makeChunkedStorage } from './chunkedStorage'
+
+const chunkedAsyncStorage = makeChunkedStorage(AsyncStorage)
 import { uuidv4 } from './uuid'
 import type { Document, Highlight, Annotation, Tag } from '../api'
 import {
@@ -80,6 +83,9 @@ type SyncState = {
   // Local-first write path (persisted):
   outbox: OutboxIntent[]
   dirty: Record<string, number> // dirtyKey → base_rev
+  // True once persist has finished rehydrating from disk. Screens gate their empty
+  // state on this so a cold start shows a skeleton, not a false "nothing here".
+  hasHydrated: boolean
 }
 
 type SyncActions = {
@@ -127,6 +133,7 @@ const initialState: SyncState = {
   syncError: null,
   outbox: [],
   dirty: {},
+  hasHydrated: false,
 }
 
 const nowISO = () => new Date().toISOString()
@@ -300,7 +307,13 @@ export const useSyncStore = create<SyncStore>()(
     },
     {
       name: 'samizdat_sync_store',
-      storage: createJSONStorage(() => AsyncStorage),
+      // Chunked so the multi-MB replica never hits Android's ~2MB per-row CursorWindow
+      // limit (a Java exception on hydration → empty store → offline broken). See
+      // chunkedStorage.ts.
+      storage: createJSONStorage(() => chunkedAsyncStorage),
+      onRehydrateStorage: () => () => {
+        useSyncStore.setState({ hasHydrated: true })
+      },
       partialize: (state) => ({
         documents: state.documents,
         highlights: state.highlights,

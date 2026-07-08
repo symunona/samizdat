@@ -136,7 +136,9 @@ export default function FeedScreen() {
   // false when the cache is empty.
   const loadFromStore = useCallback((): boolean => {
     const hls = highlightsFromStore(h => !h.archived_at)
-    setHighlights(hls)
+    // Never wipe a populated feed with an empty result (e.g. store not yet hydrated) —
+    // that's the "feed resets to zero" flash.
+    if (hls.length > 0) setHighlights(hls)
     return hls.length > 0
   }, [])
 
@@ -161,6 +163,7 @@ export default function FeedScreen() {
 
   // Offline / not-yet-connected: render the cached feed, and re-render it as the
   // persisted store finishes hydrating or a background sync lands more highlights.
+  const hasHydrated = useSyncStore(st => st.hasHydrated)
   const storeHlCount = useSyncStore(st => Object.keys(st.highlights).length)
   useEffect(() => {
     if (status !== 'connected') loadFromStore()
@@ -312,9 +315,11 @@ export default function FeedScreen() {
     )
   }, [archivedIds, deletingIds, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
 
-  // Still loading, or a sync is in flight that may yet produce highlights →
-  // skeleton, not the empty state. Only drop to "No highlights yet" once both settle.
-  if (highlights.length === 0 && (loading || syncStatus === 'syncing')) {
+  // Show the skeleton (not the empty state) while anything might still produce
+  // highlights: the persisted store hasn't hydrated yet, the connection is still
+  // resolving, a fetch is in flight, or a sync may pull rows. Only drop to
+  // "No highlights yet" once everything has settled and there genuinely are none.
+  if (highlights.length === 0 && (loading || syncStatus === 'syncing' || !hasHydrated || status === 'loading')) {
     return <FeedSkeleton />
   }
 

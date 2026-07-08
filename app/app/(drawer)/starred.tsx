@@ -22,7 +22,7 @@ export default function StarredScreen() {
   // Offline-first: starred highlights are already in the local replica.
   const loadFromStore = useCallback((): boolean => {
     const hls = highlightsFromStore(h => h.pinned === 1)
-    setHighlights(hls)
+    if (hls.length > 0) setHighlights(hls) // don't wipe a populated list with an empty store
     return hls.length > 0
   }, [])
 

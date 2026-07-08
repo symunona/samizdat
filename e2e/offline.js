@@ -62,15 +62,21 @@ async function waitViewer(page) {
   }, { timeout: 15000 })
 }
 
-// Read the persisted zustand store out of the web AsyncStorage (localStorage).
+// Read the persisted zustand store out of AsyncStorage (localStorage on web),
+// reassembling the chunked value (see app/src/store/chunkedStorage.ts).
 async function readStore(page) {
   return page.evaluate(() => {
-    for (const k of Object.keys(localStorage)) {
-      if (k.includes('samizdat_sync_store')) {
-        try { return JSON.parse(localStorage.getItem(k)).state } catch { return null }
-      }
+    const name = 'samizdat_sync_store'
+    const meta = localStorage.getItem(name)
+    if (meta == null) return null
+    let count
+    try { count = JSON.parse(meta).__chunks } catch { return null }
+    if (typeof count !== 'number') { // legacy unchunked value
+      try { return JSON.parse(meta).state } catch { return null }
     }
-    return null
+    let s = ''
+    for (let i = 0; i < count; i++) { const p = localStorage.getItem(`${name}.${i}`); if (p == null) return null; s += p }
+    try { return JSON.parse(s).state } catch { return null }
   })
 }
 
@@ -97,16 +103,22 @@ async function main() {
   await waitViewer(page)
 
   // Wait until pull-sync has populated the store with the highlight + tag — offline
-  // pin/tag depend on the row/tag existing locally.
+  // pin/tag depend on the row/tag existing locally. Reassembles the chunked value.
   await page.waitForFunction(() => {
-    for (const k of Object.keys(localStorage)) {
-      if (k.includes('samizdat_sync_store')) {
-        const st = JSON.parse(localStorage.getItem(k)).state
-        return st && st.highlights && st.highlights['ffffffff-0000-4000-8000-00000000aa01'] &&
-          st.tags && st.tags['ffffffff-0000-4000-8000-00000000bb01']
-      }
+    const name = 'samizdat_sync_store'
+    const meta = localStorage.getItem(name)
+    if (meta == null) return false
+    let count
+    try { count = JSON.parse(meta).__chunks } catch { return false }
+    let raw
+    if (typeof count !== 'number') { raw = meta } else {
+      raw = ''
+      for (let i = 0; i < count; i++) { const p = localStorage.getItem(`${name}.${i}`); if (p == null) return false; raw += p }
     }
-    return false
+    let st
+    try { st = JSON.parse(raw).state } catch { return false }
+    return st && st.highlights && st.highlights['ffffffff-0000-4000-8000-00000000aa01'] &&
+      st.tags && st.tags['ffffffff-0000-4000-8000-00000000bb01']
   }, { timeout: 15000 })
 
   // ── GO OFFLINE ──
