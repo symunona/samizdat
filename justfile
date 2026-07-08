@@ -405,7 +405,7 @@ test-go:
 
 [group('quality')]
 [doc('Lint all code (go vet + golangci-lint + eslint)')]
-lint: lint-go lint-app check-native-log check-safe-area lint-parity
+lint: lint-go lint-app check-native-log check-safe-area check-modal-focus lint-parity
 
 [group('quality')]
 [doc('Check paired-renderer files (Highlight card: RN feed vs WebView DOM) stay in sync vs main')]
@@ -451,6 +451,56 @@ check-safe-area:
       fi
     done
     [ "$fail" -eq 0 ] || exit 1
+
+[group('quality')]
+[doc('Fail if a TextInput inside an animated Modal focuses on open without the native keyboard-raise pattern (bare autoFocus raises no soft keyboard on native — see d6fe391 / app/CLAUDE.md "UX RN Platform specifics")')]
+check-modal-focus:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Regression guard for d6fe391. A bare `autoFocus` on a TextInput inside an
+    # animated <Modal> focuses the input on native (cursor blinks) but the OS never
+    # raises the soft keyboard — the Modal window is still animating in, so
+    # showSoftInput never runs; a 2nd tap is needed. The established fix pattern
+    # (see AnnotationPanel.tsx, the reference) is:
+    #   autoFocus={Platform.OS === 'web'}                       (bare autoFocus only web)
+    #   <Modal onShow={handleShow} …>                           (fires post-entrance)
+    #   InteractionManager.runAfterInteractions(() => ref.current?.focus())  (native focus)
+    # Modal-scoped on purpose: on a plain screen (e.g. documents.tsx) there's no
+    # animated IME handshake, so bare autoFocus / a setTimeout focus is fine there.
+    cd app
+    fail=0
+    # Every component file that renders a <Modal> (the only place the bug bites).
+    modal_files=$(grep -rl '<Modal' --include='*.tsx' src app | grep -v node_modules || true)
+    for f in $modal_files; do
+      # (A) Bare/unconditional JSX `autoFocus` prop (matched, but not `autoFocus=…`,
+      #     not a `//` comment, not a `\`autoFocus\`` prose mention).
+      bare=$(grep -nE 'autoFocus([^=]|$)' "$f" | grep -vE '//|`autoFocus`|autoFocus=' || true)
+      if [ -n "$bare" ]; then
+        echo "ERROR: $f — bare autoFocus on a TextInput inside a <Modal>."
+        echo "  On native the soft keyboard won't rise until a 2nd tap (regression of d6fe391)."
+        echo "  Use autoFocus={Platform.OS === 'web'} + focus via a ref from the Modal's onShow"
+        echo "  (deferred through InteractionManager). See AnnotationPanel.tsx."
+        echo "$bare" | sed "s#^#    $f:#"
+        fail=1
+      fi
+      # (B) A web-guarded autoFocus signals intent to focus-on-open — it MUST carry the
+      #     full native focus path, or native never raises the keyboard at all.
+      if grep -qE "autoFocus=\{Platform\.OS === 'web'\}" "$f"; then
+        missing=""
+        grep -q 'onShow='          "$f" || missing="$missing Modal-onShow"
+        grep -q 'InteractionManager' "$f" || missing="$missing InteractionManager"
+        grep -qE '\.focus\(\)'     "$f" || missing="$missing ref.focus()"
+        if [ -n "$missing" ]; then
+          echo "ERROR: $f — web-guarded autoFocus but missing the native focus path:$missing"
+          echo "  A Modal TextInput meant to focus-on-open must focus via a ref from the Modal's"
+          echo "  onShow, deferred through InteractionManager, so native raises the keyboard."
+          echo "  See AnnotationPanel.tsx (reference) and app/CLAUDE.md."
+          fail=1
+        fi
+      fi
+    done
+    [ "$fail" -eq 0 ] || exit 1
+    echo "check-modal-focus: OK ($(echo "$modal_files" | grep -c . ) Modal files scanned)"
 
 # ── Landing ───────────────────────────────────────────────────────────────────
 
