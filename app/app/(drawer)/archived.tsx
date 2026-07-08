@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useRouter } from 'expo-router'
 import { useConnection } from '../../src/ConnectionContext'
-import { fetchHighlights, HighlightWithDoc, archiveHighlight } from '../../src/api'
+import { fetchHighlights, HighlightWithDoc } from '../../src/api'
+import * as mut from '../../src/store/mutations'
+import { useSyncStore } from '../../src/store/syncStore'
+import { highlightsFromStore } from '../../src/store/highlightsFromStore'
 import HighlightCard from '../../src/HighlightCard'
 
 export default function ArchivedScreen() {
@@ -16,33 +19,40 @@ export default function ArchivedScreen() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Offline-first: archived highlights are already in the local replica.
+  const loadFromStore = useCallback((): boolean => {
+    const hls = highlightsFromStore(h => !!h.archived_at)
+    setHighlights(hls)
+    return hls.length > 0
+  }, [])
+
   const load = useCallback(async () => {
-    if (!activeUrl || !token) return
+    if (!activeUrl || !token) { loadFromStore(); return }
     setLoading(true)
     setError(null)
     try {
       const data = await fetchHighlights(activeUrl, token, 200, true)
       setHighlights(data)
     } catch {
-      setError('Failed to load archived highlights')
+      if (!loadFromStore()) setError('Failed to load archived highlights')
     } finally {
       setLoading(false)
     }
-  }, [activeUrl, token])
+  }, [activeUrl, token, loadFromStore])
 
   useEffect(() => {
     if (status === 'connected') load()
   }, [status, load])
 
-  const handleUnarchive = useCallback(async (item: HighlightWithDoc) => {
-    if (!activeUrl || !token) return
-    try {
-      await archiveHighlight(activeUrl, token, item.id, null)
-      setHighlights(prev => prev.filter(h => h.id !== item.id))
-    } catch {
-      Alert.alert('Error', 'Failed to unarchive')
-    }
-  }, [activeUrl, token])
+  const storeHlCount = useSyncStore(st => Object.keys(st.highlights).length)
+  useEffect(() => {
+    if (status !== 'connected') loadFromStore()
+  }, [status, storeHlCount, loadFromStore])
+
+  const handleUnarchive = useCallback((item: HighlightWithDoc) => {
+    mut.archiveHighlight(item.id, null)
+    setHighlights(prev => prev.filter(h => h.id !== item.id))
+  }, [])
 
   const renderItem = useCallback(({ item }: { item: HighlightWithDoc }) => (
     <View style={s.itemWrapper}>

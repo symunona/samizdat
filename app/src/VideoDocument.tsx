@@ -27,9 +27,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   fetchAnnotations,
   fetchDocumentHighlights,
-  createAnnotation,
-  updateAnnotation,
-  deleteAnnotation,
   audioDocUrl,
   videoDocUrl,
   probeVideoReady,
@@ -38,9 +35,9 @@ import {
   transcriptLangs,
   parseMediaMetadata,
   fetchReadingProgress,
-  saveMediaPosition,
 } from './api'
 import type { Document, Annotation, HighlightWithDoc } from './api'
+import * as mut from './store/mutations'
 import { useConnection } from './ConnectionContext'
 import { useToast } from './ToastContext'
 import AnnotationPanel from './AnnotationPanel'
@@ -291,8 +288,8 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       if (ms - anchor >= JUMP_GRACE_MS) graceAnchorRef.current = null
       else return
     }
-    if (ms > 0 && activeUrl && token) saveMediaPosition(activeUrl, token, doc.id, ms).catch(() => {})
-  }, [doc.id, activeUrl, token])
+    if (ms > 0) mut.saveMediaPos(doc.id, ms)
+  }, [doc.id])
 
   // Read the saved point once on mount (feeds both the resume seek and the marker).
   useEffect(() => {
@@ -430,38 +427,33 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     sendToWebView({ type: 'setAnnotations', annotations })
   }, [annotations, sendToWebView])
 
-  const handleAnnSave = useCallback(async (data: { note: string; color: string }) => {
-    if (!activeUrl || !token) return
+  // Local-first: write to the store + outbox (no network); the setAnnotations effect
+  // re-syncs the transcript marks/badges.
+  const handleAnnSave = useCallback((data: { note: string; color: string }) => {
     setAnnVisible(false)
-    try {
-      if (annMode === 'create') {
-        const sel: Selection = pendingSelection ?? { exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0, media_ts_ms: positionMs }
-        // A generic (unanchored) note needs a body — nothing to anchor it to otherwise.
-        if (!sel.exact && !data.note.trim()) return
-        const ann = await createAnnotation(activeUrl, token, doc.id, { ...sel, media_ts_ms: sel.media_ts_ms ?? 0, ...data })
-        setAnnotations(prev => [...prev, ann])
-      } else if (annMode === 'edit' && existingAnnotation) {
-        const ann = await updateAnnotation(activeUrl, token, existingAnnotation.id, data)
-        setAnnotations(prev => prev.map(a => a.id === ann.id ? ann : a))
-      }
-      // The setAnnotations effect re-syncs the transcript marks/badges.
-    } catch (e) {
-      log.error('annotation save failed', e)
-      toast('Failed to save note', 'error')
+    if (annMode === 'create') {
+      const sel: Selection = pendingSelection ?? { exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0, media_ts_ms: positionMs }
+      // A generic (unanchored) note needs a body — nothing to anchor it to otherwise.
+      if (!sel.exact && !data.note.trim()) return
+      const ann = mut.createAnnotation({
+        documentId: doc.id, exact: sel.exact, prefix: sel.prefix, suffix: sel.suffix,
+        posStart: sel.pos_start, posEnd: sel.pos_end, mediaTsMs: sel.media_ts_ms ?? 0,
+        note: data.note, color: data.color,
+      })
+      setAnnotations(prev => [...prev, ann])
+    } else if (annMode === 'edit' && existingAnnotation) {
+      mut.updateAnnotation(existingAnnotation.id, data.note, data.color)
+      setAnnotations(prev => prev.map(a =>
+        a.id === existingAnnotation.id ? { ...a, note: data.note, color: data.color } : a))
     }
-  }, [annMode, pendingSelection, existingAnnotation, activeUrl, token, doc.id, positionMs, toast])
+  }, [annMode, pendingSelection, existingAnnotation, doc.id, positionMs])
 
-  const handleAnnDelete = useCallback(async () => {
-    if (!activeUrl || !token || !existingAnnotation) return
+  const handleAnnDelete = useCallback(() => {
+    if (!existingAnnotation) return
     setAnnVisible(false)
-    try {
-      await deleteAnnotation(activeUrl, token, existingAnnotation.id)
-      setAnnotations(prev => prev.filter(a => a.id !== existingAnnotation.id))
-      // The setAnnotations effect removes the transcript mark/badge.
-    } catch (e) {
-      log.error('annotation delete failed', e)
-    }
-  }, [existingAnnotation, activeUrl, token])
+    mut.deleteAnnotation(existingAnnotation.id)
+    setAnnotations(prev => prev.filter(a => a.id !== existingAnnotation.id))
+  }, [existingAnnotation])
 
   // ── Controls ──
   // Bottom ▶ governs the ACTIVE backend — audio when collapsed, the YouTube player

@@ -395,6 +395,14 @@ e2e-int: build-server
     cd e2e && node integration.js
 
 [group('quality')]
+[doc('E2E offline test: outbox unit tests + offline→reconnect→server-synced walkthrough')]
+e2e-offline: build-server
+    @echo "Running outbox unit tests (pure, no network)..."
+    node e2e/outbox-unit.mjs
+    @echo "Running offline walkthrough (port 8766, fresh /tmp/samizdat-test DB)..."
+    cd e2e && node offline.js
+
+[group('quality')]
 [doc('Run all tests')]
 test: test-go
 
@@ -405,7 +413,7 @@ test-go:
 
 [group('quality')]
 [doc('Lint all code (go vet + golangci-lint + eslint)')]
-lint: lint-go lint-app check-native-log check-safe-area check-modal-focus lint-parity
+lint: lint-go lint-app check-native-log check-safe-area check-modal-focus check-offline-screens lint-parity
 
 [group('quality')]
 [doc('Check paired-renderer files (Highlight card: RN feed vs WebView DOM) stay in sync vs main')]
@@ -501,6 +509,44 @@ check-modal-focus:
     done
     [ "$fail" -eq 0 ] || exit 1
     echo "check-modal-focus: OK ($(echo "$modal_files" | grep -c . ) Modal files scanned)"
+
+[group('quality')]
+check-offline-screens:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Offline-first (app/CLAUDE.md): all reads come from the local SQLite replica; sync
+    # runs in the background. These read screens MUST render from the synced store so
+    # they work with no connection — a network-only load() (fetchX(activeUrl,...) with
+    # no fallback) shows an error screen offline, which regresses silently. Each guarded
+    # screen must reference a store read: useSyncStore / highlightsFromStore, or a store
+    # hook (useDocuments / useAnnotations / useTagsWithCounts). See loadFromStore() in
+    # index.tsx / document/[id].tsx for the fallback pattern.
+    store_read='useSyncStore|highlightsFromStore|useDocuments|useAnnotations|useTagsWithCounts'
+    declare -A screens=(
+      ["app/app/(drawer)/index.tsx"]="feed"
+      ["app/app/(drawer)/documents.tsx"]="documents"
+      ["app/app/(drawer)/notes.tsx"]="annotations"
+      ["app/app/(drawer)/archived.tsx"]="archived"
+      ["app/app/(drawer)/starred.tsx"]="starred"
+      ["app/app/(drawer)/tags.tsx"]="tags"
+      ["app/app/(drawer)/document/[id].tsx"]="document viewer"
+    )
+    fail=0
+    for f in "${!screens[@]}"; do
+      if [ ! -f "$f" ]; then
+        echo "ERROR: guarded screen missing: $f (${screens[$f]}) — update check-offline-screens."
+        fail=1
+        continue
+      fi
+      if ! grep -qE "$store_read" "$f"; then
+        echo "ERROR: ${screens[$f]} screen ($f) has no local-store read ($store_read)."
+        echo "  Offline-first: read screens must render from the synced replica, not network-only."
+        echo "  Add a loadFromStore()/highlightsFromStore() fallback or a store hook."
+        fail=1
+      fi
+    done
+    [ "$fail" -eq 0 ] || exit 1
+    echo "check-offline-screens: OK (${#screens[@]} read screens guarded)"
 
 # ── Landing ───────────────────────────────────────────────────────────────────
 

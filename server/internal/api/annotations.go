@@ -16,6 +16,7 @@ import (
 type annotationsHandler struct{ q *store.Queries }
 
 type annotationInput struct {
+	ID          string  `json:"id"` // optional client-minted UUID (offline-first replay-safe)
 	Exact       string  `json:"exact"`
 	Prefix      string  `json:"prefix"`
 	Suffix      string  `json:"suffix"`
@@ -99,14 +100,22 @@ func (h *annotationsHandler) createStandalone(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusCreated, ann)
 }
 
-// insert writes an annotation row; docID is nil for a standalone note.
+// insert writes an annotation row; docID is nil for a standalone note. Honors a
+// client-minted id when supplied — and is idempotent on it, so a replayed offline
+// create (network lost the first ack) returns the existing row instead of erroring.
 func (h *annotationsHandler) insert(ctx context.Context, docID *string, inp annotationInput) (store.Annotation, error) {
 	if inp.Color == "" {
 		inp.Color = "yellow"
 	}
+	id := inp.ID
+	if id == "" {
+		id = uuid.New().String()
+	} else if existing, err := h.q.GetAnnotation(ctx, id); err == nil {
+		return existing, nil
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	ann, err := h.q.InsertAnnotation(ctx, store.InsertAnnotationParams{
-		ID:          uuid.New().String(),
+		ID:          id,
 		DocumentID:  docID,
 		HighlightID: inp.HighlightID,
 		Exact:       inp.Exact,

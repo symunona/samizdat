@@ -5,7 +5,10 @@ import { useRouter, useNavigation } from 'expo-router'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
 import type { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import { useConnection } from '../../src/ConnectionContext'
-import { fetchHighlights, deleteHighlight, pinHighlight, archiveHighlight, createAnnotation, fetchSettings, updateSettings, HighlightWithDoc } from '../../src/api'
+import { fetchHighlights, fetchSettings, updateSettings, HighlightWithDoc } from '../../src/api'
+import * as mut from '../../src/store/mutations'
+import { useSyncStore } from '../../src/store/syncStore'
+import { highlightsFromStore } from '../../src/store/highlightsFromStore'
 import HighlightCard from '../../src/HighlightCard'
 import IconButton from '../../src/IconButton'
 import TagSelectorModal from '../../src/TagSelectorModal'
@@ -31,7 +34,6 @@ export default function FeedScreen() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [tagModalId, setTagModalId] = useState<string | null>(null)
-  const [actionLoading, setActionLoading] = useState<Set<string>>(new Set())
   const [annotateItem, setAnnotateItem] = useState<HighlightWithDoc | null>(null)
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
 
@@ -72,20 +74,18 @@ export default function FeedScreen() {
     })
   }, [navigation, autoMarkRead, toggleAutoMarkRead, theme])
 
-  const handleUnarchive = useCallback(async (id: string) => {
-    if (!activeUrl || !token) return
+  const handleUnarchive = useCallback((id: string) => {
     setArchivedIds(prev => { const s = new Set(prev); s.delete(id); return s })
-    archiveHighlight(activeUrl, token, id, null).catch(() => {})
-  }, [activeUrl, token])
+    mut.archiveHighlight(id, null)
+  }, [])
 
   const handleUnreadAll = useCallback(() => {
-    if (!activeUrl || !token) return
     setShowUnreadAll(false)
     setArchivedIds(prev => {
-      prev.forEach(id => archiveHighlight(activeUrl, token, id, null).catch(() => {}))
+      prev.forEach(id => mut.archiveHighlight(id, null))
       return new Set()
     })
-  }, [activeUrl, token])
+  }, [])
 
   // fast-scroll detection → reveal bulk-unread escape hatch
   const lastScrollRef = useRef({ y: 0, t: 0 })
@@ -104,10 +104,6 @@ export default function FeedScreen() {
   const scrollYRef = useRef(0)
   const itemFirstSeenYRef = useRef<Map<string, number>>(new Map())
   const pendingArchiveRef = useRef<Map<string, number>>(new Map())
-  const activeUrlRef = useRef(activeUrl)
-  const tokenRef = useRef(token)
-  useEffect(() => { activeUrlRef.current = activeUrl }, [activeUrl])
-  useEffect(() => { tokenRef.current = token }, [token])
 
   const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 30 }), [])
   const onViewableItemsChanged = useCallback(({ changed }: { changed: Array<{ item: HighlightWithDoc; isViewable: boolean }> }) => {
@@ -135,23 +131,40 @@ export default function FeedScreen() {
     }
   }, [])
 
+  // Offline fallback: the feed IS the highlights we already synced into the local
+  // replica, so render it from the store when the network is unavailable. Returns
+  // false when the cache is empty.
+  const loadFromStore = useCallback((): boolean => {
+    const hls = highlightsFromStore(h => !h.archived_at)
+    setHighlights(hls)
+    return hls.length > 0
+  }, [])
+
   const load = useCallback(async () => {
-    if (!activeUrl || !token) return
+    if (!activeUrl || !token) { loadFromStore(); return }
     setLoading(true)
     setError(null)
     try {
       const data = await fetchHighlights(activeUrl, token, 200)
       setHighlights(data)
     } catch {
-      setError('Failed to load highlights')
+      // Offline / network error — show the cached feed instead of an error screen.
+      if (!loadFromStore()) setError('Failed to load highlights')
     } finally {
       setLoading(false)
     }
-  }, [activeUrl, token])
+  }, [activeUrl, token, loadFromStore])
 
   useEffect(() => {
     if (status === 'connected') load()
   }, [status, load])
+
+  // Offline / not-yet-connected: render the cached feed, and re-render it as the
+  // persisted store finishes hydrating or a background sync lands more highlights.
+  const storeHlCount = useSyncStore(st => Object.keys(st.highlights).length)
+  useEffect(() => {
+    if (status !== 'connected') loadFromStore()
+  }, [status, storeHlCount, loadFromStore])
 
   // A sync may pull new highlights server-side; re-fetch once it settles so the
   // skeleton resolves to real cards instead of dropping straight to the empty state.
@@ -170,37 +183,25 @@ export default function FeedScreen() {
     load()
   }, [lastSyncedAt, status, load])
 
-  const handlePin = useCallback(async (item: HighlightWithDoc) => {
-    if (!activeUrl || !token) return
+  // Local-first: patch our list + the store immediately (no await), pusher syncs later.
+  const handlePin = useCallback((item: HighlightWithDoc) => {
     const next = item.pinned === 1 ? false : true
-    setActionLoading(prev => new Set(prev).add(item.id))
-    try {
-      await pinHighlight(activeUrl, token, item.id, next)
-      setHighlights(prev =>
-        prev.map(h => h.id === item.id ? { ...h, pinned: next ? 1 : 0 } : h)
-      )
-    } catch {
-      Alert.alert('Error', 'Failed to update pin')
-    } finally {
-      setActionLoading(prev => { const s = new Set(prev); s.delete(item.id); return s })
-    }
-  }, [activeUrl, token])
+    mut.pinHighlight(item.id, next)
+    setHighlights(prev =>
+      prev.map(h => h.id === item.id ? { ...h, pinned: next ? 1 : 0 } : h)
+    )
+  }, [])
 
   const initiateDelete = useCallback((item: HighlightWithDoc) => {
-    if (!activeUrl || !token) return
     setDeletingIds(prev => new Set(prev).add(item.id))
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
       deleteTimers.current.delete(item.id)
-      try {
-        await deleteHighlight(activeUrl, token, item.id)
-      } catch {
-        // best-effort; remove from list either way
-      }
+      mut.deleteHighlight(item.id)
       setHighlights(prev => prev.filter(h => h.id !== item.id))
       setDeletingIds(prev => { const s = new Set(prev); s.delete(item.id); return s })
     }, 5000)
     deleteTimers.current.set(item.id, timer)
-  }, [activeUrl, token])
+  }, [])
 
   const undoDelete = useCallback((id: string) => {
     const timer = deleteTimers.current.get(id)
@@ -209,24 +210,17 @@ export default function FeedScreen() {
     setDeletingIds(prev => { const s = new Set(prev); s.delete(id); return s })
   }, [])
 
-  const handleAnnotateSave = useCallback(async ({ note, color }: { note: string; color: string }) => {
-    if (!activeUrl || !token || !annotateItem) return
-    try {
-      await createAnnotation(activeUrl, token, annotateItem.document_id, {
-        exact: annotateItem.body.slice(0, 300),
-        prefix: '',
-        suffix: '',
-        pos_start: 0,
-        pos_end: 0,
-        note,
-        color,
-        highlight_id: annotateItem.id,
-      })
-      setAnnotateItem(null)
-    } catch {
-      Alert.alert('Error', 'Failed to save annotation')
-    }
-  }, [activeUrl, token, annotateItem])
+  const handleAnnotateSave = useCallback(({ note, color }: { note: string; color: string }) => {
+    if (!annotateItem) return
+    mut.createAnnotation({
+      documentId: annotateItem.document_id,
+      highlightId: annotateItem.id,
+      exact: annotateItem.body.slice(0, 300),
+      note,
+      color,
+    })
+    setAnnotateItem(null)
+  }, [annotateItem])
 
   // Stable refs: passed straight into memo(MarkdownBody). Inline arrows here would
   // get a new identity on every scroll-driven re-render, defeating the memo and
@@ -253,7 +247,6 @@ export default function FeedScreen() {
       )
     }
 
-    const busy = actionLoading.has(item.id)
     const isPinned = item.pinned === 1
 
     const handleSwipeOpen = (direction: string) => {
@@ -271,7 +264,7 @@ export default function FeedScreen() {
         item={item}
         linkedDocuments={item.linked_documents}
         pinned={isPinned}
-        busy={busy}
+        busy={false}
         onPress={() => router.push(`/document/${item.document_id}?from=/&highlight=${item.id}`)}
         onPin={() => handlePin(item)}
         onDelete={() => initiateDelete(item)}
@@ -317,7 +310,7 @@ export default function FeedScreen() {
         {unarchiveBtn}
       </View>
     )
-  }, [actionLoading, archivedIds, deletingIds, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
+  }, [archivedIds, deletingIds, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
 
   // Still loading, or a sync is in flight that may yet produce highlights →
   // skeleton, not the empty state. Only drop to "No highlights yet" once both settle.
@@ -383,9 +376,7 @@ export default function FeedScreen() {
             if (y - exitY > 300) {
               pendingArchiveRef.current.delete(id)
               setArchivedIds(prev => new Set(prev).add(id))
-              const url = activeUrlRef.current
-              const tok = tokenRef.current
-              if (url && tok) archiveHighlight(url, tok, id).catch(() => {})
+              mut.archiveHighlight(id, new Date().toISOString())
             }
           })
         }}

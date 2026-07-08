@@ -24,20 +24,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   fetchDocument,
   fetchReadingProgress,
-  saveReadingProgress,
   fetchAnnotations,
-  createAnnotation,
-  updateAnnotation,
-  deleteAnnotation,
   lookupDocumentByURL,
   fetchDocumentHighlights,
-  deleteHighlight,
-  pinHighlight,
   fetchFeed,
   queueDocumentPipelines,
   fetchDocumentTags,
 } from '../../../src/api'
 import type { Document, Annotation, HighlightWithDoc, Feed, Tag } from '../../../src/api'
+import * as mut from '../../../src/store/mutations'
 import { tagColor } from '../../../src/tagColor'
 import { useConnection } from '../../../src/ConnectionContext'
 import { useToast } from '../../../src/ToastContext'
@@ -350,7 +345,7 @@ export default function DocumentViewer() {
       }
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       saveTimerRef.current = setTimeout(() => {
-        if (activeUrl && token) saveReadingProgress(activeUrl, token, id, frac)
+        mut.saveProgress(id, frac)
       }, DEBOUNCE_MS)
     } else if (msg.type === 'selection' && msg.data) {
       setPendingSelection(msg.data)
@@ -373,24 +368,21 @@ export default function DocumentViewer() {
       }
     } else if (msg.type === 'hl_pin' && msg.id) {
       const hlItem = highlights.find(h => h.id === msg.id)
-      if (!hlItem || !activeUrl || !token) return
+      if (!hlItem) return
       const next = hlItem.pinned !== 1
-      pinHighlight(activeUrl, token, msg.id, next)
-        .then(() => setHighlights(prev => {
-          const updated = prev.map(h => h.id === msg.id ? { ...h, pinned: (next ? 1 : 0) as 0 | 1 } : h)
-          sendToWebView({ type: 'setHighlights', highlights: toHlData(updated), expanded: hlExpanded })
-          return updated
-        }))
-        .catch(() => toast('Failed to pin', 'error'))
+      mut.pinHighlight(msg.id, next) // local-first: store + outbox, no await
+      setHighlights(prev => {
+        const updated = prev.map(h => h.id === msg.id ? { ...h, pinned: (next ? 1 : 0) as 0 | 1 } : h)
+        sendToWebView({ type: 'setHighlights', highlights: toHlData(updated), expanded: hlExpanded })
+        return updated
+      })
     } else if (msg.type === 'hl_delete' && msg.id) {
-      if (!activeUrl || !token) return
-      deleteHighlight(activeUrl, token, msg.id)
-        .then(() => setHighlights(prev => {
-          const updated = prev.filter(h => h.id !== msg.id)
-          sendToWebView({ type: 'setHighlights', highlights: toHlData(updated), expanded: hlExpanded })
-          return updated
-        }))
-        .catch(() => toast('Failed to delete', 'error'))
+      mut.deleteHighlight(msg.id)
+      setHighlights(prev => {
+        const updated = prev.filter(h => h.id !== msg.id)
+        sendToWebView({ type: 'setHighlights', highlights: toHlData(updated), expanded: hlExpanded })
+        return updated
+      })
     } else if (msg.type === 'hl_annotate') {
       setPendingSelection({ exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 })
       setAnnMode('create')
@@ -408,8 +400,8 @@ export default function DocumentViewer() {
         return next
       })
     }
-  }, [id, activeUrl, token, headerAnim, annotations, highlights, hlExpanded, highlight,
-    doc, bg, fg, su, bo, ac, mu, sendToWebView, toHlData, handleLinkPress, toast, router])
+  }, [id, headerAnim, annotations, highlights, hlExpanded, highlight,
+    doc, bg, fg, su, bo, ac, mu, sendToWebView, toHlData, handleLinkPress, router])
 
   // Native WebView message handler
   const handleMessage = useCallback((e: WebViewMessageEvent) => {
@@ -433,33 +425,29 @@ export default function DocumentViewer() {
     return () => window.removeEventListener('message', handler)
   }, [handleParsedMessage])
 
-  const handleAnnSave = useCallback(async (data: { note: string; color: string }) => {
-    if (!activeUrl || !token) return
+  // Local-first: write to the store + outbox (no network), patch the local marks list.
+  const handleAnnSave = useCallback((data: { note: string; color: string }) => {
     setAnnVisible(false)
-    try {
-      if (annMode === 'create') {
-        const sel = pendingSelection ?? { exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 }
-        const ann = await createAnnotation(activeUrl, token, id, { ...sel, ...data })
-        setAnnotations(prev => [...prev, ann]) // marks re-sync via the annotations effect
-      } else if (annMode === 'edit' && existingAnnotation) {
-        const ann = await updateAnnotation(activeUrl, token, existingAnnotation.id, data)
-        setAnnotations(prev => prev.map(a => a.id === ann.id ? ann : a))
-      }
-    } catch (e) {
-      log.error('annotation save failed', e)
+    if (annMode === 'create') {
+      const sel = pendingSelection ?? { exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 }
+      const ann = mut.createAnnotation({
+        documentId: id, exact: sel.exact, prefix: sel.prefix, suffix: sel.suffix,
+        posStart: sel.pos_start, posEnd: sel.pos_end, note: data.note, color: data.color,
+      })
+      setAnnotations(prev => [...prev, ann]) // marks re-sync via the annotations effect
+    } else if (annMode === 'edit' && existingAnnotation) {
+      mut.updateAnnotation(existingAnnotation.id, data.note, data.color)
+      setAnnotations(prev => prev.map(a =>
+        a.id === existingAnnotation.id ? { ...a, note: data.note, color: data.color } : a))
     }
-  }, [annMode, pendingSelection, existingAnnotation, activeUrl, token, id])
+  }, [annMode, pendingSelection, existingAnnotation, id])
 
-  const handleAnnDelete = useCallback(async () => {
-    if (!activeUrl || !token || !existingAnnotation) return
+  const handleAnnDelete = useCallback(() => {
+    if (!existingAnnotation) return
     setAnnVisible(false)
-    try {
-      await deleteAnnotation(activeUrl, token, existingAnnotation.id)
-      setAnnotations(prev => prev.filter(a => a.id !== existingAnnotation.id)) // effect removes the mark
-    } catch (e) {
-      log.error('annotation delete failed', e)
-    }
-  }, [existingAnnotation, activeUrl, token])
+    mut.deleteAnnotation(existingAnnotation.id)
+    setAnnotations(prev => prev.filter(a => a.id !== existingAnnotation.id)) // effect removes the mark
+  }, [existingAnnotation])
 
   const handleQueuePipelines = useCallback(async () => {
     if (!activeUrl || !token || queueingPipelines) return

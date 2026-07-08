@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { createLogger } from './logger'
-
-const log = createLogger('TagSelectorModal')
 import {
-  ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -16,20 +12,9 @@ import {
   View,
 } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
-import { useConnection } from './ConnectionContext'
-import {
-  fetchTags,
-  fetchDocumentTags,
-  fetchAnnotationTags,
-  fetchHighlightTags,
-  addDocumentTag,
-  removeDocumentTag,
-  addAnnotationTag,
-  removeAnnotationTag,
-  addHighlightTag,
-  removeHighlightTag,
-  createTag,
-} from './api'
+import { useSyncStore } from './store/syncStore'
+import * as mut from './store/mutations'
+import type { JunctionType } from './store/outbox'
 import type { Tag } from './api'
 import { TAG_COLORS, tagColor } from './tagColor'
 
@@ -43,112 +28,62 @@ type Props = {
   onChanged?: (objectId: string, tags: Tag[]) => void
 }
 
+const TYPE_MAP: Record<Props['objectType'], JunctionType> = {
+  document: 'doc', annotation: 'ann', highlight: 'hl',
+}
+const SLICE: Record<Props['objectType'], 'documentTags' | 'annotationTags' | 'highlightTags'> = {
+  document: 'documentTags', annotation: 'annotationTags', highlight: 'highlightTags',
+}
+
+// Store-driven + local-first: tags and their applications are read straight from the
+// synced store and mutated through the outbox, so tagging works offline and the UI
+// reacts instantly (no network, no spinners). Selectors follow the CLAUDE.md rule —
+// select raw store slices (stable refs) and derive in useMemo, never map fresh objects
+// inside a useShallow selector (React #185 crash).
 export default function TagSelectorModal({ visible, objectId, objectType, onClose, onChanged }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
-  const { activeUrl, token } = useConnection()
 
-  const [allTags, setAllTags] = useState<Tag[]>([])
-  const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set())
-  const [loading, setLoading] = useState(false)
-  const [toggling, setToggling] = useState<Set<string>>(new Set())
+  const tagsMap = useSyncStore((st) => st.tags)
+  const junctionMap = useSyncStore((st) => st[SLICE[objectType]])
 
   const [newTagName, setNewTagName] = useState('')
   const [newTagColor, setNewTagColor] = useState('default')
-  const [creating, setCreating] = useState(false)
-
-  const load = useCallback(async () => {
-    if (!activeUrl || !token || !objectId) return
-    setLoading(true)
-    try {
-      const [all, applied] = await Promise.all([
-        fetchTags(activeUrl, token),
-        objectType === 'document'
-          ? fetchDocumentTags(activeUrl, token, objectId)
-          : objectType === 'annotation'
-            ? fetchAnnotationTags(activeUrl, token, objectId)
-            : fetchHighlightTags(activeUrl, token, objectId),
-      ])
-      setAllTags(all)
-      setAppliedIds(new Set(applied.map(t => t.id)))
-    } catch (e) {
-      log.error('load error', e)
-    } finally {
-      setLoading(false)
-    }
-  }, [activeUrl, token, objectId, objectType])
 
   useEffect(() => {
-    if (visible) {
-      setNewTagName('')
-      setNewTagColor('default')
-      load()
-    }
-  }, [visible, load])
+    if (visible) { setNewTagName(''); setNewTagColor('default') }
+  }, [visible])
 
-  // Resolve an applied-id set to full Tag objects (order = allTags) and notify the caller.
-  const emitChanged = useCallback((ids: Set<string>, extra: Tag[] = []) => {
-    const pool = [...allTags, ...extra]
-    onChanged?.(objectId, pool.filter(t => ids.has(t.id)))
-  }, [allTags, objectId, onChanged])
+  const allTags = useMemo(
+    () => Object.values(tagsMap).filter((t) => !t.deleted_at).sort((a, b) => a.name.localeCompare(b.name)),
+    [tagsMap],
+  )
+  const appliedIds = useMemo(() => new Set(junctionMap[objectId] ?? []), [junctionMap, objectId])
 
-  const toggleTag = useCallback(async (tag: Tag) => {
-    if (!activeUrl || !token) return
-    const applied = appliedIds.has(tag.id)
-    setToggling(prev => new Set(prev).add(tag.id))
-    try {
-      const next = new Set(appliedIds)
-      if (applied) {
-        if (objectType === 'document') {
-          await removeDocumentTag(activeUrl, token, objectId, tag.id)
-        } else if (objectType === 'annotation') {
-          await removeAnnotationTag(activeUrl, token, objectId, tag.id)
-        } else {
-          await removeHighlightTag(activeUrl, token, objectId, tag.id)
-        }
-        next.delete(tag.id)
-      } else {
-        if (objectType === 'document') {
-          await addDocumentTag(activeUrl, token, objectId, tag.id)
-        } else if (objectType === 'annotation') {
-          await addAnnotationTag(activeUrl, token, objectId, tag.id)
-        } else {
-          await addHighlightTag(activeUrl, token, objectId, tag.id)
-        }
-        next.add(tag.id)
-      }
-      setAppliedIds(next)
-      emitChanged(next)
-    } catch (e) {
-      log.error('toggleTag', e)
-    } finally {
-      setToggling(prev => { const s = new Set(prev); s.delete(tag.id); return s })
-    }
-  }, [activeUrl, token, objectId, objectType, appliedIds, emitChanged])
+  // Resolve the object's current applied tags from the store and notify the caller.
+  const emitChanged = useCallback(() => {
+    if (!onChanged) return
+    const st = useSyncStore.getState()
+    const ids = st[SLICE[objectType]][objectId] ?? []
+    const tags = ids.map((tid) => st.tags[tid]).filter((t): t is Tag => !!t && !t.deleted_at)
+    onChanged(objectId, tags)
+  }, [onChanged, objectId, objectType])
 
-  const handleCreateTag = useCallback(async () => {
-    if (!activeUrl || !token || !newTagName.trim()) return
-    setCreating(true)
-    try {
-      const tag = await createTag(activeUrl, token, { name: newTagName.trim(), color: newTagColor })
-      setAllTags(prev => [tag, ...prev])
-      setNewTagName('')
-      if (objectType === 'document') {
-        await addDocumentTag(activeUrl, token, objectId, tag.id)
-      } else if (objectType === 'annotation') {
-        await addAnnotationTag(activeUrl, token, objectId, tag.id)
-      } else {
-        await addHighlightTag(activeUrl, token, objectId, tag.id)
-      }
-      const next = new Set(appliedIds).add(tag.id)
-      setAppliedIds(next)
-      emitChanged(next, [tag])
-    } catch (e) {
-      log.error('createTag', e)
-    } finally {
-      setCreating(false)
-    }
-  }, [activeUrl, token, newTagName, newTagColor, objectId, objectType, appliedIds, emitChanged])
+  const toggleTag = useCallback((tag: Tag) => {
+    const type = TYPE_MAP[objectType]
+    if (appliedIds.has(tag.id)) mut.removeTag(type, objectId, tag.id)
+    else mut.addTag(type, objectId, tag.id)
+    emitChanged()
+  }, [appliedIds, objectId, objectType, emitChanged])
+
+  const handleCreateTag = useCallback(() => {
+    const name = newTagName.trim()
+    if (!name) return
+    const tag = mut.createTag({ name, color: newTagColor })
+    mut.addTag(TYPE_MAP[objectType], objectId, tag.id)
+    setNewTagName('')
+    emitChanged()
+  }, [newTagName, newTagColor, objectId, objectType, emitChanged])
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -166,39 +101,27 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
             </Pressable>
           </View>
 
-          {loading ? (
-            <View style={s.loadingRow}>
-              <ActivityIndicator color={theme.colors.accent} />
-            </View>
-          ) : (
-            <FlatList
-              data={allTags}
-              keyExtractor={item => item.id}
-              style={s.list}
-              renderItem={({ item }) => {
-                const isApplied = appliedIds.has(item.id)
-                const isToggling = toggling.has(item.id)
-                return (
-                  <Pressable
-                    style={[s.tagRow, isApplied && s.tagRowApplied]}
-                    onPress={() => toggleTag(item)}
-                    disabled={isToggling}
-                  >
-                    <View style={[s.dot, { backgroundColor: tagColor(item.color) }]} />
-                    <Text style={[s.tagName, isApplied && s.tagNameApplied]}>{item.name}</Text>
-                    {isToggling ? (
-                      <ActivityIndicator size="small" color={theme.colors.accent} />
-                    ) : isApplied ? (
-                      <Text style={s.check}>✓</Text>
-                    ) : null}
-                  </Pressable>
-                )
-              }}
-              ListEmptyComponent={
-                <Text style={s.emptyText}>No tags yet. Create one below.</Text>
-              }
-            />
-          )}
+          <FlatList
+            data={allTags}
+            keyExtractor={item => item.id}
+            style={s.list}
+            renderItem={({ item }) => {
+              const isApplied = appliedIds.has(item.id)
+              return (
+                <Pressable
+                  style={[s.tagRow, isApplied && s.tagRowApplied]}
+                  onPress={() => toggleTag(item)}
+                >
+                  <View style={[s.dot, { backgroundColor: tagColor(item.color) }]} />
+                  <Text style={[s.tagName, isApplied && s.tagNameApplied]}>{item.name}</Text>
+                  {isApplied ? <Text style={s.check}>✓</Text> : null}
+                </Pressable>
+              )
+            }}
+            ListEmptyComponent={
+              <Text style={s.emptyText}>No tags yet. Create one below.</Text>
+            }
+          />
 
           <View style={s.createSection}>
             <Text style={s.createLabel}>New tag</Text>
@@ -213,15 +136,11 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
                 onSubmitEditing={handleCreateTag}
               />
               <Pressable
-                style={[s.createBtn, (!newTagName.trim() || creating) && s.createBtnDisabled]}
+                style={[s.createBtn, !newTagName.trim() && s.createBtnDisabled]}
                 onPress={handleCreateTag}
-                disabled={!newTagName.trim() || creating}
+                disabled={!newTagName.trim()}
               >
-                {creating ? (
-                  <ActivityIndicator size="small" color={theme.colors.background} />
-                ) : (
-                  <Text style={s.createBtnText}>＋</Text>
-                )}
+                <Text style={s.createBtnText}>＋</Text>
               </Pressable>
             </View>
             <View style={s.colorRow}>
@@ -279,7 +198,6 @@ function buildStyles(t: Theme) {
       justifyContent: 'center',
     },
     xBtnText: { color: t.colors.muted, fontSize: 14, fontWeight: '600' },
-    loadingRow: { paddingVertical: t.spacing.xl, alignItems: 'center' },
     list: { minHeight: 200, maxHeight: 440 },
     tagRow: {
       flexDirection: 'row',

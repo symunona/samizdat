@@ -15,7 +15,7 @@ import { useUnistyles } from 'react-native-unistyles'
 import { useConnection } from '../../src/ConnectionContext'
 import { useAnnotations, useSyncStatus, type AnnotationWithContext } from '../../src/store/hooks'
 import { forceSync } from '../../src/store/syncEngine'
-import { createNote, updateAnnotation, deleteAnnotation } from '../../src/api'
+import * as mut from '../../src/store/mutations'
 import AnnotationPanel, { type ExistingAnnotation } from '../../src/AnnotationPanel'
 import TagSelectorModal from '../../src/TagSelectorModal'
 
@@ -74,31 +74,21 @@ export default function NotesScreen() {
     setPanelOpen(true)
   }
 
-  async function handleSave(data: { note: string; color: string }) {
-    if (!ready) return
+  // Local-first: the list reads from the store (useAnnotations), so a store mutation
+  // reflects instantly with no network; the outbox pusher syncs it when online.
+  function handleSave(data: { note: string; color: string }) {
     setPanelOpen(false)
-    try {
-      if (editing) {
-        await updateAnnotation(activeUrl, token, editing.id, data)
-      } else {
-        await createNote(activeUrl, token, { note: data.note, color: data.color })
-      }
-      await forceSync(activeUrl, token)
-    } catch {
-      // A follow-up sync will reconcile; surface via the list's sync status.
+    if (editing) {
+      mut.updateAnnotation(editing.id, data.note, data.color)
+    } else {
+      mut.createAnnotation({ documentId: null, note: data.note, color: data.color })
     }
   }
 
-  async function handleDelete() {
-    if (!ready || !editing) return
-    const id = editing.id
+  function handleDelete() {
+    if (!editing) return
     setPanelOpen(false)
-    try {
-      await deleteAnnotation(activeUrl, token, id)
-      await forceSync(activeUrl, token)
-    } catch {
-      /* reconciled on next sync */
-    }
+    mut.deleteAnnotation(editing.id)
   }
 
   function handleTag(annotationId: string) {
@@ -106,9 +96,8 @@ export default function NotesScreen() {
     setTagFor(annotationId)
   }
 
-  async function closeTagModal() {
+  function closeTagModal() {
     setTagFor(null)
-    if (ready) await forceSync(activeUrl, token)
   }
 
   function renderItem({ item }: { item: AnnotationWithContext }) {

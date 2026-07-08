@@ -1,4 +1,8 @@
 import '../src/theme'
+import { installOfflineSim } from '../src/offlineSim'
+// Patch fetch before anything probes the network, so the LS offline switch is honored
+// from the very first request.
+installOfflineSim()
 import { useEffect } from 'react'
 import { Platform } from 'react-native'
 import { setAudioModeAsync } from 'expo-audio'
@@ -14,6 +18,7 @@ import { ScrapeQueueProvider } from '../src/ScrapeQueueContext'
 import ShareIntentBridge from '../src/ShareIntentBridge'
 import WebReloadBanner from '../src/WebReloadBanner'
 import { useSyncEffect } from '../src/store/useSyncEffect'
+import { useOutboxPush } from '../src/store/useOutboxPush'
 import { useDebugLogStore } from '../src/store/debugLogStore'
 import { setDebugLogTarget, logToServer } from '../src/debugLog'
 
@@ -44,6 +49,7 @@ function NavigationGuard() {
 
 function SyncEffects() {
   useSyncEffect()
+  useOutboxPush()
   return null
 }
 

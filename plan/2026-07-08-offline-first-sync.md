@@ -2,7 +2,7 @@
 created: 2026-07-08
 topic: Offline-first sync for user-authored mutations (local-first + background push)
 excerpt: Make tag/star/annotate/read-state work with no network; write to local store, push lazily when online. Per-object sync direction, note-conflict git-diff merge, mocked storage unit tests, and a full offline e2e harness.
-status: PHASE 1 IN PROGRESS — local-first writes (outbox + pusher + dirty-aware merge). Phases 2 (note conflict-merge) and 3 (full e2e harness) not started; clean seams left (base_rev tracked per row).
+status: PHASE 1 DONE — local-first writes shipped (outbox + pusher + dirty-aware merge; all tag/star/archive/annotate/read-state mutations offline-capable). Tests green: e2e/outbox-unit.mjs (27) + e2e/offline.js (11, offline→reconnect→server-synced) + smoke + integration. Phases 2 (note conflict-merge) and 3 (full scraper/LLM e2e harness) not started; seams left — base_rev tracked per dirty row, server creates honor client id. DESIGN NOTE: server create endpoints now accept an optional client-minted `id` (idempotent) — within the locked "client-minted UUID PK" rule, not a new route.
 ---
 
 # Offline-first sync

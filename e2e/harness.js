@@ -137,6 +137,40 @@ VALUES ('${q(id)}','${q(canonicalUrl)}','${q(title)}','${q(markdown)}','${now}',
   console.log('  seeded text document', id)
 }
 
+// Seed a Tag row (offline-test fixture — an existing tag the app can apply offline).
+export function seedTag({ id, name, color = 'default' }) {
+  const now = new Date().toISOString()
+  const q = s => s.replace(/'/g, "''")
+  const sql = `INSERT OR REPLACE INTO tags (id,name,color,created_at,updated_at,rev,deleted_at)
+VALUES ('${q(id)}','${q(name)}','${q(color)}','${now}','${now}',1,NULL);`
+  const f = '/tmp/samizdat-test/seed-tag.sql'
+  fs.writeFileSync(f, sql)
+  execSync(`sqlite3 ${TEST_DB} < ${f}`)
+  console.log('  seeded tag', name)
+}
+
+// Seed a Highlight (with the pipeline → pipeline_run parents its FK needs) on a
+// Document, as the pipeline would. Used by the offline walkthrough to exercise
+// star / delete / tag on real machine-data rows.
+export function seedHighlight({ id, documentId, title, body, pinned = 0 }) {
+  const now = new Date().toISOString()
+  const q = s => s.replace(/'/g, "''")
+  const pipeId = `pipe-${id}`
+  const runId = `run-${id}`
+  const sql = `
+INSERT OR IGNORE INTO pipelines (id,name,enabled,trigger,filter,steps,created_at,updated_at,rev,deleted_at)
+VALUES ('${q(pipeId)}','seed',1,'on_new_document','{}','[]','${now}','${now}',1,NULL);
+INSERT OR IGNORE INTO pipeline_runs (id,pipeline_id,document_id,job_id,document_content_hash,status,step_index,state,superseded_at,created_at,updated_at,rev,deleted_at)
+VALUES ('${q(runId)}','${q(pipeId)}','${q(documentId)}',NULL,'','done',0,'{}',NULL,'${now}','${now}',1,NULL);
+INSERT OR REPLACE INTO highlights (id,document_id,pipeline_run_id,kind,title,body,metadata,pinned,archived_at,created_at,updated_at,rev,deleted_at)
+VALUES ('${q(id)}','${q(documentId)}','${q(runId)}','item','${q(title)}','${q(body)}','{}',${pinned ? 1 : 0},NULL,'${now}','${now}',1,NULL);
+`
+  const f = '/tmp/samizdat-test/seed-highlight.sql'
+  fs.writeFileSync(f, sql)
+  execSync(`sqlite3 ${TEST_DB} < ${f}`)
+  console.log('  seeded highlight', id)
+}
+
 // Seed a false-parse Document (a bot-protection / login-wall scrape that the
 // engine flagged) so the Documents-list error badge is exercised by the smoke
 // test. error_reason is the visible flag; no highlights are created.

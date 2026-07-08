@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useRouter } from 'expo-router'
 import { useConnection } from '../../src/ConnectionContext'
-import { fetchHighlights, HighlightWithDoc, pinHighlight } from '../../src/api'
+import { fetchHighlights, HighlightWithDoc } from '../../src/api'
+import * as mut from '../../src/store/mutations'
+import { useSyncStore } from '../../src/store/syncStore'
+import { highlightsFromStore } from '../../src/store/highlightsFromStore'
 import HighlightCard from '../../src/HighlightCard'
 
 export default function StarredScreen() {
@@ -16,33 +19,40 @@ export default function StarredScreen() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Offline-first: starred highlights are already in the local replica.
+  const loadFromStore = useCallback((): boolean => {
+    const hls = highlightsFromStore(h => h.pinned === 1)
+    setHighlights(hls)
+    return hls.length > 0
+  }, [])
+
   const load = useCallback(async () => {
-    if (!activeUrl || !token) return
+    if (!activeUrl || !token) { loadFromStore(); return }
     setLoading(true)
     setError(null)
     try {
       const data = await fetchHighlights(activeUrl, token, 200, false, true)
       setHighlights(data)
     } catch {
-      setError('Failed to load starred highlights')
+      if (!loadFromStore()) setError('Failed to load starred highlights')
     } finally {
       setLoading(false)
     }
-  }, [activeUrl, token])
+  }, [activeUrl, token, loadFromStore])
 
   useEffect(() => {
     if (status === 'connected') load()
   }, [status, load])
 
-  const handleUnpin = useCallback(async (item: HighlightWithDoc) => {
-    if (!activeUrl || !token) return
-    try {
-      await pinHighlight(activeUrl, token, item.id, false)
-      setHighlights(prev => prev.filter(h => h.id !== item.id))
-    } catch {
-      Alert.alert('Error', 'Failed to unpin')
-    }
-  }, [activeUrl, token])
+  const storeHlCount = useSyncStore(st => Object.keys(st.highlights).length)
+  useEffect(() => {
+    if (status !== 'connected') loadFromStore()
+  }, [status, storeHlCount, loadFromStore])
+
+  const handleUnpin = useCallback((item: HighlightWithDoc) => {
+    mut.pinHighlight(item.id, false)
+    setHighlights(prev => prev.filter(h => h.id !== item.id))
+  }, [])
 
   const handleDocumentPress = useCallback(
     (docId: string) => router.push(`/document/${encodeURIComponent(docId)}?from=/starred`),

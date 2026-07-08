@@ -606,7 +606,8 @@ export async function fetchAnnotations(serverUrl: string, token: string, docId: 
 
 export async function createAnnotation(
   serverUrl: string, token: string, docId: string,
-  data: { exact: string; prefix: string; suffix: string; pos_start: number; pos_end: number; color: string; note: string; highlight_id?: string; media_ts_ms?: number },
+  // `id` is optional client-minted UUID (offline-first replay-safe); server honors it.
+  data: { id?: string; exact: string; prefix: string; suffix: string; pos_start: number; pos_end: number; color: string; note: string; highlight_id?: string; media_ts_ms?: number },
 ): Promise<Annotation> {
   const res = await fetch(`${base(serverUrl)}/api/v1/documents/${encodeURIComponent(docId)}/annotations`, {
     method: 'POST',
@@ -620,7 +621,7 @@ export async function createAnnotation(
 // annotation storage/sync/tagging surface (document_id is NULL server-side).
 export async function createNote(
   serverUrl: string, token: string,
-  data: { note: string; color?: string },
+  data: { id?: string; note: string; color?: string },
 ): Promise<Annotation> {
   const res = await fetch(`${base(serverUrl)}/api/v1/annotations`, {
     method: 'POST',
@@ -673,7 +674,7 @@ export async function fetchTags(serverUrl: string, token: string): Promise<Tag[]
 
 export async function createTag(
   serverUrl: string, token: string,
-  data: { name: string; color?: string },
+  data: { id?: string; name: string; color?: string },
 ): Promise<Tag> {
   const res = await fetch(`${base(serverUrl)}/api/v1/tags`, {
     method: 'POST',
@@ -719,13 +720,6 @@ export async function removeDocumentTag(serverUrl: string, token: string, docId:
     { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
   )
   if (!res.ok) throw new ApiError(res.status, `removeDocumentTag failed: HTTP ${res.status}`)
-}
-
-export async function fetchAnnotationTags(serverUrl: string, token: string, annId: string): Promise<Tag[]> {
-  const res = await fetch(`${base(serverUrl)}/api/v1/annotations/${encodeURIComponent(annId)}/tags`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  return json<Tag[]>(res, '/api/v1/annotations/:id/tags')
 }
 
 export async function addAnnotationTag(serverUrl: string, token: string, annId: string, tagId: string): Promise<void> {
@@ -883,13 +877,6 @@ export async function pinHighlight(serverUrl: string, token: string, id: string,
     body: JSON.stringify({ pinned: pinned ? 1 : 0 }),
   })
   if (!res.ok) throw new ApiError(res.status, `pinHighlight failed: HTTP ${res.status}`)
-}
-
-export async function fetchHighlightTags(serverUrl: string, token: string, hlId: string): Promise<Tag[]> {
-  const res = await fetch(`${base(serverUrl)}/api/v1/highlights/${encodeURIComponent(hlId)}/tags`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  return json<Tag[]>(res, '/api/v1/highlights/:id/tags')
 }
 
 export async function addHighlightTag(serverUrl: string, token: string, hlId: string, tagId: string): Promise<void> {

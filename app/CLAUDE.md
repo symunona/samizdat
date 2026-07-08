@@ -46,6 +46,20 @@ Never block UI on network. Server is authoritative; broken replica → wipe + re
 - Machine data (`Document`, `Highlight`): server→phone one-way, never push back
 - User-authored rows (`Annotation`, read-state, `Tag`): two-way LWW push
 
+## Local-first writes (outbox) — NEVER call a mutating api.ts fn from a screen
+Every user mutation (tag / star / archive / annotate / read-progress / delete) MUST go
+through `src/store/mutations.ts` (`import * as mut`), never the inline `api.ts` client.
+A mutation (1) optimistically patches the persisted `syncStore`, so the UI reacts with
+**no network**, and (2) enqueues an ordered `outbox` intent that `pushEngine.drainOutbox`
+replays against the SAME `api.ts` endpoints when connected. This is why tagging/starring
+now work offline. Wiring:
+- `src/store/outbox.ts` — PURE reducers + dirty-tracking + dirty-aware pull-merge (unit-tested by `e2e/outbox-unit.mjs`; run via `just e2e-offline`). No zustand/network/clock here.
+- `src/store/syncStore.ts` — the `mut*` actions (optimistic patch + `enqueue` + mark row `dirty`) and a **dirty-aware `applySync`**: a locally-dirty row is NOT clobbered by an older server pull until its intent is pushed. `base_rev` is tracked per dirty row (Phase 2 note-conflict seam).
+- `src/store/pushEngine.ts` — drains the outbox in FIFO order (dependencies hold: a create lands before edits that reference it); a transient failure (offline/5xx/401) stops the drain + retries with backoff, a 4xx is dropped so it can't wedge the queue.
+- `src/store/useOutboxPush.ts` — mounted in `_layout` `SyncEffects`; drains on new intent, reconnect, foreground, interval. Outbox is persisted → survives restart.
+- **Creates are client-minted UUIDs** (`src/store/uuid.ts` — crypto when present, else Math.random; the `uuid` pkg's v4 crashes on bare Hermes). The server create endpoints (annotation, note, tag) honor an optional `id` idempotently, so a replayed offline create can't collide or duplicate. Never enqueue machine content (doc markdown, highlight body).
+- `TagSelectorModal` is fully store-driven (reads `syncStore.tags` + junction maps, mutates via `mut`) → works offline, no fetch. Follow the useShallow rule: raw slices + `useMemo`.
+
 ## Screen structure (plan/005)
 Bottom tabs: **Feed · Digest · Settings**. Add FAB center-bottom. Side drawers for filters.
 Feed: `Highlight` cards, swipe-triage (read/save/skip). Document viewer: gutter-anchored highlights.

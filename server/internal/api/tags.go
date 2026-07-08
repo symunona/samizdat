@@ -12,6 +12,7 @@ import (
 type tagsHandler struct{ q *store.Queries }
 
 type tagInput struct {
+	ID    string `json:"id"` // optional client-minted UUID (offline-first replay-safe)
 	Name  string `json:"name"`
 	Color string `json:"color"`
 }
@@ -45,9 +46,18 @@ func (h *tagsHandler) create(w http.ResponseWriter, r *http.Request) {
 	if inp.Color == "" {
 		inp.Color = "default"
 	}
+	// Honor a client-minted id (offline-first) and be idempotent on it: a replayed
+	// create returns the existing tag rather than a duplicate/500.
+	id := inp.ID
+	if id == "" {
+		id = uuid.New().String()
+	} else if existing, err := h.q.GetTag(r.Context(), id); err == nil {
+		writeJSON(w, http.StatusOK, existing)
+		return
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	tag, err := h.q.InsertTag(r.Context(), store.InsertTagParams{
-		ID:        uuid.New().String(),
+		ID:        id,
 		Name:      inp.Name,
 		Color:     inp.Color,
 		CreatedAt: now,
