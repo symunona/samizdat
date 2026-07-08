@@ -2,7 +2,7 @@
 created: 2026-07-08
 topic: Offline-first sync for user-authored mutations (local-first + background push)
 excerpt: Make tag/star/annotate/read-state work with no network; write to local store, push lazily when online. Per-object sync direction, note-conflict git-diff merge, mocked storage unit tests, and a full offline e2e harness.
-status: DRAFT — awaiting review; execute after Group B (false-parse) lands, in phases.
+status: PHASE 1 IN PROGRESS — local-first writes (outbox + pusher + dirty-aware merge). Phases 2 (note conflict-merge) and 3 (full e2e harness) not started; clean seams left (base_rev tracked per row).
 ---
 
 # Offline-first sync
