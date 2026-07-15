@@ -406,12 +406,17 @@ e2e-offline: build-server
 
 [group('quality')]
 [doc('Run all tests')]
-test: test-go
+test: test-go test-clipper
 
 [group('quality')]
 test-go:
     cd server && go test ./... 2>/dev/null || echo "server/ not initialized yet"
     cd cli && go test ./... 2>/dev/null || echo "cli/ not initialized yet"
+
+# Zero-dep logic tests for the clipper popup (node built-in runner, no browser).
+[group('quality')]
+test-clipper:
+    node --test clipper/test/*.test.mjs
 
 [group('quality')]
 [doc('Lint all code (go vet + golangci-lint + eslint)')]
