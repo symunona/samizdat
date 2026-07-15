@@ -58,6 +58,7 @@ server/
       middleware.go         # bearerAuth, localhostOnly guards
       sync.go               # GET  /api/v1/sync            (bearer-authed, incremental pull)
       sync_test.go          # unit tests for cursor correctness
+      jobs.go               # POST /api/v1/jobs            (bearer-authed, idempotent enqueue)
     transcript/
       vtt.go                # WebVTT parser → []Segment{StartMs,EndMs,Text}
     worker/
@@ -143,6 +144,22 @@ Run `sqlc generate` before `go build`. `just server::gen` wraps this. Generated 
 - Never return stack traces in HTTP responses — log internally, return `{"error":"..."}` with appropriate 4xx/5xx
 - Errors: typed sentinels + `fmt.Errorf("context: %w", err)` wrapping
 
+## Job enqueue idempotency (`POST /api/v1/jobs`)
+
+`scrape_url` jobs are deduplicated by URL at enqueue time. The logic in `jobs.go` (`create`) applies **before** `InsertJob`:
+
+1. `GetLatestScrapeJobForURL` — queries the latest non-deleted `scrape_url` job for the canonical URL (ordered by `updated_at DESC`).
+2. **`dead`** → retry in place: `RetryJob` resets `run_after` and `updated_at` on the existing row (no new row). Response: `{job_id, deduped:true, retried:true}`.
+3. **`queued`/`running`/`paused`/`done`** → reuse: return the existing `job_id` with no write. Response: `{job_id, deduped:true, status:<existing>}`.
+4. **`sql.ErrNoRows`** (no prior job) → normal insert. Response: `{job_id, deduped:false}`.
+5. Any other DB error → 500.
+
+**Rationale:** Document dedup by `canonical_url` only prevents a duplicate *Document* at run time — it does not prevent a duplicate *queue row*. This closes the gap for extension double-pin, reader re-add, and manual retry scenarios.
+
+**`done` is a no-op**: a URL that was already successfully scraped will not be re-scraped via this endpoint, even if the user re-submits it. Intentional — use a dedicated re-scrape flow if needed.
+
+**JSON field `json_extract(payload, '$.url')`** is used in the SQL query — the URL is embedded in the job payload JSON, not a dedicated column. This means the `url` key in the payload must remain stable.
+
 ## Sync endpoint (`GET /api/v1/sync`)
 
 Incremental pull for phone clients. Uses an `updated_at`-based cursor with `>=` filter (RFC3339 second resolution).
@@ -197,43 +214,4 @@ so gated articles render full-text. Config lives in the existing per-domain seam
 - **Scrape + auto-refresh:** `handleScrapeURL` loads the domain's jar into the fetch
   context (`BrowserPool.FetchHTML(url, statePath)`). If the fetched HTML still shows
   `paywall_text` (`isGated`), the session expired → `refreshSession` re-logins **once**
-  from credentials.toml, rewrites the jar, and re-fetches. Only if still gated after
-  that (no stored creds, login failed, or lapsed subscription) does it warn
-  (`run: sam login <domain> --save`). Refresh is at most once per scrape — no loop.
-- SSO note: a domain's login may live on a parent host (444 → magyarjeti.hu); the
-  `login_url`'s `?redirect=` sends the session back so the content domain's cookie is
-  set. `storageState` captures cookies for all domains touched during login.
-- **Follow-up (not built):** credentialed Documents should route to a local LLM only
-  (Rule 5). The router guard is documented but unimplemented; single-user server →
-  no shared-cache leak today.
-
-## YouTube ingest pipeline
-- Triggered by `scrape_url` jobs for any YouTube URL (all forms: watch, youtu.be, shorts, embed, music, m.).
-- **Canonical form**: always `https://www.youtube.com/watch?v=<id>` — canonicalization happens before DB dedup.
-- **Two-pass yt-dlp**: (1) probe `yt-dlp -J --skip-download` reads the video's original `language` (no media); (2) download pass fetches `-f bestaudio -x --audio-format m4a --write-subs --write-auto-subs --sub-format vtt --convert-subs vtt` with `--sub-langs` **computed** from the language policy (`internal/langpref`), never a hardcoded `en`. Blindly requesting `en` pulled YouTube's machine-translation of non-English videos; the probe lets us keep the original.
-- **Language policy** (`server_settings` key `language_prefs`, `langpref.Prefs`): a single `preserved_langs` list — languages kept in their ORIGINAL form. `prefs.Wanted(origLang)` returns ordered tracks with `result[0]` = the PRIMARY (default/pipeline) track: preserved-or-English original → `[orig]`; otherwise → `[en, orig]` (English primary, original kept to switch to). `media_metadata.orig_lang` is the true original (for the ·orig label); `transcript_langs` is primary-first. Legacy `native_langs` blobs are still parsed. Edited in the app's Settings → Transcript Languages (one chip list).
-- **Transcript preference**: per language, manual subs → auto-captions. status (in `media_metadata`) reflects the primary track.
-- **Audio asset**: stored as `media_assets` row with `kind="audio"`, accessible at `GET /api/v1/documents/{id}/audio` (range-request capable via `http.ServeFile`).
-- **Per-language `.vtt` files are KEPT** in the media cache (design rule 1 — the lang-keyed transcript map is rebuildable from them without re-fetching). The probe writes no info.json, so there is nothing to clean up.
-- **Post-ingest**: calls `finishDocument()` (shared with article scraper) — enqueues `fetch_assets` and triggers matching pipelines.
-
-## yt-dlp config (`[ytdlp]` in TOML)
-```toml
-[ytdlp]
-path    = "yt-dlp"               # binary; default = PATH lookup
-proxy   = "socks5h://100.x.y.z:1080"  # residential proxy (required for VPS; Tailscale home node recommended)
-cookies = "/path/to/cookies.txt" # optional Netscape cookies.txt (fallback/auth)
-```
-The VPS datacenter IP is bot-blocked by YouTube. A residential proxy (e.g. home node over Tailscale) is required for the happy path. See `docs/youtube-ingest.md`.
-
-## yt-dlp proxy status endpoint
-`GET /api/v1/ytdlp/status` (bearer-authed):
-- Background goroutine probes the SOCKS5 proxy every 60 seconds by fetching `https://api.ipify.org` through it.
-- GET also triggers an immediate fresh probe (8s timeout) — page refresh = recheck.
-- `last_ok_at` (last successful probe time) is persisted in `server_settings` under key `ytdlp_proxy_last_ok_at` so it survives restarts.
-- Response: `{configured, proxy, ok, exit_ip, error, checked_at, last_ok_at}`.
-- If no proxy is configured, the handler is registered but always returns `{configured: false}` and no background goroutine runs.
-
-## Media serving
-- `GET /api/v1/media/{id}` — serves any media asset by asset ID; content-type inferred by extension.
-- `GET /api/v1/documents/{id}/audio
+  from credentials.toml, rewrites the jar, and re-fetches.

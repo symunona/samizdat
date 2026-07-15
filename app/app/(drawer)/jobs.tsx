@@ -408,7 +408,40 @@ export default function JobsScreen() {
       }
     }
 
-    const tree = buildTree(jobs)
+    const flatTree = buildTree(jobs)
+
+    // Group same-URL scrape_url root-blocks so duplicates/retries render together
+    // (server dedup prevents NEW dupes; this collapses legacy dupes + history runs).
+    // buildTree emits each root immediately followed by its subtree, so a "block"
+    // is a root item plus the following non-root items until the next root.
+    type TreeItem = typeof flatTree[number]
+    const blocks: { rootId: string; url: string; items: TreeItem[] }[] = []
+    for (const it of flatTree) {
+      if (it.isRoot) {
+        const url = it.job.kind === 'scrape_url' ? (parsePayload(it.job.payload).url ?? '') : ''
+        blocks.push({ rootId: it.job.id, url, items: [it] })
+      } else if (blocks.length) {
+        blocks[blocks.length - 1].items.push(it)
+      }
+    }
+    const groupOrder: string[] = []
+    const groups = new Map<string, typeof blocks>()
+    for (const b of blocks) {
+      const key = b.url ? `u:${b.url}` : `b:${b.rootId}` // empty-url roots stay singletons
+      if (!groups.has(key)) { groups.set(key, []); groupOrder.push(key) }
+      groups.get(key)!.push(b)
+    }
+    // urlGroup meta per root: run N of M (chronological; newest block = run M), and
+    // a groupStart flag on the first (newest) block of a multi-run URL group.
+    const urlGroup = new Map<string, { size: number; run: number; groupStart: boolean }>()
+    const tree: TreeItem[] = []
+    for (const key of groupOrder) {
+      const gblocks = groups.get(key)!
+      gblocks.forEach((b, i) => {
+        urlGroup.set(b.rootId, { size: gblocks.length, run: gblocks.length - i, groupStart: i === 0 && gblocks.length > 1 })
+        tree.push(...b.items)
+      })
+    }
 
     // Filter out children of collapsed roots
     const collapsedRoots = new Set<string>()
@@ -444,11 +477,13 @@ export default function JobsScreen() {
         childCount: item.isRoot ? countDescendants(item.job.id) : 0,
         groupStatus: item.isRoot ? groupStatus(item.job.id, byParent) : '',
         queuePos: queuePositions.get(item.job.id),
+        urlGroup: item.isRoot ? (urlGroup.get(item.job.id) ?? null) : null,
       }))
   }, [jobs, collapsed])
 
   function renderItem({ item }: { item: typeof treeItems[0] }) {
-    const { job, depth, isRoot, childCount, groupStatus: gStatus, queuePos } = item
+    const { job, depth, isRoot, childCount, groupStatus: gStatus, queuePos, urlGroup } = item
+    const inUrlGroup = !!urlGroup && urlGroup.size > 1
     const statusColor = STATUS_COLOR[job.status] ?? '#9ca3af'
     const p = parsePayload(job.payload)
     const r = parseResult(job.result)
@@ -485,8 +520,13 @@ export default function JobsScreen() {
         depth > 0 && s.childCard,
         isSuperseded && s.supersededCard,
         isAffected && s.previewCard,
+        urlGroup?.groupStart && s.urlGroupStart,
         { marginLeft: indentPx },
       ]}>
+        {/* Header when several jobs share one URL — the group of retries/runs. */}
+        {urlGroup?.groupStart && (
+          <Text style={s.urlGroupHeader} numberOfLines={1}>↳ {urlGroup.size} runs of this URL</Text>
+        )}
         {/* Connector line for children */}
         {depth > 0 && <View style={s.connectorLine} />}
 
@@ -495,6 +535,9 @@ export default function JobsScreen() {
           <Text style={[s.kindText, isSuperseded && s.supersededText]}>{kindLabel(job.kind)}</Text>
           {versionLabel && (
             <View style={s.versionBadge}><Text style={s.versionBadgeText}>{versionLabel}</Text></View>
+          )}
+          {inUrlGroup && (
+            <View style={s.versionBadge}><Text style={s.versionBadgeText}>run {urlGroup!.run}/{urlGroup!.size}</Text></View>
           )}
           {isSuperseded && (
             <View style={s.supersededBadge}><Text style={s.supersededBadgeText}>superseded</Text></View>
@@ -854,6 +897,8 @@ function buildStyles(t: Theme) {
     previewCard: { borderColor: '#f87171', borderWidth: 2, backgroundColor: '#f8717111' },
     versionBadge: { backgroundColor: t.colors.accent + '22', borderRadius: t.radius.sm, paddingHorizontal: 6, paddingVertical: 1, flexShrink: 0 },
     versionBadgeText: { color: t.colors.accent, fontSize: 10, fontWeight: '700', fontFamily: 'monospace' },
+    urlGroupStart: { marginTop: 14, borderTopWidth: 2, borderTopColor: t.colors.accent + '44' },
+    urlGroupHeader: { color: t.colors.muted, fontSize: 11, fontWeight: '600', marginBottom: 4 },
     supersededBadge: { backgroundColor: '#9ca3af33', borderRadius: t.radius.sm, paddingHorizontal: 6, paddingVertical: 1, flexShrink: 0 },
     supersededBadgeText: { color: '#9ca3af', fontSize: 10, fontWeight: '700', fontFamily: 'monospace' },
     skippedBadge: { backgroundColor: '#60a5fa33', borderRadius: t.radius.sm, paddingHorizontal: 6, paddingVertical: 1, flexShrink: 0 },

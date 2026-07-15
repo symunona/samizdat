@@ -734,6 +734,34 @@ func (q *Queries) GetLatestDoneRunForDoc(ctx context.Context, arg GetLatestDoneR
 	return i, err
 }
 
+const getLatestScrapeJobForURL = `-- name: GetLatestScrapeJobForURL :one
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE kind = 'scrape_url' AND json_extract(payload, '$.url') = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1
+`
+
+// Latest non-deleted scrape_url job for a URL (any status): drives idempotent
+// enqueue -- reuse an active job, retry a dead one in place, never duplicate it.
+func (q *Queries) GetLatestScrapeJobForURL(ctx context.Context, payload string) (Job, error) {
+	row := q.db.QueryRowContext(ctx, getLatestScrapeJobForURL, payload)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Payload,
+		&i.Status,
+		&i.Attempts,
+		&i.RunAfter,
+		&i.LastError,
+		&i.Result,
+		&i.DurationMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+		&i.ParentJobID,
+	)
+	return i, err
+}
+
 const getMediaAssetByDocumentAndKind = `-- name: GetMediaAssetByDocumentAndKind :one
 SELECT id, document_id, original_url, local_path, kind, width, height, created_at, updated_at, rev, deleted_at FROM media_assets WHERE document_id = ? AND kind = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1
 `

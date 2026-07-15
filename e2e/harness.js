@@ -10,8 +10,25 @@ import { fileURLToPath } from 'node:url'
 const __dir = dirname(fileURLToPath(import.meta.url))
 export const ROOT = join(__dir, '..')
 
-export const CHROMIUM = process.env.CHROMIUM_PATH ||
-  '/home/symunona/.cache/ms-playwright/chromium-1200/chrome-linux64/chrome'
+// Resolve the installed Playwright Chromium dynamically — the version dir
+// (chromium-<rev>) changes whenever playwright-go is bumped, so a hardcoded
+// path silently breaks every e2e after an upgrade. Pick the newest chromium-*.
+function resolveChromium() {
+  if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH
+  const base = join(process.env.HOME || '/home/symunona', '.cache/ms-playwright')
+  let best = null
+  try {
+    for (const d of fs.readdirSync(base)) {
+      const m = /^chromium-(\d+)$/.exec(d)
+      if (!m) continue
+      const exe = join(base, d, 'chrome-linux64/chrome')
+      if (fs.existsSync(exe) && (!best || Number(m[1]) > best.rev)) best = { rev: Number(m[1]), exe }
+    }
+  } catch { /* fall through to error below */ }
+  if (!best) throw new Error(`no Playwright Chromium found under ${base} (run: just setup-server)`)
+  return best.exe
+}
+export const CHROMIUM = resolveChromium()
 export const SERVER_BIN = join(ROOT, 'server/bin/samizdat')
 export const TEST_CONFIG = join(ROOT, 'config/config-test.toml')
 export const TEST_PORT = 8766

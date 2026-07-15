@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -40,13 +41,36 @@ func (h *jobsHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Idempotent enqueue: never mint a second scrape_url row for the same URL
+	// (extension double-pin, reader re-add, manual retry). Document dedup by
+	// canonical_url only prevents a duplicate Document at run time, not a duplicate
+	// queue row. Reuse a live job; retry a dead one in place; a done one is a no-op.
+	if existing, err := h.q.GetLatestScrapeJobForURL(r.Context(), body.URL); err == nil {
+		if existing.Status == "dead" {
+			// Failed before -> retry the SAME row (bumps updated_at to the top).
+			if err := h.q.RetryJob(r.Context(), store.RetryJobParams{RunAfter: now, UpdatedAt: now, ID: existing.ID}); err != nil {
+				writeErr(w, http.StatusInternalServerError, "db error")
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"job_id": existing.ID, "deduped": true, "retried": true})
+			return
+		}
+		// queued/running/paused (live) or done (already scraped) -> reuse, no new row.
+		writeJSON(w, http.StatusAccepted, map[string]any{"job_id": existing.ID, "deduped": true, "status": existing.Status})
+		return
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
 	dev := deviceFromCtx(r)
 	payload, _ := json.Marshal(map[string]string{
 		"url":         body.URL,
 		"device_id":   dev.ID,
 		"device_name": dev.Name,
 	})
-	now := time.Now().UTC().Format(time.RFC3339)
 
 	job, err := h.q.InsertJob(r.Context(), store.InsertJobParams{
 		ID:        uuid.NewString(),
@@ -60,7 +84,7 @@ func (h *jobsHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": job.ID})
+	writeJSON(w, http.StatusAccepted, map[string]any{"job_id": job.ID, "deduped": false})
 }
 
 // listDescendants fetches all descendants (recursive) of the given root job IDs.

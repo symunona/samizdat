@@ -280,6 +280,11 @@ WHERE kind = 'scrape_url'
   AND status IN ('queued', 'running', 'paused')
   AND deleted_at IS NULL;
 
+-- Latest non-deleted scrape_url job for a URL (any status): drives idempotent
+-- enqueue -- reuse an active job, retry a dead one in place, never duplicate it.
+-- name: GetLatestScrapeJobForURL :one
+SELECT * FROM jobs WHERE kind = 'scrape_url' AND json_extract(payload, '$.url') = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1;
+
 -- name: CountActivePollFeedJobsForFeed :one
 SELECT COUNT(*) FROM jobs
 WHERE kind = 'poll_feed'

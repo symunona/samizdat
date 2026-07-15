@@ -2,7 +2,7 @@
 created: 2026-07-15
 topic: Idempotent scrape-job enqueue + retry-in-place + URL grouping in Jobs UI
 excerpt: Stop duplicate scrape_url job rows from extension double-pin / reader re-add; make re-add retry the existing row; group same-URL jobs together in the Jobs screen.
-status: planning
+status: implemented — awaiting user review before squash-merge
 ---
 
 # Scrape-job dedup, retry-in-place, and URL grouping

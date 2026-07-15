@@ -269,6 +269,28 @@ async function runJobsApiChecks(token) {
     out.push(`[jobs-api] rerun threw: ${e.message}`)
   }
 
+  // 3. Idempotent enqueue: submitting the same scrape URL twice must reuse the
+  //    same job row (no duplicate). Guards extension double-pin / reader re-add.
+  try {
+    const url = 'https://dedup.example.invalid/scrape-once'
+    const submit = async () => {
+      const res = await fetch(`${BASE_URL}/api/v1/jobs`, {
+        method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'scrape_url', url }),
+      })
+      return { status: res.status, body: await res.json() }
+    }
+    const a = await submit()
+    const b = await submit()
+    if (a.status !== 202) out.push(`[jobs-dedup] first submit: expected 202, got ${a.status}`)
+    else if (a.body.deduped !== false) out.push(`[jobs-dedup] first submit should be deduped:false, got ${JSON.stringify(a.body)}`)
+    else if (b.body.job_id !== a.body.job_id) out.push(`[jobs-dedup] second submit minted a NEW row (${b.body.job_id} != ${a.body.job_id})`)
+    else if (b.body.deduped !== true) out.push(`[jobs-dedup] second submit should be deduped:true, got ${JSON.stringify(b.body)}`)
+    else console.log('  PASS [jobs-dedup] re-submit reuses the same job row (deduped)')
+  } catch (e) {
+    out.push(`[jobs-dedup] threw: ${e.message}`)
+  }
+
   return out
 }
 
