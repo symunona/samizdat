@@ -19,6 +19,9 @@
         font: inherit; text-align: left; color: inherit; cursor: pointer;
       }
       .item:hover { background: rgba(127,127,127,0.14); }
+      .item:disabled { opacity: 0.55; cursor: default; }
+      .item:disabled:hover { background: transparent; }
+      .item.saved { color: #2ecc71; }
       .item .ico { width: 18px; text-align: center; flex: none; }
       .item .sub { display: block; font-size: 12px; opacity: 0.6; }
       .item.primary { font-weight: 600; }

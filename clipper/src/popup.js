@@ -14,14 +14,15 @@ function el(tag, cls, html) {
   return e
 }
 
-function item({ ico, label, sub, cls, onClick }) {
+function item({ ico, label, sub, cls, onClick, disabled }) {
   const b = el('button', `item${cls ? ' ' + cls : ''}`)
   b.appendChild(el('span', 'ico', ico || ''))
   const body = el('span')
   body.appendChild(document.createTextNode(label))
   if (sub) body.appendChild(el('span', 'sub', sub))
   b.appendChild(body)
-  b.addEventListener('click', onClick)
+  if (disabled) b.disabled = true
+  else b.addEventListener('click', onClick)
   return b
 }
 
@@ -93,9 +94,16 @@ async function render() {
   for (const inst of instances) {
     const doc = isHttp ? await lookup(inst.origin, inst.token, url) : null
     if (doc) {
+      // Already a Document here — dedup by canonical_url (design rule 3). The add
+      // action is disabled (not merely hidden) so it can't be re-clicked; an Open
+      // row still lets the user jump to the saved document.
       menu.appendChild(item({
-        ico: '✓', cls: 'primary',
-        label: multi ? `Open in ${inst.hostname}` : 'Open in Samizdat',
+        ico: '✓', cls: 'primary saved', disabled: true,
+        label: multi ? `Already added to ${inst.hostname}` : 'Already added',
+        sub: 'this page is already a document',
+      }))
+      menu.appendChild(item({
+        ico: '⌂', label: multi ? `Open in ${inst.hostname}` : 'Open in Samizdat',
         onClick: () => { chrome.tabs.create({ url: `${inst.origin}/document/${doc.id}` }); close() },
       }))
     } else {

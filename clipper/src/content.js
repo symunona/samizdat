@@ -14,7 +14,7 @@
   function showToast(text) {
     if (!toastEl) {
       const host = document.createElement('div')
-      host.style.cssText = 'position:fixed;z-index:2147483647;bottom:20px;right:20px;'
+      host.style.cssText = 'position:fixed;z-index:2147483647;top:20px;right:20px;'
       const shadow = host.attachShadow({ mode: 'open' })
       const el = document.createElement('div')
       el.style.cssText = [
@@ -26,7 +26,7 @@
         'box-shadow:0 4px 16px rgba(0,0,0,0.3)',
         'border-left:3px solid #d64541',
         'opacity:0',
-        'transform:translateY(8px)',
+        'transform:translateY(-8px)',
         'transition:opacity .18s ease,transform .18s ease',
       ].join(';')
       shadow.appendChild(el)
@@ -42,7 +42,7 @@
     clearTimeout(showToast._t)
     showToast._t = setTimeout(() => {
       el.style.opacity = '0'
-      el.style.transform = 'translateY(8px)'
+      el.style.transform = 'translateY(-8px)'
     }, 2500)
   }
 
