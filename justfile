@@ -38,7 +38,7 @@ setup: setup-server setup-cli setup-app setup-clipper setup-tooling
 setup-server:
     cd server && go mod download 2>/dev/null || echo "server/ not initialized yet (go mod init)"
     @echo "→ Installing Playwright browsers (Chromium)..."
-    cd server && go run github.com/playwright-community/playwright-go/cmd/playwright install chromium
+    cd server && go run github.com/mxschmitt/playwright-go/cmd/playwright install chromium
     @echo "  Playwright browsers ready. (On a fresh Linux install, also run: npx playwright install-deps chromium)"
 
 [group('setup')]

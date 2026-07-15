@@ -79,6 +79,35 @@ If you're doing BULK deletes or updates that are non-recoverable, always ask for
 ## Subsidiarity
 Keep sub-project specifix notes in the CLAUDE.mds. Before each merge, run the `diff_review` tool to see if we need to append the respective CLAUDE.md with new info.
 
+## Deploy: prod = systemd service, dev = nohup takeover
+**Prod runs as a per-instance user systemd service** (`samizdat-<dir>`, e.g. `samizdat-sam`),
+installed once via `just install`, `enabled` + `linger=yes` → auto-restarts on crash AND boot.
+This is the recovery mechanism. **Dev is NOT a service** — `just dev` builds live and runs a
+nohup, so you can rebuild/restart/tail freely.
+
+The handoff is built in and one-directional-per-command:
+- `just dev` → `_check-no-service` **stops the systemd service** and takes the port as a nohup.
+- `just restart` → hands the port **back to the systemd service** (picks up a fresh build).
+- `just status` → reports which mode holds the port (dev nohup vs systemd) + build staleness.
+- `just service-logs` → follow the service journal.
+
+**The one gap to remember:** while you're in `just dev`, prod's service is STOPPED. If the dev
+nohup dies (or the session closes) and you forget to hand back, prod stays down with nothing to
+restart it (a dev nohup has no auto-restart). **Always end a dev session with `just restart`.**
+For a quick prod change, prefer `just build && just restart` over leaving `just dev` running.
+Do NOT convert dev into a service — you'd lose live rebuild + tailable logs and gain nothing.
+
+## Playwright driver / CDN
+The scraper uses `playwright-go` for headless Chromium. The old `playwright.azureedge.net`
+CDN (hardcoded in `playwright-community/playwright-go` ≤ v0.6000.0) is **decommissioned →
+404 → worker `[FATAL] browser init failed` → the whole server exits on boot.** The `builds/driver/`
+zip only ever lived on azureedge; `cdn.playwright.dev` serves browser builds, not that go driver
+bundle. Fix: import **`github.com/mxschmitt/playwright-go` v0.6100.0** (fork re-merged upstream;
+driver now fetched from npm registry + Node dist host; browsers from `cdn.playwright.dev`). Its
+tag mis-declares the module path, so the import path is `mxschmitt/...`, not `playwright-community/...`
+— keep both the Go import and the `just` playwright-install recipe on the `mxschmitt` path.
+`StorageState` now takes `BrowserContextStorageStateOptions{Path:...}`, not a bare string.
+
 ## Building
 No dead code. Only functional code.
 Keep repo CLEAN code.

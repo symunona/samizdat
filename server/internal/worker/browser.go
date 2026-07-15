@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 	"github.com/symunona/samizdat/server/internal/extractor"
 )
 
@@ -253,7 +253,7 @@ func (b *BrowserPool) Login(auth extractor.AuthConfig, user, pass, statePath str
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o700); err != nil {
 		return "", fmt.Errorf("mkdir auth dir: %w", err)
 	}
-	if _, err := ctx.StorageState(statePath); err != nil {
+	if _, err := ctx.StorageState(playwright.BrowserContextStorageStateOptions{Path: playwright.String(statePath)}); err != nil {
 		return "", fmt.Errorf("save session: %w", err)
 	}
 	if err := os.Chmod(statePath, 0o600); err != nil {
