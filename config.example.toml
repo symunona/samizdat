@@ -19,6 +19,9 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 # and the scraper auto-refreshes an expired session from that file.
 
 # LLM provider — prefer environment variables for keys (ANTHROPIC_API_KEY / OPENAI_API_KEY).
+# Under the systemd service these env vars come from a gitignored .env in the repo root
+# (loaded via EnvironmentFile in deploy/samizdat.service.tmpl) — a user service does NOT
+# source ~/.bashrc, so put keys in .env, not your shell profile.
 # [llm]
 # provider      = "anthropic"                 # or "openai_compat" (OpenAI cloud / Ollama / LM Studio)
 # api_key       = ""                           # or env ANTHROPIC_API_KEY / OPENAI_API_KEY

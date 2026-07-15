@@ -4,6 +4,10 @@ After=network-online.target
 
 [Service]
 Type=simple
+# Secrets (ANTHROPIC_API_KEY, OPENAI_API_KEY, …) — user services do NOT source
+# ~/.bashrc, so the shell env is invisible here. Load them from a gitignored
+# .env in the repo root instead. The leading `-` makes the file optional.
+EnvironmentFile=-@REPO@/.env
 ExecStart=@BIN@ serve --config @CFG@ --webdir @WEBDIR@@EXTZIP@
 WorkingDirectory=@REPO@
 Restart=on-failure
