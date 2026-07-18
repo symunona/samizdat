@@ -329,7 +329,7 @@ func extractHTMLBody(msg *mail.Message) (string, error) {
 
 	case strings.HasPrefix(mediaType, "text/plain"):
 		body, err := readBody(msg.Body)
-		return "<pre>" + body + "</pre>", err
+		return plaintextToHTML(body), err
 
 	case strings.HasPrefix(mediaType, "multipart/"):
 		mr := multipart.NewReader(msg.Body, params["boundary"])
@@ -352,12 +352,42 @@ func extractHTMLBody(msg *mail.Message) (string, error) {
 		if htmlPart != "" {
 			return htmlPart, nil
 		}
-		return "<pre>" + textPart + "</pre>", nil
+		return plaintextToHTML(textPart), nil
 
 	default:
 		return readBody(msg.Body)
 	}
 }
+
+// plaintextToHTML renders a plain-text email body as prose HTML instead of the old
+// <pre> wrap. A <pre> survives the html→markdown pass as a ``` fenced code block, so
+// the whole newsletter rendered as one monospace block. Here: HTML-escape, split on
+// blank lines into <p> paragraphs, single newlines → <br>. The commonmark converter
+// then autolinks bare URLs and produces normal prose markdown.
+func plaintextToHTML(body string) string {
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	var sb strings.Builder
+	for _, para := range strings.Split(body, "\n\n") {
+		lines := strings.Split(strings.Trim(para, "\n"), "\n")
+		var kept []string
+		for _, ln := range lines {
+			if strings.TrimSpace(ln) != "" {
+				kept = append(kept, htmlEscaper.Replace(ln))
+			}
+		}
+		if len(kept) == 0 {
+			continue
+		}
+		sb.WriteString("<p>")
+		sb.WriteString(strings.Join(kept, "<br>\n"))
+		sb.WriteString("</p>\n")
+	}
+	return sb.String()
+}
+
+// htmlEscaper escapes the minimum needed so plaintext can't inject markup; the
+// html→markdown converter (commonmark) handles autolinking of bare URLs.
+var htmlEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 func emailHTMLToMarkdown(htmlStr string) string {
 	conv := converter.NewConverter(

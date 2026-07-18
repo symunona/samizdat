@@ -40,6 +40,28 @@ func StripLeadingTitle(body, docTitle string) string {
 	return strings.TrimLeft(rest, "\n \t")
 }
 
+// StripCodeFence unwraps a body whose entire content sits inside a single ``` fence
+// (the shape a plaintext email used to get: <pre> → ``` block). Only strips when the
+// first non-blank line opens a fence AND a closing fence exists — a body that merely
+// contains a code block is returned unchanged. Defensive: keeps an LLM step from
+// treating the whole newsletter as one code literal.
+func StripCodeFence(md string) string {
+	trimmed := strings.TrimLeft(md, "\n \t")
+	if !strings.HasPrefix(trimmed, "```") {
+		return md
+	}
+	nl := strings.IndexByte(trimmed, '\n')
+	if nl < 0 {
+		return md
+	}
+	body := trimmed[nl+1:]
+	close := strings.LastIndex(body, "```")
+	if close < 0 {
+		return md
+	}
+	return strings.TrimSpace(body[:close])
+}
+
 var sentenceEnd = regexp.MustCompile(`[.!?](\s|$)`)
 
 // firstSentenceTitle derives a Highlight title from a body: the first sentence,

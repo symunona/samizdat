@@ -22,6 +22,26 @@ func TestStripLeadingTitle(t *testing.T) {
 	}
 }
 
+func TestStripCodeFence(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"whole-body fence", "```\nKedves budapestiek!\n\nAz elmúlt hetekben\n```", "Kedves budapestiek!\n\nAz elmúlt hetekben"},
+		{"fence with lang tag", "```text\nhello\nworld\n```", "hello\nworld"},
+		{"leading blank lines before fence", "\n\n```\nbody\n```", "body"},
+		{"no fence unchanged", "# Heading\n\nprose paragraph", "# Heading\n\nprose paragraph"},
+		{"open fence but no close unchanged", "```\nno closing fence here", "```\nno closing fence here"},
+		{"inline code block not stripped", "intro\n\n```\ncode\n```\n\noutro", "intro\n\n```\ncode\n```\n\noutro"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := StripCodeFence(c.in); got != c.want {
+				t.Errorf("StripCodeFence(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
 func TestFirstSentenceTitle(t *testing.T) {
 	cases := []struct {
 		name, body string
