@@ -242,12 +242,12 @@ build-cli:
 build-app-web:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Bake the running commit into the bundle (same short-SHA the server stamps into
-    # /health) so an open web tab can detect a redeploy and prompt a reload.
-    commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
-    [ -z "$(git status --porcelain 2>/dev/null)" ] || commit="${commit}-dirty"
+    # Expo content-hashes the entry bundle (index-<hash>.js); an open web tab detects
+    # a redeploy by comparing its own hash to the served index.html (see
+    # useWebReloadAvailable). No commit stamp needed — the hash IS the identity, and
+    # it's independent of the server binary's build commit.
     cd "{{justfile_directory()}}/app"
-    EXPO_PUBLIC_BUILD_COMMIT="${commit}" pnpm expo export --platform web --output-dir dist --clear
+    pnpm expo export --platform web --output-dir dist --clear
 
 [group('build')]
 [doc('Package the clipper extension (dist/unpacked + dist/sam-chrome.zip)')]
