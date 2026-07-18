@@ -18,6 +18,13 @@ import { useScrapeQueue } from '../../src/ScrapeQueueContext'
 import { useSyncStatus } from '../../src/store/hooks'
 import FeedSkeleton from '../../src/FeedSkeleton'
 
+// Horizontal travel (px) before a left/right swipe activates. RNGH's default is 10,
+// which lets a mostly-vertical diagonal drag hijack the scroll into a swipe. Widening
+// it makes vertical scroll the default: the FlatList's native scroll claims a vertical
+// drag first (lower threshold), so a swipe only fires on a deliberately horizontal pull.
+// (ReanimatedSwipeable doesn't expose failOffsetY, so this threshold is the only lever.)
+const SWIPE_DRAG_OFFSET = 36
+
 export default function FeedScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
@@ -304,6 +311,8 @@ export default function FeedScreen() {
               <Text style={s.swipeLabel}>{isPinned ? 'Unpin' : 'Star'}</Text>
             </View>
           )}
+          dragOffsetFromLeft={SWIPE_DRAG_OFFSET}
+          dragOffsetFromRight={-SWIPE_DRAG_OFFSET}
           overshootLeft={false}
           overshootRight={false}
           onSwipeableOpen={handleSwipeOpen}
