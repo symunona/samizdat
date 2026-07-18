@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   AppState,
   Image,
-  Linking,
   PanResponder,
   Platform,
   Pressable,
@@ -19,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useUnistyles } from 'react-native-unistyles'
 import WebView from 'react-native-webview'
 import type { WebViewMessageEvent } from 'react-native-webview'
+import { openExternal, isWebUrl } from './openExternal'
 import { useMediaTimeline } from './useMediaTimeline'
 import YtPlayer from './YtPlayer'
 import ServerVideoPlayer from './ServerVideoPlayer'
@@ -694,7 +694,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
                 <View style={s.ytErrorBox}>
                   <Ionicons name="alert-circle-outline" size={30} color="#fff" />
                   <Text style={s.ytErrorText}>Can’t play this video here.</Text>
-                  <Pressable onPress={() => Linking.openURL(`https://www.youtube.com/watch?v=${ytId}`)} style={s.ytErrorLink} hitSlop={8}>
+                  <Pressable onPress={() => openExternal(`https://www.youtube.com/watch?v=${ytId}`)} style={s.ytErrorLink} hitSlop={8}>
                     <Ionicons name="logo-youtube" size={16} color="#fff" />
                     <Text style={s.ytErrorLinkText}>Open in YouTube</Text>
                   </Pressable>
@@ -824,10 +824,12 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
               {durationMs > 0 ? <Text style={s.detailChip}>{fmtTime(durationMs)}</Text> : null}
               {doc.fetched_at ? <Text style={s.detailChip}>{new Date(doc.fetched_at).toLocaleDateString()}</Text> : null}
             </View>
-            <Pressable style={s.detailLink} onPress={() => doc.canonical_url && Linking.openURL(doc.canonical_url)}>
-              <Ionicons name="open-outline" size={15} color={theme.colors.accent} />
-              <Text style={s.detailLinkText} numberOfLines={1}>{doc.canonical_url}</Text>
-            </Pressable>
+            {isWebUrl(doc.canonical_url) && (
+              <Pressable style={s.detailLink} onPress={() => openExternal(doc.canonical_url)}>
+                <Ionicons name="open-outline" size={15} color={theme.colors.accent} />
+                <Text style={s.detailLinkText} numberOfLines={1}>{doc.canonical_url}</Text>
+              </Pressable>
+            )}
             {(meta.description || doc.excerpt) ? (
               <Text style={s.detailBody}>{meta.description || doc.excerpt}</Text>
             ) : (

@@ -5,7 +5,6 @@ const log = createLogger('document')
 import {
   ActivityIndicator,
   Animated,
-  Linking,
   Platform,
   Pressable,
   SafeAreaView,
@@ -34,6 +33,7 @@ import {
 import type { Document, Annotation, HighlightWithDoc, Feed, Tag } from '../../../src/api'
 import * as mut from '../../../src/store/mutations'
 import { tagColor } from '../../../src/tagColor'
+import { openExternal, isWebUrl } from '../../../src/openExternal'
 import { useConnection } from '../../../src/ConnectionContext'
 import { useToast } from '../../../src/ToastContext'
 import { saveTheme } from '../../../src/storage'
@@ -489,7 +489,7 @@ export default function DocumentViewer() {
   }, [activeUrl, token, id, queueingPipelines, toast])
 
   const openInWeb = useCallback(() => {
-    if (doc?.canonical_url) Linking.openURL(doc.canonical_url)
+    openExternal(doc?.canonical_url)
   }, [doc])
 
   const handleReadLinkAsDocument = useCallback((href: string) => {
@@ -518,7 +518,7 @@ export default function DocumentViewer() {
         {docForId && (
           <Text style={s.headerTitle} numberOfLines={1}>{docForId.title || docForId.canonical_url}</Text>
         )}
-        {docForId && (
+        {docForId && isWebUrl(docForId.canonical_url) && (
           <Pressable onPress={openInWeb} style={s.openWebBtn} hitSlop={12}>
             <Ionicons name="open-outline" size={22} color={theme.colors.accent} />
           </Pressable>
@@ -702,11 +702,15 @@ export default function DocumentViewer() {
                 <Text style={s.metaValue}>Manual</Text>
               )}
             </View>
-            <View style={s.metaDivider} />
-            <Pressable style={s.viewWebBtn} onPress={() => { closeMetaPanel(); openInWeb() }}>
-              <Ionicons name="open-outline" size={18} color={theme.colors.accent} />
-              <Text style={s.viewWebBtnText}>View on web</Text>
-            </Pressable>
+            {isWebUrl(docForId?.canonical_url) && (
+              <>
+                <View style={s.metaDivider} />
+                <Pressable style={s.viewWebBtn} onPress={() => { closeMetaPanel(); openInWeb() }}>
+                  <Ionicons name="open-outline" size={18} color={theme.colors.accent} />
+                  <Text style={s.viewWebBtnText}>View on web</Text>
+                </Pressable>
+              </>
+            )}
             </ScrollView>
           </Animated.View>
         </Pressable>

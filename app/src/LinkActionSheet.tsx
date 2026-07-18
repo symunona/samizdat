@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
-import { Platform, Pressable, StyleSheet, Text } from 'react-native'
-import { Linking } from 'react-native'
+import { Pressable, StyleSheet, Text } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
+import { openExternal } from './openExternal'
 
 interface Props {
   url: string | null
@@ -20,8 +20,7 @@ export default function LinkActionSheet({ url, onReadAsDocument, onClose }: Prop
   const host = (() => { try { return new URL(url).hostname } catch { return url } })()
 
   const openInBrowser = () => {
-    if (Platform.OS === 'web') window.open(url, '_blank', 'noopener,noreferrer')
-    else Linking.openURL(url)
+    openExternal(url)
     onClose()
   }
 
