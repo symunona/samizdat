@@ -56,12 +56,21 @@ Linking.openURL(url).catch()`, guarded to http(s). Reuse in `document/[id].tsx`,
 `VideoDocument.tsx`, `LinkActionSheet.tsx` (parity). Hide the open-web button when
 `canonical_url` isn't http(s).
 
+## Extra: exclude Budapest from the catch-all Summarizer
+A separate "Summarizer" pipeline (broad filter, per-newsletter excludes) also matched
+the Budapest feed → added a `summary` highlight. User wants no summarizer here, so add
+the Budapest feed id to its `exclude_source_feed_ids` (same pattern as thorstenball/
+napirajz/latent.space/natesnewsletter) and delete the 3 stale summary highlights.
+
 ## Checklist
-- [ ] newsletter.go: plaintextToHTML + swap both `<pre>` sites
-- [ ] step_llm_topics.go: new step + register
-- [ ] unwrap 4 stored Budapest docs (SQL) + re-export
-- [ ] seed-budapest-pipeline.sh + create pipeline + run on 4 docs
-- [ ] app: openExternal.ts + wire 3 sites + hide button for non-http
-- [ ] just build (server) + lint + e2e
-- [ ] agent-browser: verify prose render, topic highlights, web button hidden
+- [x] newsletter.go: plaintextToHTML + swap both `<pre>` sites (+ test)
+- [x] text.go: StripCodeFence helper (+ test)
+- [x] step_llm_topics.go: new step + register
+- [x] unwrap 4 stored Budapest docs (SQL, rev bump)
+- [x] seed-budapest-pipeline.sh + create pipeline + run on 4 docs → 5/6/7 topics
+- [x] exclude Budapest from Summarizer + delete its summary highlights
+- [x] app: openExternal.ts + wire document viewer / VideoDocument / LinkActionSheet + hide button
+- [x] just build + lint (0 issues) + go tests
+- [x] agent-browser: prose render ✓, 5 topic highlights ✓, web button hidden on email doc ✓, present+opens on http doc ✓
+- [ ] just e2e green
 - [ ] commit
