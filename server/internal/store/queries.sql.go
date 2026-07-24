@@ -158,21 +158,6 @@ func (q *Queries) CountActiveRunPipelineJobsForDoc(ctx context.Context, arg Coun
 	return count, err
 }
 
-const countActiveScrapeJobsForURL = `-- name: CountActiveScrapeJobsForURL :one
-SELECT COUNT(*) FROM jobs
-WHERE kind = 'scrape_url'
-  AND json_extract(payload, '$.url') = ?
-  AND status IN ('queued', 'running', 'paused')
-  AND deleted_at IS NULL
-`
-
-func (q *Queries) CountActiveScrapeJobsForURL(ctx context.Context, payload string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countActiveScrapeJobsForURL, payload)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countJobs = `-- name: CountJobs :one
 SELECT COUNT(*) FROM jobs WHERE deleted_at IS NULL
 `

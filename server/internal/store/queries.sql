@@ -273,13 +273,6 @@ WHERE id = ? AND status = 'paused';
 UPDATE jobs SET status = 'queued', run_after = ?, updated_at = ?, rev = rev + 1
 WHERE status = 'paused' AND deleted_at IS NULL;
 
--- name: CountActiveScrapeJobsForURL :one
-SELECT COUNT(*) FROM jobs
-WHERE kind = 'scrape_url'
-  AND json_extract(payload, '$.url') = ?
-  AND status IN ('queued', 'running', 'paused')
-  AND deleted_at IS NULL;
-
 -- Latest non-deleted scrape_url job for a URL (any status): drives idempotent
 -- enqueue -- reuse an active job, retry a dead one in place, never duplicate it.
 -- name: GetLatestScrapeJobForURL :one

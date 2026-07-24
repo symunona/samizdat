@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -76,15 +78,27 @@ func handlePollFeed(ctx context.Context, q *store.Queries, job store.Job, browse
 			continue
 		}
 
-		// Only enqueue scrape for newly inserted items (rev == 0 means first insert,
-		// status == "pending" means not yet scraped).
-		if item.Status == "pending" && item.Rev == 0 {
-			// Dedup: skip if an active (queued/running/paused) scrape_url job already exists for this URL.
-			activeCount, countErr := q.CountActiveScrapeJobsForURL(ctx, u)
-			if countErr != nil {
-				logPollFeed.Errorf("count active scrape jobs for %s: %v", u, countErr)
-			} else if activeCount > 0 {
-				logPollFeed.Printf("skipping scrape_url for %s: active job already exists", u)
+		if item.Status == "pending" {
+			// Idempotent enqueue, same contract as POST /api/v1/jobs: reuse a live
+			// or done job, retry a dead one in place, insert when there is none.
+			// A pending item is only ever revisited here, so without the dead-job
+			// retry a single failed scrape (OOM-killed browser, transient 5xx)
+			// strands the item forever and the feed silently stops delivering.
+			latest, jobErr := q.GetLatestScrapeJobForURL(ctx, u)
+			switch {
+			case jobErr == nil && latest.Status == "dead":
+				if err := q.RetryJob(ctx, store.RetryJobParams{RunAfter: now, UpdatedAt: now, ID: latest.ID}); err != nil {
+					logPollFeed.Errorf("retry dead scrape_url for %s: %v", u, err)
+				} else {
+					logPollFeed.Printf("retried dead scrape_url: %s", u)
+					newCount++
+				}
+				continue
+			case jobErr == nil:
+				logPollFeed.Printf("skipping scrape_url for %s: job already %s", u, latest.Status)
+				continue
+			case !errors.Is(jobErr, sql.ErrNoRows):
+				logPollFeed.Errorf("latest scrape job for %s: %v", u, jobErr)
 				continue
 			}
 

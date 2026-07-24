@@ -41,6 +41,23 @@ func cleanPlaywrightTmp() {
 	}
 }
 
+// launchChromium starts a headless Chromium off an already-running driver.
+func launchChromium(pw *playwright.Playwright) (playwright.Browser, error) {
+	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
+		Headless: playwright.Bool(true),
+		Args: []string{
+			"--no-sandbox",
+			"--disable-setuid-sandbox",
+			"--disable-dev-shm-usage",
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("launch chromium: %w", err)
+	}
+	logBrowser.Println("chromium ready")
+	return browser, nil
+}
+
 // NewBrowserPool installs Chromium if needed, then launches it headless.
 func NewBrowserPool() (*BrowserPool, error) {
 	cleanPlaywrightTmp()
@@ -57,21 +74,47 @@ func NewBrowserPool() (*BrowserPool, error) {
 		return nil, fmt.Errorf("playwright run: %w", err)
 	}
 
-	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
-		Headless: playwright.Bool(true),
-		Args: []string{
-			"--no-sandbox",
-			"--disable-setuid-sandbox",
-			"--disable-dev-shm-usage",
-		},
-	})
+	browser, err := launchChromium(pw)
 	if err != nil {
 		_ = pw.Stop()
-		return nil, fmt.Errorf("launch chromium: %w", err)
+		return nil, err
 	}
 
-	logBrowser.Println("chromium ready")
 	return &BrowserPool{pw: pw, browser: browser}, nil
+}
+
+// ensure relaunches Chromium when the previous process is gone. On a small box
+// the kernel OOM-killer takes Chromium down while the server keeps running; the
+// dead handle then fails every later fetch with "target closed" forever, so
+// feeds silently stop producing Documents until someone restarts the server.
+// Caller must hold b.mu.
+func (b *BrowserPool) ensure() error {
+	if b.browser != nil && b.browser.IsConnected() {
+		return nil
+	}
+	logBrowser.Warnf("chromium not connected, relaunching")
+	if b.browser != nil {
+		_ = b.browser.Close()
+		b.browser = nil
+	}
+	cleanPlaywrightTmp()
+
+	browser, err := launchChromium(b.pw)
+	if err != nil {
+		// The driver itself may have died with it — restart it and retry once.
+		logBrowser.Warnf("relaunch failed (%v), restarting playwright driver", err)
+		_ = b.pw.Stop()
+		pw, runErr := playwright.Run()
+		if runErr != nil {
+			return fmt.Errorf("playwright run: %w", runErr)
+		}
+		b.pw = pw
+		if browser, err = launchChromium(pw); err != nil {
+			return err
+		}
+	}
+	b.browser = browser
+	return nil
 }
 
 // FetchHTML navigates to url in a fresh isolated context, waits for the page
@@ -174,6 +217,9 @@ func dismissConsent(page playwright.Page, url string) {
 // localStorage (a Playwright storageState jar) are loaded so authed domains
 // render as the logged-in owner.
 func (b *BrowserPool) newContext(statePath string) (playwright.BrowserContext, error) {
+	if err := b.ensure(); err != nil {
+		return nil, err
+	}
 	opts := playwright.BrowserNewContextOptions{
 		UserAgent: playwright.String(
 			"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
@@ -265,8 +311,10 @@ func (b *BrowserPool) Login(auth extractor.AuthConfig, user, pass, statePath str
 
 // Close shuts down the browser and the playwright server.
 func (b *BrowserPool) Close() {
-	if err := b.browser.Close(); err != nil {
-		logBrowser.Errorf("close: %v", err)
+	if b.browser != nil {
+		if err := b.browser.Close(); err != nil {
+			logBrowser.Errorf("close: %v", err)
+		}
 	}
 	if err := b.pw.Stop(); err != nil {
 		logBrowser.Errorf("pw stop: %v", err)
