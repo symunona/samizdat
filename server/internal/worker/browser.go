@@ -117,6 +117,20 @@ func (b *BrowserPool) ensure() error {
 	return nil
 }
 
+// HealthCheck relaunches Chromium when its process died since the last fetch,
+// so an OOM kill is recovered (and logged) before the next job needs the
+// browser, instead of costing that job a failed attempt. Skipped while a fetch
+// holds the lock — a busy pool is a live pool.
+func (b *BrowserPool) HealthCheck() {
+	if !b.mu.TryLock() {
+		return
+	}
+	defer b.mu.Unlock()
+	if err := b.ensure(); err != nil {
+		logBrowser.Errorf("health check: %v", err)
+	}
+}
+
 // FetchHTML navigates to url in a fresh isolated context, waits for the page
 // to load, and returns the fully-rendered HTML. Only one fetch runs at a time.
 func (b *BrowserPool) FetchHTML(url, statePath string) (string, error) {

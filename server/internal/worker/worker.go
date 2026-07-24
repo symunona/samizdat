@@ -64,6 +64,7 @@ func (w *Worker) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
+				w.browser.HealthCheck()
 				w.schedulePollFeeds(ctx)
 				w.resetStuckJobs(ctx)
 			}
