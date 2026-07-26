@@ -36,6 +36,10 @@ type scrapePayload struct {
 
 var mdLinkRe = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
 
+// mdLinkURLRe captures the URL from a [text](url) markdown link — the format-
+// stable anchor extractLeadLists dedups on.
+var mdLinkURLRe = regexp.MustCompile(`\]\((https?://[^)\s]+)\)`)
+
 var utmParams = []string{
 	"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
 	"fbclid", "gclid", "msclkid", "mc_eid",
@@ -421,19 +425,49 @@ func extractLeadLists(rawHTML []byte, extractedMD string) string {
 
 	var kept []string
 	for _, list := range lists {
-		// Skip if already represented in the trafilatura output.
-		firstLine := strings.SplitN(list, "\n", 2)[0]
-		firstLine = strings.TrimLeft(firstLine, "-* 0123456789.")
-		firstLine = strings.TrimSpace(firstLine)
-		// Use text before the first markdown link for dedup — trafilatura
-		// sometimes line-breaks between intro text and link, so the full
-		// inline `text [link](url)` string won't appear verbatim.
-		checkStr := leadListCheckStr(firstLine)
-		if checkStr != "" && !strings.Contains(extractedMD, checkStr) {
+		if !leadListPresent(list, extractedMD) {
 			kept = append(kept, list)
 		}
 	}
 	return strings.Join(kept, "\n\n")
+}
+
+// leadListPresent reports whether a re-serialized list is already represented in
+// the trafilatura output, so extractLeadLists never prepends a duplicate body.
+//
+// Primary signal is the first link URL: both extractors copy the URL verbatim
+// from the same href, so it survives every serialization difference (inline vs
+// line-broken links, whitespace) untouched — nothing to normalize or guess.
+// Linkless lists fall back to normalized-text matching (link syntax → link
+// text, whitespace collapsed, lowercased). Both bias to "not present" on doubt,
+// i.e. keep-and-duplicate (visible, recoverable) over dropping real content
+// (silent loss).
+func leadListPresent(list, extractedMD string) bool {
+	if m := mdLinkURLRe.FindStringSubmatch(list); m != nil {
+		return strings.Contains(extractedMD, m[1])
+	}
+	probe := normalizeForDedup(firstListItem(list))
+	if len(probe) > 60 {
+		probe = probe[:60]
+	}
+	return probe != "" && strings.Contains(normalizeForDedup(extractedMD), probe)
+}
+
+// firstListItem returns the first item of a markdown list with its leading
+// bullet/number marker stripped.
+func firstListItem(list string) string {
+	first := strings.SplitN(list, "\n", 2)[0]
+	first = strings.TrimLeft(first, "-*0123456789. \t")
+	return strings.TrimSpace(first)
+}
+
+// normalizeForDedup canonicalizes markdown so two serializations of the same
+// content compare equal: link syntax → link text, whitespace runs → single
+// space, lowercased.
+func normalizeForDedup(s string) string {
+	s = mdLinkRe.ReplaceAllString(s, "$1")
+	s = strings.ToLower(s)
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // listToMarkdown converts a <ul>/<ol> node to markdown if it looks like
@@ -493,29 +527,6 @@ func nodeToMarkdown_children(n *html.Node) string {
 		sb.WriteString(nodeToMarkdown(c))
 	}
 	return sb.String()
-}
-
-// leadListCheckStr extracts a plain-text snippet from a markdown list-item line
-// for deduplication against trafilatura output. Trafilatura sometimes breaks the
-// intro text and its link onto separate lines, so checking the full inline string
-// would miss a match. Strategy: use text before the first "[" if that prefix is
-// ≥10 chars; otherwise strip link syntax and check the link text.
-func leadListCheckStr(line string) string {
-	const maxLen = 40
-	if idx := strings.Index(line, "["); idx >= 10 {
-		s := strings.TrimSpace(line[:idx])
-		if len(s) > maxLen {
-			s = s[:maxLen]
-		}
-		return s
-	}
-	// Link is at start — strip [text](url) → text for comparison.
-	stripped := mdLinkRe.ReplaceAllString(line, "$1")
-	stripped = strings.TrimSpace(stripped)
-	if len(stripped) > maxLen {
-		stripped = stripped[:maxLen]
-	}
-	return stripped
 }
 
 // pruneToArticle rewrites rawHTML to keep only the node(s) matching selector inside
