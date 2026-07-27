@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Pressable, StyleSheet, Text } from 'react-native'
+import { Modal, Pressable, StyleSheet, Text } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { openExternal } from './openExternal'
 
@@ -11,6 +11,9 @@ interface Props {
 
 // Shared link-action selector. Same sheet on the feed and the document viewer.
 // Pure UI — "Read as document" hands off to the caller (ScrapeQueue, non-blocking).
+// Rendered in a <Modal>, NOT a zIndex'd absolute View: it is opened from links inside
+// HighlightDetail, itself a Modal (a separate native window / RNW body portal). No
+// zIndex can lift a sibling view above that, so the sheet drew *behind* the highlight.
 export default function LinkActionSheet({ url, onReadAsDocument, onClose }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
@@ -25,21 +28,23 @@ export default function LinkActionSheet({ url, onReadAsDocument, onClose }: Prop
   }
 
   return (
-    <Pressable style={s.overlay} onPress={onClose}>
-      <Pressable style={s.sheet} onPress={e => e.stopPropagation()}>
-        <Text style={s.host} numberOfLines={1}>{host}</Text>
-        <Text style={s.href} numberOfLines={2}>{url}</Text>
-        <Pressable style={[s.btn, s.btnPrimary]} onPress={() => { onReadAsDocument(url); onClose() }}>
-          <Text style={s.btnPrimaryText}>Read as document</Text>
-        </Pressable>
-        <Pressable style={[s.btn, s.btnSecondary]} onPress={openInBrowser}>
-          <Text style={s.btnSecondaryText}>Open in browser</Text>
-        </Pressable>
-        <Pressable style={s.btnCancel} onPress={onClose}>
-          <Text style={s.btnCancelText}>Cancel</Text>
+    <Modal transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={s.overlay} onPress={onClose}>
+        <Pressable style={s.sheet} onPress={e => e.stopPropagation()}>
+          <Text style={s.host} numberOfLines={1}>{host}</Text>
+          <Text style={s.href} numberOfLines={2}>{url}</Text>
+          <Pressable style={[s.btn, s.btnPrimary]} onPress={() => { onReadAsDocument(url); onClose() }}>
+            <Text style={s.btnPrimaryText}>Read as document</Text>
+          </Pressable>
+          <Pressable style={[s.btn, s.btnSecondary]} onPress={openInBrowser}>
+            <Text style={s.btnSecondaryText}>Open in browser</Text>
+          </Pressable>
+          <Pressable style={s.btnCancel} onPress={onClose}>
+            <Text style={s.btnCancelText}>Cancel</Text>
+          </Pressable>
         </Pressable>
       </Pressable>
-    </Pressable>
+    </Modal>
   )
 }
 
@@ -47,8 +52,8 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 function buildStyles(t: Theme) {
   return StyleSheet.create({
     overlay: {
-      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.55)', zIndex: 30,
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.55)',
       justifyContent: 'flex-end',
     },
     sheet: {

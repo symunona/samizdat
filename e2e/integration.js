@@ -420,6 +420,35 @@ async function runHighlightSelectionLifecycle(token, deviceId) {
   })
   await sleep(300)
 
+  // 5b. Tap a LINK inside the overlay → the link-action sheet must render ON TOP of the
+  //     overlay. The overlay is a <Modal> (own window / body portal), so a plain zIndex'd
+  //     sibling sheet drew behind it — the sheet is a Modal for exactly this reason.
+  await page.evaluate(() => {
+    const ifr = document.querySelector('iframe')
+    const d = ifr.contentDocument
+    const a = d.querySelector('#sam-article a[href^="http"]')
+    // cancelable: the bundle's delegated handler preventDefault()s the anchor; without
+    // it the synthetic click navigates the frame instead of posting link_press.
+    a.dispatchEvent(new ifr.contentWindow.MouseEvent('click', { bubbles: true, cancelable: true }))
+  })
+  await check('hl overlay: link sheet renders above the overlay', async () => {
+    try {
+      await page.waitForFunction(() => document.body.innerText.includes('Read as document'), { timeout: 6000 })
+    } catch { return 'link-action sheet never appeared' }
+    const top = await page.evaluate(() => {
+      const btn = [...document.querySelectorAll('div,span')]
+        .find(e => (e.innerText || '').trim() === 'Read as document' && e.offsetParent)
+      if (!btn) return { err: 'no button' }
+      const r = btn.getBoundingClientRect()
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+      return { covered: !(btn === hit || btn.contains(hit) || hit.contains(btn)), tag: hit && hit.tagName }
+    })
+    if (top.err) return top.err
+    return top.covered ? `sheet button is covered (top element: ${top.tag})` : null
+  })
+  await clickByText(page, e => (e.innerText || '').trim() === 'Cancel', 'close link sheet')
+  await sleep(300)
+
   // 6. OFFLINE create: force the app offline, reopen the overlay, select DIFFERENT text
   //    and annotate. mut.createAnnotation is store+outbox (no fetch), so the mark must
   //    still render — proving the highlight-anchored annotation lands in the store with
