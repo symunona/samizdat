@@ -77,20 +77,40 @@ Consequences accepted by the owner:
 Extraction stays inside the existing `handlePDF` flow; no new job kind unless the
 timing argues for it during implementation (a 12-page paper costs <1.5s total).
 
-### 1. Figure regions
+### 1. Figure regions — from the content stream, not from MuPDF
 
-Per page, walk page objects and collect **non-text** bounds (paths, forms, image
-XObjects), then merge boxes that overlap or sit within ~12pt of each other. In
-the ResNet PoC this produced exactly one cluster whose bounds *were* Figure 2.
-Filters: drop boxes < 60×40pt (rules, underlines, bullets); drop a box that
-repeats at the same coordinates on most pages (running header/logo).
+go-fitz exposes only whole-page output (`Image`/`ImageDPI`/`SVG`/`Text`/`HTML`/
+`Links`/`Bound`) — there is **no page-object enumeration**, so the bbox pass that
+the pdfium PoC used is not available here. Detection instead reuses the exported
+`pdf.Interpret` from `ledongthuc/pdf`, already a dependency and already the basis
+of `pageText`:
 
-### 2. One asset per figure
+- track `q`/`Q`/`cm` for the CTM (the PoC's matrix code works as written);
+- `Do` on an XObject with `/Subtype /Form` → box = its `/BBox` through the CTM.
+  This is the common LaTeX case: a whole figure is one form. In the ResNet probe
+  the page held exactly one non-text object and its bounds *were* Figure 2;
+- `Do` on `/Subtype /Image` → box = the unit square through the CTM (verified
+  against all three probe papers);
+- inline path ops (`m`/`l`/`c`/`v`/`y`/`re`) → accumulate points in the CTM, for
+  TikZ drawn directly on the page.
 
-- **Vector region** → crop the page SVG by rewriting its `viewBox` to the figure
-  box. Crisp, small, and the document WebView renders SVG natively.
-- **Raster XObject region** → PNG through the existing `downloadAndThumbnail`
-  resize path, so a full-page scan does not land in the cache at full size.
+Merge boxes that overlap or sit within ~12pt. Drop boxes < 60×40pt (rules,
+underlines, bullets) and boxes repeating at the same coordinates on most pages
+(running header/logo).
+
+### 2. One asset per figure — PNG crop in v1
+
+Render the page once with `ImageDPI(page, 150)` and `SubImage` each figure box —
+exactly the pipeline the pdfium PoC proved (it cropped ResNet Fig 2 pixel-clean
+at box (98,638)-(231,712)pt). Encode through the existing thumbnail path so a
+full-page figure does not land at full size.
+
+**SVG is deferred, deliberately.** MuPDF emits a per-page SVG, but cropping it
+means either rewriting the root `viewBox` (drags the whole page's 600KB into
+every figure) or computing element bboxes to strip outsiders — which needs a path
+parser, i.e. the same work as detection, twice. Plus native RN SVG rendering is
+unproven here. Keep the renderer behind one function so SVG can replace PNG once
+detection is trusted; PNG at 150dpi is legible in the reader today.
 
 Write `media_assets` rows directly — the bytes are already local, so no
 `fetch_assets` job. `original_url` is UNIQUE NOT NULL, so use a synthetic
@@ -112,7 +132,7 @@ Caption: the nearest text line above/below the box starting `Figure N`/`Fig. N`/
 
 1. **Unit** — figure clustering: two overlapping boxes merge; a page rule
    (200×2pt) is dropped; a header logo repeating on 8 of 12 pages is dropped.
-2. **Unit** — SVG crop: `viewBox` matches the figure box; output parses as XML.
+2. **Unit** — box math: a Form `/BBox` through a scaling+translating CTM lands where the PoC measured it; an inline `re` path contributes its corners.
 3. **Golden** — ResNet `1512.03385` p2 → exactly one figure, box ≈ (98,638)-(231,712)pt.
    Attention `1706.03762` → 3 raster figures on pages 3–4.
 4. **Live** — scrape both URLs through the real worker: job `done`, Document has
