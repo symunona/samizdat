@@ -126,7 +126,7 @@ export type Document = {
   hero_image_url: string
   author: string
   source_feed_id?: string | null
-  media_type?: 'article' | 'video'
+  media_type?: 'article' | 'video' | 'pdf'
   media_metadata?: string
   transcript?: string
   error_reason?: string

@@ -122,6 +122,12 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		return handleYouTube(ctx, q, job, canonical, vid, cacheDir, ytdlp, p.Manual)
 	}
 
+	// PDFs take the plain-HTTP path → pdf Document. Chromium answers a PDF
+	// navigation with a download, not a page, so the browser can never fetch one.
+	if isPDFURL(canonical) {
+		return handlePDF(ctx, q, job, canonical, p.FeedID, p.Manual)
+	}
+
 	// Paywalled domains reuse a persisted login session (storageState jar) so the
 	// article renders full-text as the logged-in owner.
 	auth := domainAuth(reg, canonical)
@@ -134,6 +140,12 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 
 	htmlStr, err := browser.FetchHTML(canonical, statePath)
 	if err != nil {
+		// An extension-less PDF only reveals itself here, by the browser refusing
+		// to render it. Confirm the content type before taking the PDF path.
+		if isBrowserDownloadErr(err) && urlIsPDF(ctx, canonical) {
+			logScraper.Printf("%s served a PDF without a .pdf path — switching to the pdf path", canonical)
+			return handlePDF(ctx, q, job, canonical, p.FeedID, p.Manual)
+		}
 		return "", fmt.Errorf("fetch: %w", err)
 	}
 

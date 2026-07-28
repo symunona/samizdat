@@ -185,6 +185,26 @@ Additive changes (new table / new column with default) go in the `additiveMigrat
 
 ## Document media types
 - **`media_type = 'article'`** — default. HTML scrape via Playwright + Trafilatura.
+- **`media_type = 'pdf'`** — PDF ingest via plain HTTP + pure-Go text extraction
+  (`worker/pdf.go`). **Never route a PDF through the browser**: Chromium answers a
+  PDF navigation with `playwright: Download is starting` and no page, which failed
+  every PDF scrape permanently (job `dead` after 3 attempts, no Document row at
+  all). `handleScrapeURL` branches on `isPDFURL` *before* the browser fetch;
+  extension-less PDF URLs are caught by retrying on that same download error and
+  sniffing the content type.
+  - `media_metadata`: JSON `{pages, bytes}`.
+  - `markdown`: extracted text, one page block per page.
+  - Extraction works from the raw positioned glyphs (`Page.Content().Text`), not
+    the pdf library's `GetPlainText`/`GetTextByRow` helpers — those concatenate
+    glyphs and drop the geometry, and typeset PDFs encode word breaks as
+    positioning rather than space glyphs, so the helpers return `WhyareallLLMs`.
+    Word spaces come back from the inter-glyph gaps; the two-column reading order
+    comes from a document-wide gutter x (measured across all pages, because one
+    page's evidence is too weak) used to cut lines that carry both columns.
+  - A scanned/image-only PDF has no text layer → `DetectFalseParse` flags the
+    Document and the job fails permanently. No OCR.
+  - Library: `github.com/ledongthuc/pdf` (pure Go, no cgo). `dslipak/pdf` was
+    tried and rejected — its `GetPlainText` burned >2min of CPU on a 21-page paper.
 - **`media_type = 'video'`** — YouTube/podcast ingest via yt-dlp. Fields:
   - `media_metadata`: JSON `{provider, external_id, duration_ms, transcript_status, orig_lang, transcript_langs}` where `transcript_status` ∈ `"subs" | "auto" | "none"` (of the original track), `orig_lang` is the original language code, and `transcript_langs` lists all languages present.
   - `transcript`: JSON **lang-keyed map** `{lang: [{start_ms, end_ms, text}]}` (empty object `{}` when none). Legacy rows may still hold a bare array `[...]`; the app parsers accept both.
