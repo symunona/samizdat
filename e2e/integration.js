@@ -11,6 +11,7 @@
 //
 // Run via: just e2e-int   (requires server bin + web build in app/dist)
 
+import { readFileSync } from 'node:fs'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
   newConnectedPage, seedTextDoc, seedVideoDoc, seedHighlight, makeCleanup,
@@ -157,6 +158,74 @@ async function runPageChecks(token, deviceId) {
       }
     })
   }
+}
+
+// ── Feed header "+" → add a document by URL ───────────────────────────────────
+// The header button is an Ionicon, i.e. a glyph char from the icon font — there is no
+// text to match on, so resolve the codepoint from the shipped glyphmap and click the
+// element rendering it.
+const ADD_GLYPH = String.fromCodePoint(
+  JSON.parse(readFileSync(
+    new URL('../app/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/glyphmaps/Ionicons.json',
+      import.meta.url))).add)
+// clickByText stringifies the matcher and evals it in the page, so the glyph has to be
+// baked into the source — a closure over ADD_GLYPH doesn't survive the trip.
+const matchAddGlyph = new Function('e', `return e.innerText === ${JSON.stringify(ADD_GLYPH)}`)
+
+async function runAddUrlSheet(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await sleep(1500)
+
+  await check('feed: header + opens the add-URL sheet', async () => {
+    if (!await clickByText(page, matchAddGlyph, 'header + button')) return 'no + button in header'
+    try {
+      await page.waitForFunction(() => document.body.innerText.includes('Add document'), { timeout: 4000 })
+      return null
+    } catch { return 'add-URL sheet did not open' }
+  })
+
+  const typeUrl = async (value) => page.evaluate((v) => {
+    const input = [...document.querySelectorAll('input')].find(i => i.placeholder?.startsWith('https://'))
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(input, v)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  }, value)
+
+  await check('feed: junk input is rejected in-sheet (no job queued)', async () => {
+    await typeUrl('not a url')
+    if (!await clickByText(page, (e) => e.innerText === 'Add', 'Add button')) return 'no Add button'
+    await sleep(400)
+    const body = await page.evaluate(() => document.body.innerText)
+    if (!/valid http/i.test(body)) return 'no validation message shown'
+    if (!body.includes('Add document')) return 'sheet closed on invalid input'
+    return null
+  })
+
+  await check('feed: submitting a URL closes the sheet and shows a pending scrape card', async () => {
+    await typeUrl('https://example.com/e2e-add-url')
+    if (!await clickByText(page, (e) => e.innerText === 'Add', 'Add button')) return 'no Add button'
+    try {
+      await page.waitForFunction(() =>
+        !document.body.innerText.includes('Add document') &&
+        /Reading as document|Ready — tap to open/.test(document.body.innerText), { timeout: 6000 })
+    } catch {
+      return `no scrape card after submit: "${(await page.evaluate(() => document.body.innerText)).slice(0, 120)}"`
+    }
+    // and the job really reached the server
+    const jobs = await page.evaluate(async (base) => {
+      const tok = JSON.parse(localStorage.getItem('samizdat_connection')).token
+      const r = await fetch(`${base}/api/v1/jobs?kind=scrape_url`, { headers: { Authorization: `Bearer ${tok}` } })
+      return r.json()
+    }, BASE_URL)
+    return (jobs || []).some(j => (j.payload || '').includes('e2e-add-url'))
+      ? null : 'no scrape_url job for the submitted URL'
+  })
+
+  if (errors.length) fail('feed add-URL: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('feed add-URL: no console/HTTP errors')
+
+  await page.close()
 }
 
 // ── The document-viewer selection lifecycle (the hard case) ───────────────────
@@ -347,7 +416,16 @@ async function runHighlightSelectionLifecycle(token, deviceId) {
   })
   const NOTE = 'highlight anchored multinode note'
   await page.waitForSelector('textarea', { timeout: 6000 })
-  await page.type('textarea', NOTE)
+  // Set the value through React's own setter instead of page.type: keystroke-by-keystroke
+  // typing into this controlled textarea drops characters on a loaded box, so Save
+  // persisted a truncated note (a different prefix each run) and the reopen check flaked.
+  await page.evaluate((note) => {
+    const ta = document.querySelector('textarea')
+    Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set.call(ta, note)
+    ta.dispatchEvent(new Event('input', { bubbles: true }))
+  }, NOTE)
+  await page.waitForFunction((note) => document.querySelector('textarea')?.value === note,
+    { timeout: 6000 }, NOTE)
   await page.evaluate(() => {
     const el = [...document.querySelectorAll('*')].find(e => e.innerText && e.innerText.trim() === 'Save' && e.offsetParent)
     el.click()
@@ -525,6 +603,7 @@ async function main() {
     browser = await launchBrowser()
 
     await runPageChecks(token, deviceId)
+    await runAddUrlSheet(token, deviceId)
     await runSelectionLifecycle(token, deviceId)
     await runHighlightSelectionLifecycle(token, deviceId)
 

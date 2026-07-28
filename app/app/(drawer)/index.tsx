@@ -14,6 +14,7 @@ import IconButton from '../../src/IconButton'
 import TagSelectorModal from '../../src/TagSelectorModal'
 import AnnotationPanel from '../../src/AnnotationPanel'
 import LinkActionSheet from '../../src/LinkActionSheet'
+import AddUrlSheet from '../../src/AddUrlSheet'
 import { useScrapeQueue } from '../../src/ScrapeQueueContext'
 import { useSyncStatus } from '../../src/store/hooks'
 import FeedSkeleton from '../../src/FeedSkeleton'
@@ -33,9 +34,10 @@ export default function FeedScreen() {
   const { activeUrl, token, status } = useConnection()
   const { status: syncStatus, lastSyncedAt } = useSyncStatus()
   const { height: windowHeight } = useWindowDimensions()
-  const { startScrape } = useScrapeQueue()
+  const { startScrape, resolvedDocs } = useScrapeQueue()
 
   const [linkUrl, setLinkUrl] = useState<string | null>(null)
+  const [addUrlOpen, setAddUrlOpen] = useState(false)
 
   const [highlights, setHighlights] = useState<HighlightWithDoc[]>([])
   const [loading, setLoading] = useState(false)
@@ -71,15 +73,23 @@ export default function FeedScreen() {
   useEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <IconButton
-          name={autoMarkRead ? 'eye' : 'eye-off-outline'}
-          onPress={toggleAutoMarkRead}
-          size={22}
-          color={autoMarkRead ? theme.colors.accent : theme.colors.muted}
-        />
+        <View style={s.headerActions}>
+          <IconButton
+            name="add"
+            onPress={() => setAddUrlOpen(true)}
+            size={24}
+            color={theme.colors.text}
+          />
+          <IconButton
+            name={autoMarkRead ? 'eye' : 'eye-off-outline'}
+            onPress={toggleAutoMarkRead}
+            size={22}
+            color={autoMarkRead ? theme.colors.accent : theme.colors.muted}
+          />
+        </View>
       ),
     })
-  }, [navigation, autoMarkRead, toggleAutoMarkRead, theme])
+  }, [navigation, autoMarkRead, toggleAutoMarkRead, theme, s])
 
   const handleUnarchive = useCallback((id: string) => {
     setArchivedIds(prev => { const s = new Set(prev); s.delete(id); return s })
@@ -193,6 +203,14 @@ export default function FeedScreen() {
     load()
   }, [lastSyncedAt, status, load])
 
+  // A queued scrape produced a Document — refetch so its highlights land in the feed
+  // without a manual pull-to-refresh.
+  const resolvedDocCount = Object.keys(resolvedDocs).length
+  useEffect(() => {
+    if (resolvedDocCount === 0 || status !== 'connected') return
+    load()
+  }, [resolvedDocCount, status, load])
+
   // Local-first: patch our list + the store immediately (no await), pusher syncs later.
   const handlePin = useCallback((item: HighlightWithDoc) => {
     const next = item.pinned === 1 ? false : true
@@ -240,6 +258,14 @@ export default function FeedScreen() {
     [router],
   )
   const handleLinkAction = useCallback((url: string) => setLinkUrl(url), [])
+
+  // Queue a URL for scraping. Shared by the header "+" sheet and the link sheet;
+  // the ScrapeQueue overlay owns the pending / ready / failed card.
+  const readAsDocument = useCallback((url: string) => {
+    let title = url
+    try { title = new URL(url).hostname } catch { /* keep url */ }
+    startScrape(url, title)
+  }, [startScrape])
 
   const renderItem = useCallback(({ item }: { item: HighlightWithDoc }) => {
     const isArchived = archivedIds.has(item.id)
@@ -328,12 +354,16 @@ export default function FeedScreen() {
   // highlights: the persisted store hasn't hydrated yet, the connection is still
   // resolving, a fetch is in flight, or a sync may pull rows. Only drop to
   // "No highlights yet" once everything has settled and there genuinely are none.
-  if (highlights.length === 0 && (loading || syncStatus === 'syncing' || !hasHydrated || status === 'loading')) {
-    return <FeedSkeleton />
-  }
+  const settling = highlights.length === 0 &&
+    (loading || syncStatus === 'syncing' || !hasHydrated || status === 'loading')
 
-  if (error) {
-    return (
+  // The list is one of four states, but the sheets render in ALL of them — the header
+  // "+" must still open the add-URL sheet on an empty/errored/loading feed.
+  let body
+  if (settling) {
+    body = <FeedSkeleton />
+  } else if (error) {
+    body = (
       <View style={s.center}>
         <Text style={s.errorText}>{error}</Text>
         <Pressable style={s.retryBtn} onPress={load}>
@@ -341,73 +371,77 @@ export default function FeedScreen() {
         </Pressable>
       </View>
     )
-  }
-
-  if (highlights.length === 0) {
-    return (
+  } else if (highlights.length === 0) {
+    body = (
       <View style={s.center}>
         <Text style={s.placeholder}>No highlights yet.</Text>
         <Text style={s.hint}>Run a pipeline on a document to generate highlights.</Text>
       </View>
     )
+  } else {
+    body = (
+      <>
+        <FlatList
+          style={s.list}
+          contentContainerStyle={s.listContent}
+          data={highlights}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          onRefresh={load}
+          refreshing={loading}
+          // Hold the reader's place when a sync prepends newer highlights. Native-only:
+          // RNW doesn't implement it (passing it there would warn on an unknown DOM prop),
+          // and web already gets equivalent behaviour from the browser's overflow-anchor.
+          maintainVisibleContentPosition={Platform.OS === 'web' ? undefined : { minIndexForVisible: 1 }}
+          onScroll={(e) => {
+            const y = e.nativeEvent.contentOffset.y
+            scrollYRef.current = y
+            // Programmatic re-anchor after a sync prepend — don't let the jump read as
+            // a fast user scroll (velocity) or trip scroll-past archiving.
+            if (preservingScrollRef.current) { lastScrollRef.current = { y, t: Date.now() }; return }
+            if (!autoMarkRead) return // auto-mark-as-read off → never scroll-archive
+            // velocity (px/ms); fast downward scroll mass-archives — offer bulk undo
+            const now = Date.now()
+            const last = lastScrollRef.current
+            const dt = now - last.t
+            if (dt > 0) {
+              const v = (y - last.y) / dt
+              if (v > 2.5) {
+                setShowUnreadAll(true)
+                if (unreadHideTimer.current) clearTimeout(unreadHideTimer.current)
+                unreadHideTimer.current = setTimeout(() => setShowUnreadAll(false), 4000)
+              }
+            }
+            lastScrollRef.current = { y, t: now }
+            pendingArchiveRef.current.forEach((exitY, id) => {
+              if (y - exitY > 300) {
+                pendingArchiveRef.current.delete(id)
+                setArchivedIds(prev => new Set(prev).add(id))
+                mut.archiveHighlight(id, new Date().toISOString())
+              }
+            })
+          }}
+          scrollEventThrottle={16}
+          onViewableItemsChanged={onViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig}
+          ListFooterComponent={
+            <View style={[s.footerSpacer, { height: windowHeight }]}>
+              <Text style={s.footerHint}>Scroll past to clear the feed</Text>
+            </View>
+          }
+        />
+        {showUnreadAll && archivedIds.size > 0 && (
+          <Pressable style={s.unreadAllBtn} onPress={handleUnreadAll} hitSlop={8}>
+            <Text style={s.unreadAllText}>↺ Unread all ({archivedIds.size})</Text>
+          </Pressable>
+        )}
+      </>
+    )
   }
 
   return (
     <>
-      <FlatList
-        style={s.list}
-        contentContainerStyle={s.listContent}
-        data={highlights}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        onRefresh={load}
-        refreshing={loading}
-        // Hold the reader's place when a sync prepends newer highlights. Native-only:
-        // RNW doesn't implement it (passing it there would warn on an unknown DOM prop),
-        // and web already gets equivalent behaviour from the browser's overflow-anchor.
-        maintainVisibleContentPosition={Platform.OS === 'web' ? undefined : { minIndexForVisible: 1 }}
-        onScroll={(e) => {
-          const y = e.nativeEvent.contentOffset.y
-          scrollYRef.current = y
-          // Programmatic re-anchor after a sync prepend — don't let the jump read as
-          // a fast user scroll (velocity) or trip scroll-past archiving.
-          if (preservingScrollRef.current) { lastScrollRef.current = { y, t: Date.now() }; return }
-          if (!autoMarkRead) return // auto-mark-as-read off → never scroll-archive
-          // velocity (px/ms); fast downward scroll mass-archives — offer bulk undo
-          const now = Date.now()
-          const last = lastScrollRef.current
-          const dt = now - last.t
-          if (dt > 0) {
-            const v = (y - last.y) / dt
-            if (v > 2.5) {
-              setShowUnreadAll(true)
-              if (unreadHideTimer.current) clearTimeout(unreadHideTimer.current)
-              unreadHideTimer.current = setTimeout(() => setShowUnreadAll(false), 4000)
-            }
-          }
-          lastScrollRef.current = { y, t: now }
-          pendingArchiveRef.current.forEach((exitY, id) => {
-            if (y - exitY > 300) {
-              pendingArchiveRef.current.delete(id)
-              setArchivedIds(prev => new Set(prev).add(id))
-              mut.archiveHighlight(id, new Date().toISOString())
-            }
-          })
-        }}
-        scrollEventThrottle={16}
-        onViewableItemsChanged={onViewableItemsChanged}
-        viewabilityConfig={viewabilityConfig}
-        ListFooterComponent={
-          <View style={[s.footerSpacer, { height: windowHeight }]}>
-            <Text style={s.footerHint}>Scroll past to clear the feed</Text>
-          </View>
-        }
-      />
-      {showUnreadAll && archivedIds.size > 0 && (
-        <Pressable style={s.unreadAllBtn} onPress={handleUnreadAll} hitSlop={8}>
-          <Text style={s.unreadAllText}>↺ Unread all ({archivedIds.size})</Text>
-        </Pressable>
-      )}
+      {body}
       <TagSelectorModal
         visible={tagModalId !== null}
         objectId={tagModalId ?? ''}
@@ -425,12 +459,13 @@ export default function FeedScreen() {
       />
       <LinkActionSheet
         url={linkUrl}
-        onReadAsDocument={(url) => {
-          let title = url
-          try { title = new URL(url).hostname } catch { /* keep url */ }
-          startScrape(url, title)
-        }}
+        onReadAsDocument={readAsDocument}
         onClose={() => setLinkUrl(null)}
+      />
+      <AddUrlSheet
+        visible={addUrlOpen}
+        onSubmit={readAsDocument}
+        onClose={() => setAddUrlOpen(false)}
       />
     </>
   )
@@ -440,6 +475,7 @@ type Theme = ReturnType<typeof useUnistyles>['theme']
 
 function buildStyles(t: Theme) {
   return StyleSheet.create({
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingRight: 4 },
     list: { flex: 1, backgroundColor: t.colors.background },
     listContent: { padding: 12, gap: 12, maxWidth: 800, alignSelf: 'center', width: '100%' },
     center: { flex: 1, backgroundColor: t.colors.background, justifyContent: 'center', alignItems: 'center', gap: 12 },
