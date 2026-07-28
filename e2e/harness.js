@@ -204,6 +204,22 @@ VALUES ('${q(id)}','${q(canonicalUrl)}','Checking your browser','Checking your b
   console.log('  seeded false-parse document', id, `(${reason})`)
 }
 
+// Seed a permanently-failed (dead) Job — the shape the worker leaves behind when
+// a scrape or a pipeline gives up. The Documents screen reads these to show the
+// error state; `payload` is the job's JSON payload (url / document_id).
+export function seedDeadJob({ id, kind, payload, lastError, attempts = 3 }) {
+  const now = new Date().toISOString()
+  const q = s => s.replace(/'/g, "''")
+  const sql = `
+INSERT OR REPLACE INTO jobs (id,kind,payload,status,attempts,run_after,last_error,result,duration_ms,created_at,updated_at,rev,deleted_at,parent_job_id)
+VALUES ('${q(id)}','${q(kind)}','${q(JSON.stringify(payload))}','dead',${attempts},'${now}','${q(lastError)}','',120,'${now}','${now}',1,NULL,NULL);
+`
+  const sqlFile = '/tmp/samizdat-test/seed-dead-job.sql'
+  fs.writeFileSync(sqlFile, sql)
+  execSync(`sqlite3 ${TEST_DB} < ${sqlFile}`)
+  console.log('  seeded dead job', id, `(${kind})`)
+}
+
 // Seed the video Document used by the smoke test's player + export checks.
 export function seedVideoDoc(deviceId, videoDocId) {
   const aid = 'eeeeeeee-0000-4000-8000-0000000000a1'

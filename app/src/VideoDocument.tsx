@@ -45,6 +45,7 @@ import IconButton from './IconButton'
 import type { PendingSelection, ExistingAnnotation } from './AnnotationPanel'
 import { buildTranscriptHtml } from './markdownToHtml'
 import PendingPipelineBanner from './PendingPipelineBanner'
+import { useFailedJobs, documentErrorText } from './failedJobs'
 import { createLogger } from './logger'
 
 const log = createLogger('video-document')
@@ -139,6 +140,10 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const { activeUrl, token, status } = useConnection()
   const { toast } = useToast()
   const insets = useSafeAreaInsets()
+  // A dead job on this Document (transcript/video fetch, pipeline) is invisible
+  // otherwise — same line the Documents list badge shows.
+  const { failed } = useFailedJobs()
+  const docErrorText = documentErrorText(doc, failed)
   // The player + tab bar are pinned; the transcript panel below fills the rest and
   // scrolls internally. Bound the pinned player to a compact 16:9 box (≤32% of the
   // viewport height) so the transcript stays maximized on both phone and desktop.
@@ -678,6 +683,12 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
         <Text style={s.headerTitle} numberOfLines={1}>{doc.title || doc.canonical_url}</Text>
       </View>
 
+      {docErrorText ? (
+        <View style={s.docErrorBanner}>
+          <Text style={s.docErrorBannerText} numberOfLines={3}>⚠ {docErrorText}</Text>
+        </View>
+      ) : null}
+
       <PendingPipelineBanner docId={doc.id} isVideo />
 
       {/* Player / thumbnail — pinned to the top (never scrolls away). Prefers the
@@ -997,6 +1008,14 @@ function buildStyles(t: Theme) {
     },
     backBtn: { flexShrink: 0, padding: t.spacing.sm },
     headerTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '600' },
+    docErrorBanner: {
+      backgroundColor: t.colors.error + '1f',
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.error + '55',
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.sm,
+    },
+    docErrorBannerText: { color: t.colors.error, fontSize: 13, fontWeight: '700', textAlign: 'center' },
     // Center + cap the player so a wide desktop window never pushes the
     // transcript/seeker off-screen; 16:9 is preserved within the cap.
     player: { backgroundColor: '#000', alignItems: 'center' },

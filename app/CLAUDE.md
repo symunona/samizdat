@@ -98,6 +98,28 @@ They must show the **same actions (pin · tags · annotate · delete), same icon
 
 **Enforced:** `just lint` runs `spec parity` — if one of the two files changed vs main and the other didn't (or they diverged), it flags it and asks Claude whether the change needs mirroring. See `tooling/CLAUDE.md`.
 
+## Error state comes from the JOB, not the Document (`src/failedJobs.ts`)
+
+`documents.error_reason` is only ever set by the server's false-parse gate, so it
+covers one failure out of many: a scrape that 404s, a pipeline whose LLM is down,
+a video fetch that dies — none of them touch the Document row (a hard scrape
+failure produces no Document at all). The reason lives in the dead **Job**
+(`last_error`), and `GET /api/v1/jobs?status=dead` is the only place it surfaces.
+
+`useFailedJobs()` polls that feed once (React Query dedupes it across screens) and
+the pure helpers derive the UI:
+- `documentErrorText(doc, failed)` — the one line shown for a Document. Its own
+  `error_reason` wins; otherwise the dead job that names it (`payload.document_id`
+  / `result.document_id`) or scraped its URL. Used by the Documents list badge,
+  the article viewer banner and `VideoDocument` — **keep all three on this one
+  function** so they can never disagree.
+- `orphanScrapeFailures(failed, documents)` — dead scrapes that produced no
+  Document. They get their own pinned row on Documents (Retry / dismiss), because
+  nothing in the list represents them. Failures stay in `jobs`; do NOT invent stub
+  Documents for them.
+
+Covered by `just e2e` (`runErrorStateUiCheck` + `seedDeadJob` in the harness).
+
 ## Connection state — NEVER bypass ConnectionProvider
 
 `ConnectionProvider` (in `src/ConnectionContext.tsx`) is the single owner of connection state. It probes the server on mount and every 30s, and picks the fastest reachable URL automatically.

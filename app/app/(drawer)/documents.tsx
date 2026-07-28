@@ -12,9 +12,12 @@ import {
 } from 'react-native'
 import { Link, useLocalSearchParams } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { submitScrapeJob, deleteDocument, fetchPipelineDocuments, fetchJobs } from '../../src/api'
+import { submitScrapeJob, deleteDocument, fetchPipelineDocuments, fetchJobs, retryJob, deleteJob } from '../../src/api'
 import type { Document, Job } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
+import { useToast } from '../../src/ToastContext'
+import { useFailedJobs, documentErrorText, orphanScrapeFailures } from '../../src/failedJobs'
+import type { FailedJob } from '../../src/failedJobs'
 import { useDocuments, useSyncStatus } from '../../src/store/hooks'
 import { useShareStore } from '../../src/store/shareStore'
 import { forceSync, requestSync } from '../../src/store/syncEngine'
@@ -43,6 +46,7 @@ export default function DocumentsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const { status, error: connError, activeUrl, token, probe } = useConnection()
+  const { toast } = useToast()
   const { feed_id: feedIdParam, pipeline_id: pipelineIdParam } = useLocalSearchParams<{ feed_id?: string; pipeline_id?: string }>()
 
   const allDocuments = useDocuments()
@@ -171,6 +175,44 @@ export default function DocumentsScreen() {
     return () => clearInterval(id)
   }, [status, showPending, pendingJobs.length, loadPendingJobs])
 
+  // Permanently-failed (dead) jobs. Two shapes surface here: a scrape that never
+  // produced a Document gets its own row (nothing else in the list represents
+  // it), and a failure that belongs to a Document badges that Document's card.
+  const { failed, refetch: refetchFailed } = useFailedJobs()
+  const failedScrapes = useMemo(
+    () => (showPending ? orphanScrapeFailures(failed, documents) : []),
+    [failed, documents, showPending],
+  )
+  const [expandedError, setExpandedError] = useState<string | null>(null)
+  const [busyJobId, setBusyJobId] = useState<string | null>(null)
+
+  const handleRetryFailed = useCallback(async (f: FailedJob) => {
+    if (!activeUrl || !token) return
+    setBusyJobId(f.job.id)
+    try {
+      await retryJob(activeUrl, token, f.job.id)
+      await Promise.all([refetchFailed(), loadPendingJobs()])
+      toast('Retry queued', 'success')
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Retry failed', 'error')
+    } finally {
+      setBusyJobId(null)
+    }
+  }, [activeUrl, token, refetchFailed, loadPendingJobs, toast])
+
+  const handleDismissFailed = useCallback(async (f: FailedJob) => {
+    if (!activeUrl || !token) return
+    setBusyJobId(f.job.id)
+    try {
+      await deleteJob(activeUrl, token, f.job.id)
+      await refetchFailed()
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Dismiss failed', 'error')
+    } finally {
+      setBusyJobId(null)
+    }
+  }, [activeUrl, token, refetchFailed, toast])
+
   async function handleSubmitUrl() {
     if (!activeUrl || !token) return
     const trimmed = urlInput.trim()
@@ -207,7 +249,7 @@ export default function DocumentsScreen() {
   }
 
   function renderPendingHeader() {
-    if (!showPending || pendingJobs.length === 0) return null
+    if (!showPending || (pendingJobs.length === 0 && failedScrapes.length === 0)) return null
     return (
       <View style={s.pendingSection}>
         {pendingJobs.map((job) => {
@@ -222,6 +264,43 @@ export default function DocumentsScreen() {
             </View>
           )
         })}
+        {failedScrapes.map((f) => {
+          const busy = busyJobId === f.job.id
+          const expanded = expandedError === f.job.id
+          return (
+            <View key={f.job.id} style={s.failedRow}>
+              <Text style={s.failedIcon}>⚠</Text>
+              <Pressable
+                style={s.pendingBody}
+                onPress={() => setExpandedError(expanded ? null : f.job.id)}
+                testID={`failed-scrape-${f.job.id}`}
+              >
+                <Text style={s.pendingUrl} numberOfLines={1}>{f.url || '(unknown URL)'}</Text>
+                <Text style={s.failedLabel} numberOfLines={expanded ? undefined : 2}>
+                  {f.label}: {f.message}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [s.failedBtn, (busy || pressed) && s.failedBtnPressed]}
+                onPress={() => handleRetryFailed(f)}
+                disabled={!!busyJobId}
+                hitSlop={6}
+              >
+                {busy
+                  ? <ActivityIndicator size="small" color={theme.colors.error} />
+                  : <Text style={s.failedBtnText}>Retry</Text>}
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [s.failedDismissBtn, pressed && s.failedBtnPressed]}
+                onPress={() => handleDismissFailed(f)}
+                disabled={!!busyJobId}
+                hitSlop={6}
+              >
+                <Text style={s.failedDismissText}>✕</Text>
+              </Pressable>
+            </View>
+          )
+        })}
       </View>
     )
   }
@@ -229,6 +308,7 @@ export default function DocumentsScreen() {
   function renderItem({ item }: { item: Document }) {
     const displayTitle = item.title?.trim() ? item.title : item.canonical_url
     const pending = pendingDeletes[item.id]
+    const errorText = documentErrorText(item, failed)
 
     if (pending) {
       return (
@@ -255,9 +335,9 @@ export default function DocumentsScreen() {
           <Text style={s.itemTitle} numberOfLines={2}>{displayTitle}</Text>
           <Text style={s.itemUrl} numberOfLines={1}>{item.canonical_url}</Text>
           <Text style={s.itemDate}>Fetched {formatDate(item.fetched_at)}</Text>
-          {item.error_reason ? (
+          {errorText ? (
             <View style={s.errorBadge}>
-              <Text style={s.errorBadgeText}>⚠ {item.error_reason}</Text>
+              <Text style={s.errorBadgeText} numberOfLines={2}>⚠ {errorText}</Text>
             </View>
           ) : null}
           {((item.highlight_count && item.highlight_count > 0) || (item.annotation_count && item.annotation_count > 0)) ? (
@@ -455,6 +535,32 @@ function buildStyles(t: Theme) {
     pendingBody: { flex: 1, minWidth: 0 },
     pendingUrl: { color: t.colors.text, fontSize: 12, fontFamily: 'monospace' },
     pendingLabel: { color: t.colors.muted, fontSize: 11, marginTop: 1 },
+    failedRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.spacing.sm,
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.sm,
+      backgroundColor: t.colors.error + '1f',
+      borderLeftWidth: 3,
+      borderLeftColor: t.colors.error,
+    },
+    failedIcon: { color: t.colors.error, fontSize: 14, flexShrink: 0 },
+    failedLabel: { color: t.colors.error, fontSize: 11, fontWeight: '700', marginTop: 1 },
+    failedBtn: {
+      flexShrink: 0,
+      paddingHorizontal: t.spacing.sm,
+      paddingVertical: t.spacing.xs,
+      borderRadius: t.radius.sm,
+      borderWidth: 1,
+      borderColor: t.colors.error + '88',
+      minWidth: 52,
+      alignItems: 'center',
+    },
+    failedBtnPressed: { opacity: 0.6 },
+    failedBtnText: { color: t.colors.error, fontSize: 11, fontWeight: '700' },
+    failedDismissBtn: { flexShrink: 0, paddingHorizontal: t.spacing.xs, paddingVertical: t.spacing.xs },
+    failedDismissText: { color: t.colors.muted, fontSize: 14 },
     centered: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
     errorText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },

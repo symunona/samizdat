@@ -35,6 +35,7 @@ import * as mut from '../../../src/store/mutations'
 import { tagColor } from '../../../src/tagColor'
 import { openExternal, isWebUrl } from '../../../src/openExternal'
 import { useConnection } from '../../../src/ConnectionContext'
+import { useFailedJobs, documentErrorText } from '../../../src/failedJobs'
 import { useToast } from '../../../src/ToastContext'
 import { saveTheme } from '../../../src/storage'
 import AnnotationPanel from '../../../src/AnnotationPanel'
@@ -492,6 +493,10 @@ export default function DocumentViewer() {
     openExternal(doc?.canonical_url)
   }, [doc])
 
+  // A permanently-failed job on this Document (scrape/pipeline/asset fetch) is
+  // invisible otherwise — surface its reason next to the Document's own flag.
+  const { failed } = useFailedJobs()
+
   const handleReadLinkAsDocument = useCallback((href: string) => {
     let title = href
     try { title = new URL(href).hostname } catch { /* keep href */ }
@@ -504,6 +509,8 @@ export default function DocumentViewer() {
   // Only trust doc/htmlContent when they belong to the CURRENT id — otherwise the
   // previous article flashes for a frame during navigation before the effect reloads.
   const docForId = doc && doc.id === id ? doc : null
+
+  const docErrorText = documentErrorText(docForId, failed)
 
   if (docForId && docForId.media_type === 'video') {
     return <VideoDocument doc={docForId} from={from} />
@@ -530,9 +537,9 @@ export default function DocumentViewer() {
 
       {docForId && htmlContent ? (
         <View style={[s.contentArea, { marginTop: 56 + insets.top }]}>
-          {docForId.error_reason ? (
+          {docErrorText ? (
             <View style={s.docErrorBanner}>
-              <Text style={s.docErrorBannerText}>⚠ {docForId.error_reason} — no summary generated</Text>
+              <Text style={s.docErrorBannerText}>⚠ {docErrorText}</Text>
             </View>
           ) : null}
           <PendingPipelineBanner docId={id} />
@@ -569,10 +576,10 @@ export default function DocumentViewer() {
           <Text style={s.errorText}>{error}</Text>
           <Pressable onPress={() => load()} style={s.retryBtn}><Text style={s.retryText}>Retry</Text></Pressable>
         </View>
-      ) : docForId?.error_reason ? (
+      ) : docErrorText ? (
         <View style={[s.centered, { marginTop: 56 + insets.top }]}>
           <View style={s.docErrorBanner}>
-            <Text style={s.docErrorBannerText}>⚠ {docForId.error_reason} — no summary generated</Text>
+            <Text style={s.docErrorBannerText}>⚠ {docErrorText}</Text>
           </View>
         </View>
       ) : null}

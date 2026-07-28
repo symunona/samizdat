@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import { join } from 'node:path'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
-  newConnectedPage, seedVideoDoc, seedFalseParseDoc, makeCleanup,
+  newConnectedPage, seedVideoDoc, seedFalseParseDoc, seedDeadJob, makeCleanup,
 } from './harness.js'
 
 // A fixed video Document id seeded into the test DB so the video player screen
@@ -23,6 +23,12 @@ const VIDEO_DOC_ID = 'eeeeeeee-0000-4000-8000-000000000001'
 // A flagged (bot-protection) Document so the Documents-list error badge renders.
 const FALSE_PARSE_DOC_ID = 'eeeeeeee-0000-4000-8000-000000000002'
 const FALSE_PARSE_REASON = 'bot protection'
+
+// Dead jobs: a pipeline that gave up on an otherwise-fine Document (badge on that
+// Document's card) and a scrape that never produced one (its own failed row).
+const DEAD_PIPELINE_ERROR = 'llm provider unreachable'
+const DEAD_SCRAPE_URL = 'https://arxiv.example.com/pdf/2604.21751'
+const DEAD_SCRAPE_ERROR = 'playwright: Download is starting'
 
 // Pages to visit: [path, description]
 const PAGES = [
@@ -56,6 +62,18 @@ async function runSmoke() {
     reason: FALSE_PARSE_REASON,
     canonicalUrl: 'https://blocked.example.com/article',
   })
+  seedDeadJob({
+    id: 'eeeeeeee-0000-4000-8000-0000000000d1',
+    kind: 'run_pipeline',
+    payload: { document_id: VIDEO_DOC_ID, pipeline_name: 'Smoke pipeline' },
+    lastError: DEAD_PIPELINE_ERROR,
+  })
+  seedDeadJob({
+    id: 'eeeeeeee-0000-4000-8000-0000000000d2',
+    kind: 'scrape_url',
+    payload: { url: DEAD_SCRAPE_URL },
+    lastError: DEAD_SCRAPE_ERROR,
+  })
 
   console.log('  launching browser...')
   browser = await launchBrowser()
@@ -81,8 +99,8 @@ async function runSmoke() {
     }
   }
 
-  // False-parse UI: the flagged Document must show its error badge in the list.
-  errors.push(...await runFalseParseUiCheck(browser, token, deviceId))
+  // Error-state UI: flagged Document + dead jobs must be visible in the list.
+  errors.push(...await runErrorStateUiCheck(browser, token, deviceId))
 
   // API contract checks for the rerun-cascade feature (no LLM / network needed;
   // deep cascade semantics are covered by the Go store/pipeline tests).
@@ -98,29 +116,40 @@ async function runSmoke() {
   return errors
 }
 
-// runFalseParseUiCheck drives the real Documents screen and asserts the flagged
-// Document's error badge is VISIBLE (not just an API row) — a silent UI failure
-// would still return HTTP 200, so we assert the rendered text.
-async function runFalseParseUiCheck(browser, token, deviceId) {
+// runErrorStateUiCheck drives the real Documents screen and asserts every failure
+// shape is VISIBLE (not just an API row) — a silent UI failure would still return
+// HTTP 200, so we assert the rendered text:
+//   1. the flagged (false-parse) Document's badge
+//   2. a dead pipeline job's reason, badged on the Document it belongs to
+//   3. a dead scrape's reason, on its own row (that scrape produced no Document)
+async function runErrorStateUiCheck(browser, token, deviceId) {
   const out = []
   const { page, errors: pageErrors } = await newConnectedPage(browser, token, deviceId)
+  const expected = [
+    ['false-parse', FALSE_PARSE_REASON],
+    ['dead-pipeline', DEAD_PIPELINE_ERROR],
+    ['dead-scrape', DEAD_SCRAPE_ERROR],
+  ]
   try {
     await page.goto(`${BASE_URL}/documents`, { waitUntil: 'networkidle2', timeout: 15000 })
-    // Poll for the badge text — the doc arrives via a background sync pull.
-    let found = false
-    for (let i = 0; i < 20 && !found; i++) {
+    // Poll for the texts — the doc arrives via a background sync pull, the job
+    // rows via the dead-jobs poll.
+    const missing = new Map(expected)
+    for (let i = 0; i < 20 && missing.size > 0; i++) {
       await sleep(500)
-      found = await page.evaluate(
-        (reason) => document.body.innerText.toLowerCase().includes(reason),
-        FALSE_PARSE_REASON,
-      )
+      const body = (await page.evaluate(() => document.body.innerText)).toLowerCase()
+      for (const [label, text] of [...missing]) {
+        if (body.includes(text.toLowerCase())) missing.delete(label)
+      }
     }
-    if (found) console.log('  PASS [false-parse] error badge visible on Documents list')
-    else out.push(`[false-parse] error badge "${FALSE_PARSE_REASON}" not visible on /documents`)
+    for (const [label, text] of expected) {
+      if (missing.has(label)) out.push(`[${label}] "${text}" not visible on /documents`)
+      else console.log(`  PASS [${label}] error text visible on Documents list`)
+    }
   } catch (e) {
-    out.push(`[false-parse] ${e.message}`)
+    out.push(`[error-state] ${e.message}`)
   }
-  out.push(...pageErrors.map(e => `[false-parse] ${e}`))
+  out.push(...pageErrors.map(e => `[error-state] ${e}`))
   await page.close()
   return out
 }
