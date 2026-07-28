@@ -230,7 +230,10 @@ build-server:
     [ -z "$(git status --porcelain 2>/dev/null)" ] || commit="${commit}-dirty"
     built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     pkg=github.com/symunona/samizdat/server/internal/api
-    CGO_ENABLED=0 go build -ldflags "-X ${pkg}.version=${ver} -X ${pkg}.commit=${commit} -X ${pkg}.buildTime=${built}" -o bin/samizdat .
+    # cgo is REQUIRED: worker/pdfrender.go links MuPDF for PDF figure extraction.
+    # CGO_ENABLED=0 still compiles — go-fitz silently swaps in a purego path that
+    # dlopens a libmupdf.so this box does not have — and then panics at scrape time.
+    CGO_ENABLED=1 go build -ldflags "-X ${pkg}.version=${ver} -X ${pkg}.commit=${commit} -X ${pkg}.buildTime=${built}" -o bin/samizdat .
 
 [group('build')]
 [doc('Build the sam CLI')]

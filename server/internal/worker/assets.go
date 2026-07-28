@@ -205,14 +205,35 @@ func downloadAndThumbnail(ctx context.Context, client *http.Client, imgURL, dest
 		return 0, 0, fmt.Errorf("decode image: %w", err)
 	}
 
-	bounds := src.Bounds()
-	origW := bounds.Dx()
-	origH := bounds.Dy()
-	if origW == 0 || origH == 0 {
-		return 0, 0, fmt.Errorf("zero-size image")
+	dst, err := scaleToMax(src, maxAssetDim)
+	if err != nil {
+		return 0, 0, err
 	}
 
-	const maxDim = 800
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: 80}); err != nil {
+		return 0, 0, fmt.Errorf("jpeg encode: %w", err)
+	}
+
+	if err := os.WriteFile(destPath, buf.Bytes(), 0644); err != nil {
+		return 0, 0, fmt.Errorf("write file: %w", err)
+	}
+
+	return dst.Bounds().Dx(), dst.Bounds().Dy(), nil
+}
+
+// maxAssetDim is the longest side a cached image is kept at.
+const maxAssetDim = 800
+
+// scaleToMax downscales src so its longest side is at most maxDim, preserving
+// aspect ratio. Images already within the limit are copied through unscaled.
+func scaleToMax(src image.Image, maxDim int) (*image.RGBA, error) {
+	origW := src.Bounds().Dx()
+	origH := src.Bounds().Dy()
+	if origW == 0 || origH == 0 {
+		return nil, fmt.Errorf("zero-size image")
+	}
+
 	dstW, dstH := origW, origH
 	if origW > maxDim || origH > maxDim {
 		if origW >= origH {
@@ -232,15 +253,5 @@ func downloadAndThumbnail(ctx context.Context, client *http.Client, imgURL, dest
 
 	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
 	draw.BiLinear.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
-
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: 80}); err != nil {
-		return 0, 0, fmt.Errorf("jpeg encode: %w", err)
-	}
-
-	if err := os.WriteFile(destPath, buf.Bytes(), 0644); err != nil {
-		return 0, 0, fmt.Errorf("write file: %w", err)
-	}
-
-	return dstW, dstH, nil
+	return dst, nil
 }

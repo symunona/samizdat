@@ -4186,6 +4186,29 @@ func (q *Queries) UpdateDocumentExcerptHero(ctx context.Context, arg UpdateDocum
 	return err
 }
 
+const updateDocumentMarkdown = `-- name: UpdateDocumentMarkdown :exec
+UPDATE documents SET markdown = ?, excerpt = ?, content_hash = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type UpdateDocumentMarkdownParams struct {
+	Markdown    string `json:"markdown"`
+	Excerpt     string `json:"excerpt"`
+	ContentHash string `json:"content_hash"`
+	UpdatedAt   string `json:"updated_at"`
+	ID          string `json:"id"`
+}
+
+func (q *Queries) UpdateDocumentMarkdown(ctx context.Context, arg UpdateDocumentMarkdownParams) error {
+	_, err := q.db.ExecContext(ctx, updateDocumentMarkdown,
+		arg.Markdown,
+		arg.Excerpt,
+		arg.ContentHash,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
+}
+
 const updateFeedConfig = `-- name: UpdateFeedConfig :exec
 UPDATE feeds SET config = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
 `

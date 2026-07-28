@@ -1,8 +1,8 @@
 ---
 created: 2026-07-28
 topic: PDF figures — extract images AND vector figures from PDFs into Documents
-excerpt: The PDF ingest path (2026-07-28-pdf-ingest) extracts text only; every figure is lost. Raster figures live as image XObjects, but most academic figures are vector drawings with nothing to extract. Adopt MuPDF (go-fitz, AGPL) to get cropped SVG per figure plus raster assets, spliced into the Document markdown at their real position.
-status: draft — awaiting review
+excerpt: The PDF ingest path (2026-07-28-pdf-ingest) extracts text only; every figure is lost. Raster figures live as image XObjects, but most academic figures are vector drawings with nothing to extract. Adopt MuPDF (go-fitz, AGPL) to render figure crops, detected from the content stream, spliced into the Document markdown at their real position.
+status: implemented — awaiting review on feat/pdf-figures
 ---
 
 # PDF Figure Extraction

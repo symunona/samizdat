@@ -120,6 +120,9 @@ RETURNING *;
 -- name: UpdateDocumentExcerptHero :exec
 UPDATE documents SET excerpt = ?, hero_image_url = ?, author = ?, updated_at = ? WHERE id = ?;
 
+-- name: UpdateDocumentMarkdown :exec
+UPDATE documents SET markdown = ?, excerpt = ?, content_hash = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
 -- name: MarkDocumentError :exec
 UPDATE documents SET error_reason = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
