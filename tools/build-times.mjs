@@ -20,19 +20,27 @@ const log = ([recipe, sec, where = 'local', ok = 'true']) => {
   writeFileSync(file, `${JSON.stringify(rows.slice(-KEEP), null, 1)}\n`)
 }
 
+// Median, not mean: the first build on a node pays for the gradle distribution, the
+// dependency cache and the NDK, so it runs ~10× a warm build. A mean lets that one
+// outlier poison the estimate for days.
 const stats = (recipe) => {
   const rows = read().filter((r) => r.ok && (!recipe || r.recipe === recipe))
   if (!rows.length) return null
-  const last = rows[rows.length - 1]
-  const avg = Math.round(rows.reduce((a, r) => a + r.sec, 0) / rows.length)
-  return { last, avg, n: rows.length }
+  const secs = rows.map((r) => r.sec).sort((a, b) => a - b)
+  const mid = Math.floor(secs.length / 2)
+  return {
+    last: rows[rows.length - 1],
+    typical: secs.length % 2 ? secs[mid] : Math.round((secs[mid - 1] + secs[mid]) / 2),
+    n: rows.length,
+  }
 }
 
 // `estimate <recipe>` — the one-liner printed before a build starts.
 const estimate = ([recipe]) => {
   const s = stats(recipe)
   if (!s) { console.log('⏱ no timing history yet — this run establishes the baseline'); return }
-  console.log(`⏱ last ${dur(s.last.sec)} on ${s.last.where} (n=${s.n}, avg ${dur(s.avg)}) — history: just build-times`)
+  const typical = s.n >= 3 ? `, typical ${dur(s.typical)}` : ''
+  console.log(`⏱ last ${dur(s.last.sec)} on ${s.last.where} (n=${s.n}${typical}) — history: just build-times`)
 }
 
 // `show` — full table plus the local-vs-remote speedup, the number that justifies the node.
@@ -47,7 +55,7 @@ const show = () => {
   }
   const l = stats('build-android-local')
   const r = stats('build-android-remote')
-  if (l && r) console.log(`\nremote is ${(l.avg / r.avg).toFixed(1)}× faster (avg ${dur(l.avg)} local vs ${dur(r.avg)} remote)`)
+  if (l && r) console.log(`\nremote is ${(l.typical / r.typical).toFixed(1)}× faster (typical ${dur(l.typical)} local vs ${dur(r.typical)} remote)`)
 }
 
 const [cmd, ...rest] = process.argv.slice(2)

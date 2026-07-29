@@ -2,7 +2,7 @@
 created: 2026-07-29
 topic: Offload the Android APK build from taskbot (4GB VPS) to a configured remote build node (xayah, 12c/30GB) over Tailscale
 excerpt: Generic `just setup-build-node <ssh-dest>` saves the node to a config file; `just build-android` defaults to building there. Source travels by git push over ssh (no GitHub), APK + version come back by rsync, build durations are logged and shown as estimates.
-status: implemented — xayah provisioned, first remote build running (see Outcome)
+status: done — xayah provisioned, two green remote builds, 16m cold → 1m40s warm (see Outcome)
 ---
 
 # Remote Android build node (`setup-build-node` / `build-android-remote`)
@@ -200,6 +200,46 @@ Remote flow:
 
 Manual, once: install the node-built APK over the taskbot-built one on the phone. If it
 installs without an uninstall, landmine 1 is genuinely handled.
+
+## Outcome (2026-07-29)
+
+Shipped as planned, with the transport switched to git-push-over-ssh (origin is HTTPS and
+xayah has no GitHub key; taskbot→xayah ssh already worked).
+
+| build | wall clock |
+|---|---|
+| local, throttled for 4GB | ~35 min |
+| xayah, **cold** (gradle 9.3.1 distribution + full dependency resolution + NDK 27.1 download) | **16m10s** |
+| xayah, **warm** (44s JS bundle + 20s assemble + rsync/verify/deploy) | **1m40s** |
+
+Both remote builds passed the full `verify-apk.sh` gate — signer cert unchanged
+(`fac61745…`, so it installs over the taskbot-built APK), versionCode strictly greater,
+bundled `app.config` fresh, single arm64 ABI, sidecar `built_at` == `buildEpoch`, and the
+live server served the new version. All three guards abort before bumping anything:
+dirty tracked tree, unreachable node, no config at all.
+
+Things the work turned up that the plan didn't predict:
+
+- **`app/src/webview/document-viewer-bundle.ts` is generated + gitignored and no APK build
+  ever regenerated it** — only `just dev` did. So the local APK shipped whatever bundle was
+  last left on disk (stale after any `document-viewer.ts` edit), and a build node had none
+  at all. `_apk-gradle` now runs `just webview-build` every build; fixes both paths.
+- `deploy-android` polled the version endpoint exactly once, so a just-restarted service
+  looked like "the server isn't serving an apk" plus a bogus fix-your-config hint. Now it
+  waits up to 15s.
+- Gradle's default 3h daemon idle timeout left **10GB of idle JVMs** on a desktop. Setup now
+  writes `org.gradle.daemon.idletimeout=1800000`.
+- Timing estimates use a **median**, not a mean — one cold build otherwise poisons the
+  estimate for days (`avg 8m55s` from a 16m and a 1m40s run).
+- xayah's SDK was reusable but had **no `cmdline-tools`** (Android Studio install) and no
+  `build-tools;36.0.0`; setup installs both. The NDK (27.1) comes from AGP auto-download,
+  which the accepted licenses enable.
+- pnpm's store on the node made `node_modules` 528M, not the 4G an npm-style tree costs.
+- `just setup-build-node` sizes the node's gradle from its own hardware: 12 cores / 30GB →
+  8 workers, `-Xmx7g` (vs taskbot's 1 worker, `-Xmx900m`).
+
+Still manual, once: install the xayah-built APK over the taskbot-built one on the phone.
+The signer check makes this a formality, but it's the only end-to-end proof.
 
 ## Steps
 
