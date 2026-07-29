@@ -129,6 +129,8 @@ setup-build-node dest ws="":
     org.gradle.jvmargs=-Xmx${heap}g -XX:MaxMetaspaceSize=2g
     kotlin.compiler.execution.strategy=daemon
     kotlin.incremental=true
+    # The node is somebody's desktop — don't sit on ${heap}GB for gradle's default 3h.
+    org.gradle.daemon.idletimeout=1800000
     EOF
 
     # Receiving repo. HEAD stays on 'main' while builds push to 'build', so the pushed
@@ -619,8 +621,15 @@ deploy-android:
       echo "ℹ no server running on :{{_dev_port}} — start one with 'just dev' (dev) or 'just restart' (service)."
     fi
     # Verify: the live server should now advertise app.json's version to the updater.
+    # Poll — a just-restarted service needs a moment to bind, and checking once made this
+    # report "server isn't serving an apk" (with a bogus fix-your-config hint) on a
+    # deploy that was in fact fine.
     want=$(node -e 'const a=require("./app/app.json").expo;process.stdout.write(a.version+" / code "+a.android.versionCode)')
-    resp=$(curl -fsS "http://localhost:{{_dev_port}}/api/v1/app/android/version" 2>/dev/null || true)
+    for _ in $(seq 15); do
+      resp=$(curl -fsS "http://localhost:{{_dev_port}}/api/v1/app/android/version" 2>/dev/null || true)
+      [ -z "$resp" ] || break
+      sleep 1
+    done
     if [ -n "$resp" ]; then
       got=$(node -e "const d=JSON.parse(process.argv[1]);process.stdout.write(d.version+' / code '+d.version_code)" "$resp" 2>/dev/null || echo "(unparseable /api/v1/app/android/version)")
     else

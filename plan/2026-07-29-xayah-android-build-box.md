@@ -2,7 +2,7 @@
 created: 2026-07-29
 topic: Offload the Android APK build from taskbot (4GB VPS) to a configured remote build node (xayah, 12c/30GB) over Tailscale
 excerpt: Generic `just setup-build-node <ssh-dest>` saves the node to a config file; `just build-android` defaults to building there. Source travels by git push over ssh (no GitHub), APK + version come back by rsync, build durations are logged and shown as estimates.
-status: planned — not started
+status: implemented — xayah provisioned, first remote build running (see Outcome)
 ---
 
 # Remote Android build node (`setup-build-node` / `build-android-remote`)
