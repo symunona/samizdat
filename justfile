@@ -528,6 +528,11 @@ _apk-gradle:
     export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=1536}"   # cap Metro's node heap
     # Pre-accept SDK licenses so gradle can auto-download compileSdk/build-tools.
     yes | sdkmanager --licenses >/dev/null 2>&1 || true
+    # src/webview/document-viewer-bundle.ts is GENERATED and gitignored: a build host
+    # that never ran `just dev` has none at all, and this box would otherwise bundle
+    # whatever stale copy is on disk — shipping an APK whose document viewer predates
+    # the source. Regenerate every APK build.
+    just webview-build
     # Rasterize the logo SVG → app/assets/*.png before prebuild reads them, so a
     # fresh assets/samizdat.svg always flows into the launcher icon.
     just gen-icons
