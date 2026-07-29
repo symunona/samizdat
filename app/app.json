@@ -3,7 +3,7 @@
     "name": "Samizdat",
     "slug": "samizdat",
     "scheme": "samizdat",
-    "version": "0.6.15",
+    "version": "0.6.16",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "sam.tmpx.space",
-      "versionCode": 1354944,
+      "versionCode": 1354961,
       "adaptiveIcon": {
         "backgroundColor": "#0b0b0c",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -38,7 +38,7 @@
       ]
     ],
     "extra": {
-      "buildEpoch": 1785363843174
+      "buildEpoch": 1785364896494
     }
   }
 }
