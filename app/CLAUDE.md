@@ -287,14 +287,37 @@ while mounted, gone when the caller stops rendering it. Do not write a second on
 
 ## Page mode (document viewer)
 
-A reading preference — off by default, **strictly additive**. Every rule is scoped to
+A reading preference — **strictly additive**. Every rule is scoped to
 `html.pg` and **no DOM node is added or moved**, so with it off the reader is unchanged
 and body-text offsets (hence every annotation anchor) are identical in both modes.
 
+### The preference is three-way: `flow` | `auto` | `page` (default `auto`)
+
+`src/store/readingModeStore.ts` is the ONE source of truth (zustand + AsyncStorage via
+`storage.ts`), **global, never per-document**. Both writers use it: the meta panel's
+`Flow · Auto · Page` segmented control, and Settings → **Auto Page Mode** (whose switch
+*is* `mode === 'auto'` — on writes `auto`, off writes `flow`; when the mode is `page` it
+reads off and says so). Settings also owns the **threshold** (`pageThreshold`, default
+**20**, digits-only, committed on blur, clamped 1–999 — junk restores the last good
+value). `loadReadingPrefs()` migrates the old boolean key `samizdat_page_mode`
+('1'→`page`, '0'→`flow`, absent→`auto`) once, then deletes it.
+
+- `flow` — always continuous. `page` — always paginated. `auto` — paginate only past the
+  threshold.
+- **`auto` resolves inside the WebView**, because only it can measure. `estimatePages()`
+  = `ceil(body.scrollHeight / innerHeight)` — a page IS one column of the body laid out at
+  the same width and cut to the viewport, so the two are the same quantity (±1–2 pages of
+  break-avoidance slack, irrelevant to a whole-page threshold). **Always measured the same
+  way**: if the viewer is currently paginated, `html.pg` comes off for the read and goes
+  straight back in the same task (no paint, `scrollLeft` restored). Using the real
+  `_pageCount` while paginated and the estimate while not would let a document sitting on
+  the threshold flip on every resize. Re-resolved on `init`, on `window.load` (images have
+  no height before that), on each throttled `resize`, and on every host push.
 - **Lives in the WebView** (`document-viewer.ts`) — only it knows real laid-out box
-  heights. The host owns just the meta-panel `Switch`, persistence
-  (`samizdat_page_mode`, **global**, not per-doc), the `setPageMode` message and the
-  `pageMode` field on `init`.
+  heights. The host owns the preference, the `setReadingMode {mode, threshold}` message
+  and the `readingMode`/`pageThreshold` fields on `init`; the viewer reports the
+  resolution back as `readingMode {mode, paginated, pages}`, which is the only source for
+  the meta panel's one-line summary (`~95 pages here, limit 20 → paginated`).
 - **Mechanism:** the *body* becomes a horizontal multi-column scroller
   (`column-width:var(--pgw)` + `column-fill:auto` on a `100vh` box; `html{overflow:hidden}`
   so the body really is the scroll container). Geometry comes from JS (`layoutPages`)

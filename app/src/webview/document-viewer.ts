@@ -4,6 +4,8 @@
 // pull in react-native-unistyles here — keep the WebView bundle lean.
 import { iconButtonSpec as IB } from '../iconButtonSpec'
 import { tagColor } from '../tagColor'
+// Type-only — esbuild strips it, so storage.ts (AsyncStorage) never enters the bundle.
+import type { ReadingMode } from '../storage'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,11 +72,15 @@ let _hlExpanded = true
 let _initialized = false
 
 // Page mode (see the "Page mode" CSS block + section below). _pageStep is the
-// scrollLeft delta between two pages (column width + gap).
+// scrollLeft delta between two pages (column width + gap). _pageMode is the
+// RESOLVED state; _mode/_threshold are the host's preference (see applyReadingMode).
 let _pageMode = false
 let _pageIdx = 0
 let _pageCount = 1
 let _pageStep = 0
+let _mode: ReadingMode = 'flow'
+let _threshold = 20
+let _estPages = 1
 
 // ── CSS injection ─────────────────────────────────────────────────────────────
 
@@ -675,7 +681,8 @@ interface InitMsg {
   hlExpanded: boolean
   scrollFraction: number
   focusId?: string
-  pageMode?: boolean
+  readingMode?: ReadingMode
+  pageThreshold?: number
 }
 
 function handleInit(msg: InitMsg): void {
@@ -713,9 +720,13 @@ function handleInit(msg: InitMsg): void {
   }
   setTimeout(updateGutter, 80)
 
-  // Page mode is a global reading preference owned by the host — apply it before
-  // restoring the reading position so the position lands on the right page.
-  if (msg.pageMode) setPageMode(true)
+  // Reading mode is a global preference owned by the host; only this frame can
+  // resolve `auto` (it needs the laid-out height). Applied before the reading
+  // position is restored so the position lands on the right page. The cards are
+  // already in the DOM above, so they count towards the estimate.
+  _mode = msg.readingMode ?? 'flow'
+  _threshold = msg.pageThreshold ?? _threshold
+  applyReadingMode()
 
   // Restore reading position
   if (msg.scrollFraction && msg.scrollFraction > 0) {
@@ -1202,10 +1213,48 @@ function setPageMode(on: boolean): void {
   updateGutter()
 }
 
+// How many pages this document would run to, measured the SAME way whichever mode
+// is live: continuous content height ÷ viewport height. A page is one column of
+// the body laid out at the same width and cut to the viewport, so the two are the
+// same quantity (±1–2 pages of break-avoidance slack — fine for a whole-page
+// threshold). Measuring the real `_pageCount` when paginated and this estimate
+// when not would let `auto` flip-flop for a document sitting on the threshold, so
+// pagination is taken off for the read and put straight back: same task, no paint
+// in between, scrollLeft restored.
+function estimatePages(): number {
+  const root = document.documentElement
+  const paginated = root.classList.contains('pg')
+  const left = document.body.scrollLeft
+  if (paginated) root.classList.remove('pg')
+  const h = window.innerHeight
+  const pages = h > 0 ? Math.ceil(document.body.scrollHeight / h) : 1
+  if (paginated) {
+    root.classList.add('pg')
+    document.body.scrollLeft = left
+  }
+  return Math.max(1, pages)
+}
+
+// Resolve the host's preference against this document and tell the host what it
+// came out as (the meta panel's info line has no other way to know).
+function applyReadingMode(): void {
+  _estPages = estimatePages()
+  setPageMode(_mode === 'page' || (_mode === 'auto' && _estPages > _threshold))
+  sendMsg({
+    type: 'readingMode',
+    mode: _mode,
+    paginated: _pageMode,
+    pages: _pageMode ? _pageCount : _estPages,
+  })
+}
+
 // Re-measure after a viewport change, keeping the reader where they were: on the
 // last settled anchor, or — if we never got one — proportionally through the doc.
 function relayout(): void {
-  if (_pageMode) {
+  const was = _pageMode
+  // A narrower viewport means more pages: `auto` has to re-resolve, not just repaginate.
+  applyReadingMode()
+  if (_pageMode && was) {
     const anchor = _anchor
     const frac = _pageCount > 1 ? _pageIdx / (_pageCount - 1) : 0
     layoutPages()
@@ -1288,6 +1337,13 @@ window.addEventListener('resize', () => {
   }, wait)
 })
 
+// Images have no height until they load, so the estimate taken at `init` can be
+// short by several pages on an image-heavy document — re-resolve once they're in.
+// `resize` never fires for this.
+window.addEventListener('load', () => {
+  if (_mode === 'auto') applyReadingMode()
+})
+
 // ── Message handler ───────────────────────────────────────────────────────────
 
 function handleMessage(event: MessageEvent): void {
@@ -1327,8 +1383,10 @@ function handleMessage(event: MessageEvent): void {
       seekFraction(msg.fraction as number)
       break
 
-    case 'setPageMode':
-      setPageMode(!!msg.on)
+    case 'setReadingMode':
+      _mode = (msg.mode as ReadingMode) ?? _mode
+      if (typeof msg.threshold === 'number') _threshold = msg.threshold
+      applyReadingMode()
       break
 
     case 'setAnnotations':

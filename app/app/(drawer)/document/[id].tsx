@@ -10,7 +10,6 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   View,
 } from 'react-native'
@@ -47,13 +46,36 @@ import { useScrapeQueue } from '../../../src/ScrapeQueueContext'
 import { buildDocumentHtml, mdToHtml } from '../../../src/markdownToHtml'
 import { useSyncStore } from '../../../src/store/syncStore'
 import VideoDocument from '../../../src/VideoDocument'
+import { useReadingModeStore } from '../../../src/store/readingModeStore'
+import type { ReadingMode } from '../../../src/storage'
 import { ImageLightbox } from '../../../src/ImageViewer'
 import PendingPipelineBanner from '../../../src/PendingPipelineBanner'
 
 const DEBOUNCE_MS = 1000
-// Page mode is a reading preference, not a property of one article — one global key
-// (unlike `doc_hl_exp_<id>`, which is per-document state).
-const PAGE_MODE_KEY = 'samizdat_page_mode'
+
+// The 3-way reading preference (global, never per-document — see readingModeStore).
+const READING_MODES: { key: ReadingMode; label: string }[] = [
+  { key: 'flow', label: 'Flow' },
+  { key: 'auto', label: 'Auto' },
+  { key: 'page', label: 'Page' },
+]
+
+// The one info line under the control: what the setting does to THIS document.
+// `resolved` is what the viewer reported back after measuring it.
+function readingModeInfo(
+  mode: ReadingMode,
+  threshold: number,
+  resolved: { paginated: boolean; pages: number } | null,
+): string {
+  if (mode === 'flow') return 'Continuous scrolling, however long the document is'
+  if (mode === 'page') {
+    return resolved?.pages
+      ? `Always paginated — ${resolved.pages} pages here; swipe or ← → to turn`
+      : 'Always paginated — swipe or ← → to turn'
+  }
+  if (!resolved) return `Paginates documents longer than ${threshold} pages`
+  return `~${resolved.pages} pages here, limit ${threshold} → ${resolved.paginated ? 'paginated' : 'continuous'}`
+}
 
 type ParsedMsg = {
   type: string
@@ -65,6 +87,8 @@ type ParsedMsg = {
   msg?: string
   src?: string
   alt?: string
+  paginated?: boolean
+  pages?: number
 }
 
 export default function DocumentViewer() {
@@ -126,16 +150,16 @@ export default function DocumentViewer() {
     }).catch(() => {})
   }, [id])
 
-  // Page mode: paginate the article into viewport-sized pages. The pagination
-  // itself lives in the WebView (only it knows the laid-out box sizes) — the host
-  // owns the toggle and its persistence.
-  const [pageMode, setPageMode] = useState(false)
+  // Reading mode: flow / auto / page. The pagination — and resolving `auto` against
+  // this document's length — lives in the WebView (only it knows the laid-out box
+  // sizes); the host owns the preference and reports back what it resolved to.
+  const readingMode = useReadingModeStore(st => st.mode)
+  const pageThreshold = useReadingModeStore(st => st.threshold)
+  const hydrateReadingMode = useReadingModeStore(st => st.hydrate)
+  const setReadingMode = useReadingModeStore(st => st.setMode)
+  const [resolvedPaging, setResolvedPaging] = useState<{ paginated: boolean; pages: number } | null>(null)
 
-  useEffect(() => {
-    AsyncStorage.getItem(PAGE_MODE_KEY).then(val => {
-      if (val !== null) setPageMode(val === '1')
-    }).catch(() => {})
-  }, [])
+  useEffect(() => { void hydrateReadingMode() }, [hydrateReadingMode])
 
   const [sourceFeed, setSourceFeed] = useState<Feed | null>(null)
 
@@ -180,11 +204,12 @@ export default function DocumentViewer() {
     sendToWebView({ type: 'setAnnotations', annotations })
   }, [sendToWebView, annotations])
 
-  const handlePageModeChange = useCallback((next: boolean) => {
-    setPageMode(next)
-    AsyncStorage.setItem(PAGE_MODE_KEY, next ? '1' : '0').catch(() => {})
-    sendToWebView({ type: 'setPageMode', on: next })
-  }, [sendToWebView])
+  // Push the preference on every change — this also covers the store hydrating (or
+  // Settings changing the threshold) AFTER the viewer already got its `init`.
+  useEffect(() => {
+    if (!isDocLoadedRef.current) return
+    sendToWebView({ type: 'setReadingMode', mode: readingMode, threshold: pageThreshold })
+  }, [sendToWebView, readingMode, pageThreshold])
 
   // Meta panel state
   const [metaVisible, setMetaVisible] = useState(false)
@@ -375,11 +400,15 @@ export default function DocumentViewer() {
         annotations,
         theme: { background: bg, text: fg, surface: su, border: bo, accent: ac, muted: mu },
         hlExpanded,
-        pageMode,
+        readingMode,
+        pageThreshold,
         scrollFraction: savedProgressRef.current,
         focusId: highlight,
       })
       savedProgressRef.current = 0
+    } else if (msg.type === 'readingMode') {
+      // What the viewer actually resolved the preference to for THIS document.
+      setResolvedPaging({ paginated: !!msg.paginated, pages: msg.pages ?? 0 })
     } else if (msg.type === 'scroll') {
       const frac = msg.fraction ?? 0
       setScrollProgress(frac)
@@ -451,7 +480,7 @@ export default function DocumentViewer() {
         return next
       })
     }
-  }, [id, headerAnim, annotations, highlights, hlExpanded, highlight, pageMode,
+  }, [id, headerAnim, annotations, highlights, hlExpanded, highlight, readingMode, pageThreshold,
     doc, bg, fg, su, bo, ac, mu, sendToWebView, toHlData, handleLinkPress, router])
 
   // Native WebView message handler
@@ -707,17 +736,24 @@ export default function DocumentViewer() {
             <View style={s.metaDivider} />
             <View style={s.metaToggleRow}>
               <Ionicons name="book-outline" size={18} color={theme.colors.muted} />
-              <View style={{ flex: 1 }}>
-                <Text style={s.metaToggleLabel}>Page mode</Text>
-                <Text style={s.metaToggleHint}>Read in pages — swipe or ← → to turn</Text>
+              <Text style={[s.metaToggleLabel, { flex: 1 }]}>Reading</Text>
+              <View style={s.segmented}>
+                {READING_MODES.map(m => {
+                  const active = readingMode === m.key
+                  return (
+                    <Pressable
+                      key={m.key}
+                      onPress={() => setReadingMode(m.key)}
+                      style={[s.segment, active && s.segmentActive]}
+                      hitSlop={4}
+                    >
+                      <Text style={[s.segmentText, active && s.segmentTextActive]}>{m.label}</Text>
+                    </Pressable>
+                  )
+                })}
               </View>
-              <Switch
-                value={pageMode}
-                onValueChange={handlePageModeChange}
-                trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
-                thumbColor={theme.colors.background}
-              />
             </View>
+            <Text style={s.metaToggleHint}>{readingModeInfo(readingMode, pageThreshold, resolvedPaging)}</Text>
             <View style={s.metaDivider} />
             <View style={s.metaRow}>
               <Text style={s.metaLabel}>URL</Text>
@@ -827,7 +863,16 @@ function buildStyles(t: Theme) {
     metaRow: { marginBottom: t.spacing.sm },
     metaToggleRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
     metaToggleLabel: { color: t.colors.text, fontSize: 14, fontWeight: '600' },
-    metaToggleHint: { color: t.colors.muted, fontSize: 11 },
+    metaToggleHint: { color: t.colors.muted, fontSize: 11, marginTop: 6 },
+    // Flow / Auto / Page — same pill language as the transcript language selector.
+    segmented: {
+      flexDirection: 'row', borderRadius: 12, overflow: 'hidden',
+      borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.background,
+    },
+    segment: { paddingHorizontal: 10, paddingVertical: 4 },
+    segmentActive: { backgroundColor: t.colors.accent },
+    segmentText: { color: t.colors.muted, fontSize: 11, fontWeight: '700' },
+    segmentTextActive: { color: t.colors.background },
     metaLabel: { color: t.colors.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
     metaValue: { color: t.colors.text, fontSize: 14 },
     metaMuted: { color: t.colors.muted, fontSize: 12 },

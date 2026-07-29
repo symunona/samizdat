@@ -63,6 +63,9 @@ server/
       vtt.go                # WebVTT parser → []Segment{StartMs,EndMs,Text}
     worker/
       youtube.go            # yt-dlp ingest: audio + transcript → video Document
+      pdf.go                # PDF text extraction, figure splicing, layout reconstruction
+      pdffig.go             # figure detection (content-stream walk), box geometry, captions
+      pdfrender.go          # MuPDF rendering via go-fitz: page→bitmap, crop→PNG, asset store
 ```
 
 > `sam qr` (CLI) calls `POST /api/v1/admin/pair/new` authenticated by `Authorization: Passphrase <argon2-hash>`, loopback only. Server returns `{code, qr_data_uri}`. CLI prints the QR. Keeps DB ownership in the server; CLI stays a thin client.

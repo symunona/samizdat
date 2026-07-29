@@ -20,6 +20,8 @@ import {
 const VIDEO_DOC_ID = 'eeeeeeee-0000-4000-8000-000000000001'
 const TEXT_DOC_ID = 'dddddddd-0000-4000-8000-000000000001'
 const FIGURE_DOC_ID = 'dddddddd-0000-4000-8000-000000000002'
+const SHORT_DOC_ID = 'dddddddd-0000-4000-8000-000000000003'
+const LONG_DOC_ID = 'dddddddd-0000-4000-8000-000000000004'
 const HL_ID = 'ffffffff-0000-4000-8000-000000000001'
 
 // Highlight body whose FIRST paragraph crosses bold + link + code (multiple text
@@ -48,6 +50,24 @@ const HL_BODY = [
 // silently dropped.
 const PIXEL_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
+// One unit of filler prose, ~a third of a page at the 900×700 test viewport. Page
+// mode needs bodies that are genuinely several viewports long, and the `auto`
+// checks need one document either side of the 20-page limit.
+const FILLER_SECTION = (i) => [
+  `## Section ${i + 1}`,
+  '',
+  `Release engineering notes, part ${i + 1}. The toolchain now refuses to build a ` +
+    'module that declares a newer language version, which surfaces mismatches at ' +
+    'build time instead of at run time. Vendored dependencies keep their own ' +
+    'toolchain lines, so a workspace with mixed versions still resolves ' +
+    'deterministically across machines and CI runners.',
+  '',
+  `Profile-guided optimization graduates in part ${i + 1} as well: a profile ` +
+    'collected from production feeds the compiler, which inlines the hot paths it ' +
+    'actually sees rather than the ones a heuristic guesses at. Reported gains sit ' +
+    'in the low single digits for most services and rather more for parser-heavy ones.',
+].join('\n')
+
 const TEXT_DOC = {
   id: TEXT_DOC_ID,
   title: 'Integration Article',
@@ -68,21 +88,32 @@ const TEXT_DOC = {
     '',
     // Filler prose — page mode needs a body that is genuinely several viewports
     // long, otherwise "it paginates" and "resize repaginates" are untestable.
-    ...Array.from({ length: 12 }, (_, i) => [
-      `## Section ${i + 1}`,
-      '',
-      `Release engineering notes, part ${i + 1}. The toolchain now refuses to build a ` +
-        'module that declares a newer language version, which surfaces mismatches at ' +
-        'build time instead of at run time. Vendored dependencies keep their own ' +
-        'toolchain lines, so a workspace with mixed versions still resolves ' +
-        'deterministically across machines and CI runners.',
-      '',
-      `Profile-guided optimization graduates in part ${i + 1} as well: a profile ` +
-        'collected from production feeds the compiler, which inlines the hot paths it ' +
-        'actually sees rather than the ones a heuristic guesses at. Reported gains sit ' +
-        'in the low single digits for most services and rather more for parser-heavy ones.',
-    ].join('\n')),
+    ...Array.from({ length: 12 }, (_, i) => FILLER_SECTION(i)),
   ].join('\n'),
+}
+
+// The two ends of the `auto` decision: SHORT is one page, LONG is comfortably past
+// the 20-page default. The estimate never has to be exact, only on the right side
+// of the threshold.
+const SHORT_DOC = {
+  id: SHORT_DOC_ID,
+  title: 'Short Note',
+  canonicalUrl: 'https://example.com/short-note',
+  markdown: [
+    '# Short Note',
+    '',
+    'One screen of prose. Under any sane page limit this stays a scrolling reader, ' +
+      'because paginating a two-paragraph note is worse than not paginating it.',
+    '',
+    'A second paragraph, still comfortably inside the first page.',
+  ].join('\n'),
+}
+
+const LONG_DOC = {
+  id: LONG_DOC_ID,
+  title: 'Long Report',
+  canonicalUrl: 'https://example.com/long-report',
+  markdown: ['# Long Report', '', ...Array.from({ length: 90 }, (_, i) => FILLER_SECTION(i))].join('\n'),
 }
 
 // What a PDF scrape now produces for a table: the rendered crop, then the same
@@ -745,23 +776,52 @@ const pageTotal = (page) => page.evaluate(() => {
   return m ? { idx: Number(m[1]), total: Number(m[2]) } : null
 })
 
-async function togglePageMode(page) {
+// Open the ⋮ meta panel, press one segment of the Flow/Auto/Page control, close it.
+// clickByText stringifies the matcher and evals it in the page, so the label has to
+// be baked into the source — a closure over it doesn't survive the trip.
+async function openMetaPanel(page) {
   if (!await clickByText(page, e => (e.innerText || '').trim() === '⋮', 'meta panel ⋮')) return false
   await sleep(500)
-  const flipped = await page.evaluate(() => {
-    const box = document.querySelector('input[type="checkbox"]')
-    if (!box) return false
-    box.click()
-    return true
-  })
-  await sleep(400)
-  // The panel may still be up (it doesn't dismiss itself) — it would cover the frame.
+  return true
+}
+
+async function closeMetaPanel(page) {
   const stillOpen = await page.evaluate(() => document.body.innerText.includes('Document info'))
   if (stillOpen) {
     await clickByText(page, e => (e.innerText || '').trim() === '×', 'close meta panel')
     await sleep(400)
   }
-  return flipped
+}
+
+async function setReadingMode(page, label) {
+  if (!await openMetaPanel(page)) return false
+  const matcher = new Function('e', `return (e.innerText || '').trim() === ${JSON.stringify(label)}`)
+  const ok = await clickByText(page, matcher, `${label} segment`)
+  await sleep(400)
+  // The panel doesn't dismiss itself — it would cover the frame for later checks.
+  await closeMetaPanel(page)
+  return ok
+}
+
+// The single info line under the segmented control (it names the resolution + limit).
+const readingInfo = (page) => page.evaluate(() => {
+  const el = [...document.querySelectorAll('*')].find(e =>
+    e.children.length === 0 && /pages here|Continuous scrolling|Paginates documents/.test(e.innerText || ''))
+  return el ? el.innerText.trim() : ''
+})
+
+const isPaginated = (page) => page.evaluate(() =>
+  document.querySelector('iframe').contentDocument.documentElement.classList.contains('pg'))
+
+async function waitPaginated(page, want, timeout = 5000) {
+  try {
+    await page.waitForFunction((w) =>
+      document.querySelector('iframe').contentDocument.documentElement.classList.contains('pg') === w,
+      { timeout }, want)
+    return null
+  } catch {
+    return `viewer is ${await isPaginated(page) ? 'paginated' : 'continuous'}, expected ${want ? 'paginated' : 'continuous'}`
+  }
 }
 
 // Vertical scrollability of the frame's document + horizontal of its body: the two
@@ -780,13 +840,10 @@ async function runPageMode(token, deviceId) {
   await page.goto(`${BASE_URL}/document/${TEXT_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
   await waitViewerReady(page)
 
-  await check('meta panel: the Page mode switch paginates the document', async () => {
-    if (!await togglePageMode(page)) return 'no Page mode switch in the meta panel'
-    try {
-      await page.waitForFunction(() =>
-        document.querySelector('iframe').contentDocument.documentElement.classList.contains('pg'),
-        { timeout: 4000 })
-    } catch { return 'viewer never entered page mode (html.pg missing)' }
+  await check('meta panel: the Page segment paginates the document', async () => {
+    if (!await setReadingMode(page, 'Page')) return 'no Page segment in the meta panel'
+    const err = await waitPaginated(page, true)
+    if (err) return err
     const p = await pageTotal(page)
     if (!p) return 'no page indicator rendered'
     if (p.total < 2) return `document did not paginate (indicator says ${p.idx}/${p.total})`
@@ -880,13 +937,10 @@ async function runPageMode(token, deviceId) {
     return after.idx >= 1 && after.idx <= after.total ? null : `page index ${after.idx} out of range`
   })
 
-  await check('page mode: turning it off restores continuous scrolling', async () => {
-    if (!await togglePageMode(page)) return 'no Page mode switch in the meta panel'
-    try {
-      await page.waitForFunction(() =>
-        !document.querySelector('iframe').contentDocument.documentElement.classList.contains('pg'),
-        { timeout: 4000 })
-    } catch { return 'viewer stayed in page mode after toggling off' }
+  await check('page mode: switching to Flow restores continuous scrolling', async () => {
+    if (!await setReadingMode(page, 'Flow')) return 'no Flow segment in the meta panel'
+    const err = await waitPaginated(page, false)
+    if (err) return err
     const o = await frameOverflow(page)
     if (o.v < 100) return `document is not vertically scrollable again (overflow ${o.v}px)`
     if (o.h > 2) return `body still has horizontal page overflow (${o.h}px)`
@@ -900,6 +954,156 @@ async function runPageMode(token, deviceId) {
   await page.close()
 }
 
+// ── Reading mode: flow / auto / page + the page threshold ─────────────────────
+// `auto` is the default: paginate only past the threshold. The decision is made
+// inside the frame (only it can measure), so every check here reads the frame's
+// resolved state, and the threshold is driven through the real Settings field.
+const THRESHOLD_FIELD = '[aria-label="Page threshold"]'
+const AUTO_SWITCH = 'input[aria-label="Auto page mode"]'
+
+// `from` is the value the field must already show — the preference hydrates from
+// storage a tick after the screen mounts, and typing before that lands would be
+// overwritten by the hydrated value.
+async function focusThresholdField(page, from) {
+  await page.goto(`${BASE_URL}/settings`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction((sel, v) => document.querySelector(sel)?.value === v,
+    { timeout: 8000 }, THRESHOLD_FIELD, from)
+  await page.click(THRESHOLD_FIELD, { clickCount: 3 })
+}
+
+async function setThreshold(page, value, from) {
+  await focusThresholdField(page, from)
+  await page.keyboard.type(value, { delay: 150 })
+  await sleep(300) // let the last keystroke land before the blur commits it
+  await page.keyboard.press('Tab')
+  await sleep(400)
+  return page.$eval(THRESHOLD_FIELD, el => el.value)
+}
+
+async function openDoc(page, docId) {
+  await page.goto(`${BASE_URL}/document/${docId}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+  await sleep(700) // the frame resolves the mode right after `init`
+}
+
+async function runReadingMode(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 700 })
+
+  // The previous suite left the preference on Flow (global, persisted) — put it
+  // back to the default the rest of these checks are about.
+  await openDoc(page, SHORT_DOC_ID)
+  await check('reading mode: the Auto segment is selectable in the meta panel', async () => {
+    if (!await setReadingMode(page, 'Auto')) return 'no Auto segment in the meta panel'
+    return waitPaginated(page, false)
+  })
+
+  await check('auto: a document under the threshold stays in continuous scroll', async () => {
+    await openDoc(page, SHORT_DOC_ID)
+    if (await isPaginated(page)) return 'short document paginated under auto'
+    const o = await frameOverflow(page)
+    return o.h > 2 ? `body has horizontal page overflow (${o.h}px) outside page mode` : null
+  })
+
+  await check('auto: the info line names the length, the limit and the resolution', async () => {
+    if (!await openMetaPanel(page)) return 'meta panel did not open'
+    const line = await readingInfo(page)
+    await closeMetaPanel(page)
+    if (!/limit 20/.test(line)) return `info line does not name the limit: "${line}"`
+    if (!/continuous/.test(line)) return `info line does not report the resolution: "${line}"`
+    return /pages here/.test(line) ? null : `info line does not report this document's length: "${line}"`
+  })
+
+  await check('auto: a document over the threshold opens paginated', async () => {
+    await openDoc(page, LONG_DOC_ID)
+    const err = await waitPaginated(page, true)
+    if (err) return err
+    const p = await pageTotal(page)
+    if (!p) return 'no page indicator rendered'
+    return p.total > 20 ? null : `long document is only ${p.total} pages — not over the 20-page limit`
+  })
+
+  await check('flow overrides length: the long document stays continuous', async () => {
+    if (!await setReadingMode(page, 'Flow')) return 'no Flow segment'
+    const err = await waitPaginated(page, false)
+    if (err) return err
+    await openDoc(page, LONG_DOC_ID) // and it stays that way on reopen
+    return isPaginated(page).then(p => p ? 'long document paginated under Flow' : null)
+  })
+
+  await check('page overrides length: the short document paginates', async () => {
+    if (!await setReadingMode(page, 'Page')) return 'no Page segment'
+    await openDoc(page, SHORT_DOC_ID)
+    const err = await waitPaginated(page, true)
+    if (err) return err
+    const p = await pageTotal(page)
+    return p && p.total >= 1 ? null : 'no page indicator on the short document'
+  })
+
+  await check('the reading mode survives a reload', async () => {
+    await page.reload({ waitUntil: 'networkidle2', timeout: 15000 })
+    await waitViewerReady(page)
+    await sleep(700)
+    return waitPaginated(page, true)
+  })
+
+  await check('settings: the auto switch reflects the mode set in the reader', async () => {
+    await page.goto(`${BASE_URL}/settings`, { waitUntil: 'networkidle2', timeout: 15000 })
+    await page.waitForSelector(THRESHOLD_FIELD, { timeout: 8000 })
+    const txt = await page.evaluate(() => document.body.innerText)
+    if (!/Auto Page Mode/.test(txt)) return 'no Auto Page Mode card in Settings'
+    if (!/forced on for every document/.test(txt)) return 'card does not report the forced Page mode'
+    const on = await page.$eval(AUTO_SWITCH, el => el.checked)
+    return on === false ? null : `auto switch reads ${on} while the mode is Page`
+  })
+
+  await check('settings: flipping the auto switch on restores auto', async () => {
+    await page.$eval(AUTO_SWITCH, el => el.click())
+    await sleep(400)
+    const txt = await page.evaluate(() => document.body.innerText)
+    if (!/documents longer than 20 pages open paginated/.test(txt)) return `card still says: ${txt.slice(0, 200)}`
+    await openDoc(page, SHORT_DOC_ID)
+    return isPaginated(page).then(p => p ? 'short document still paginated after auto was restored' : null)
+  })
+
+  await check('settings: raising the threshold un-paginates the long document', async () => {
+    const shown = await setThreshold(page, '200', '20')
+    if (shown !== '200') return `threshold field shows "${shown}" after typing 200`
+    await openDoc(page, LONG_DOC_ID)
+    return isPaginated(page).then(p => p ? 'long document still paginated with a 200-page limit' : null)
+  })
+
+  await check('settings: junk in the threshold field never reaches the setting', async () => {
+    await focusThresholdField(page, '200')
+    await page.keyboard.type('abc', { delay: 150 })
+    await sleep(300)
+    await page.keyboard.press('Tab')
+    await sleep(400)
+    const shown = await page.$eval(THRESHOLD_FIELD, el => el.value)
+    if (shown !== '200') return `field kept junk: "${shown}"`
+    const txt = await page.evaluate(() => document.body.innerText)
+    return /longer than 200 pages/.test(txt) ? null : 'the stored threshold changed on junk input'
+  })
+
+  await check('settings: lowering the threshold paginates the long document again', async () => {
+    const shown = await setThreshold(page, '20', '200')
+    if (shown !== '20') return `threshold field shows "${shown}" after typing 20`
+    await openDoc(page, LONG_DOC_ID)
+    const err = await waitPaginated(page, true)
+    if (err) return err
+    if (!await openMetaPanel(page)) return 'meta panel did not open'
+    const line = await readingInfo(page)
+    await closeMetaPanel(page)
+    return /limit 20 → paginated/.test(line) ? null : `info line reads "${line}"`
+  })
+
+  await sleep(400)
+  if (errors.length) fail('reading mode: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('reading mode: no console/HTTP errors')
+
+  await page.close()
+}
+
 async function main() {
   console.log('\n=== Samizdat integration test ===\n')
   try {
@@ -909,6 +1113,8 @@ async function main() {
     seedVideoDoc(deviceId, VIDEO_DOC_ID)
     seedTextDoc(TEXT_DOC)
     seedTextDoc(FIGURE_DOC)
+    seedTextDoc(SHORT_DOC)
+    seedTextDoc(LONG_DOC)
     seedHighlight({ id: HL_ID, documentId: TEXT_DOC_ID, title: 'Go 1.21 Release', body: HL_BODY })
 
     console.log('  launching browser...')
@@ -920,9 +1126,10 @@ async function main() {
     await runFigureRendering(token, deviceId)
     await runSelectionLifecycle(token, deviceId)
     await runHighlightSelectionLifecycle(token, deviceId)
-    // Last: page mode persists globally (AsyncStorage → shared localStorage), so
-    // leaving it on would silently paginate every earlier check's viewer.
+    // Last: the reading mode persists globally (AsyncStorage → shared localStorage),
+    // so leaving it on Page would silently paginate every earlier check's viewer.
     await runPageMode(token, deviceId)
+    await runReadingMode(token, deviceId)
 
     const failed = results.filter(r => !r.ok)
     if (failed.length) {
