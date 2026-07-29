@@ -69,6 +69,13 @@ let _highlights: HlData[] = []
 let _hlExpanded = true
 let _initialized = false
 
+// Page mode (see the "Page mode" CSS block + section below). _pageStep is the
+// scrollLeft delta between two pages (column width + gap).
+let _pageMode = false
+let _pageIdx = 0
+let _pageCount = 1
+let _pageStep = 0
+
 // ── CSS injection ─────────────────────────────────────────────────────────────
 
 const BASE_CSS = `
@@ -157,6 +164,36 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
    Sit above the footer, wrap on overflow, tap opens the tag selector (hl_tags). */
 .hl-tags{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px 0}
 .hl-tag-chip{padding:2px 8px;border-radius:10px;border:1px solid;font-size:11px;font-weight:600;cursor:pointer;background:transparent;line-height:1.4}
+
+/* ── Page mode ────────────────────────────────────────────────────────────────
+   Strictly additive: EVERY rule below is scoped to html.pg, so with the mode off
+   the continuous-scroll reader is untouched. On, the body becomes a horizontal
+   multi-column scroller — one column = one page — and the browser does the reflow
+   (no manual box measuring). html gets overflow:hidden so the body's overflow is
+   NOT propagated to the viewport and the body really is the scroll container.
+   Column geometry comes from JS (--pgw/--pgh, see layoutPages) because
+   column-width takes no percentages. */
+html.pg{height:100%;overflow:hidden}
+html.pg body{height:100vh;padding:16px 20px 40px;overflow-x:auto;overflow-y:hidden;
+column-width:var(--pgw);column-gap:var(--pgg);column-fill:auto;
+scrollbar-width:none;overscroll-behavior-x:contain}
+html.pg body::-webkit-scrollbar{display:none}
+/* Scroll containers never fragment, so anything taller than a page would spill
+   past it — cap them to the page box and let them scroll inside their page. */
+html.pg pre{max-height:var(--pgh)}
+html.pg img{max-height:calc(var(--pgh) - 24px);object-fit:contain}
+/* Highlights + summaries: one card per page, scrolling internally (content may be
+   cut there — accepted). The section chrome is a scroll container itself and its
+   collapse toggle has no meaning without the section, so both flatten out. */
+html.pg #hl-section{overflow:visible;border:none;background:none;margin:0}
+html.pg #hl-toggle{display:none}
+html.pg #hl-list{padding:0}
+/* touch-action back to auto: the base card sets pan-y for its swipe-triage, which
+   would swallow the horizontal touch pan that turns the page (the swipe is off in
+   page mode — see the pointerdown handler). */
+html.pg .hl-card{max-height:var(--pgh);overflow-y:auto;break-after:column;margin-bottom:0;touch-action:auto}
+#pg-ind{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);display:none;background:var(--su);color:var(--mu);border:1px solid var(--bo);border-radius:12px;padding:2px 10px;font-size:12px;font-variant-numeric:tabular-nums;z-index:95;pointer-events:none}
+html.pg #pg-ind{display:block}
 `
 
 function injectBaseStyles(): void {
@@ -289,6 +326,7 @@ function renderHighlights(): void {
   for (const hl of _highlights) {
     list.appendChild(renderHighlightCard(hl))
   }
+  if (_pageMode) relayout() // cards changed → page boundaries moved
 }
 
 function createHighlightsSection(): HTMLElement {
@@ -376,15 +414,21 @@ function colorForClass(cls: string): string {
   return 'rgba(232,116,59,0.8)'
 }
 
+// Where a mark sits in the document, 0–98% down the gutter. In page mode the body
+// no longer scrolls vertically, so distance is measured in pages instead of pixels.
+function gutterPct(m: HTMLElement, total: number): number {
+  if (_pageMode) return _pageCount > 1 ? (pageOfElement(m) / (_pageCount - 1)) * 98 : 0
+  return Math.min(98, ((m.getBoundingClientRect().top + window.scrollY) / total) * 100)
+}
+
 function updateGutter(): void {
   const gutter = document.getElementById('ann-gutter')
   if (!gutter) return
   gutter.innerHTML = ''
   const total = document.body.scrollHeight
-  if (total <= 0) return
+  if (total <= 0 && !_pageMode) return
   document.querySelectorAll<HTMLElement>('mark[data-ann-id]').forEach(m => {
-    const top = m.getBoundingClientRect().top + window.scrollY
-    const pct = Math.min(98, (top / total) * 100)
+    const pct = gutterPct(m, total)
     const dot = document.createElement('div')
     dot.style.cssText = 'position:absolute;right:0;left:0;height:14px;border-radius:2px 0 0 2px;cursor:pointer;pointer-events:auto;transition:left 0.12s;'
     dot.style.top = pct + '%'
@@ -394,7 +438,7 @@ function updateGutter(): void {
     dot.addEventListener('mouseleave', function (this: HTMLElement) { this.style.left = '0' })
     dot.addEventListener('click', (e: Event) => {
       e.stopPropagation()
-      m.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      revealElement(m)
       sendMsg({ type: 'tap_annotation', id: m.dataset.annId })
     })
     gutter.appendChild(dot)
@@ -487,7 +531,7 @@ function setAnnotations(anns: AnnData[]): void {
     if (id) unmarkSegAnnotation(id)
   })
   for (const a of anns) { applyMark(a); markSegAnnotation(a) }
-  setTimeout(updateGutter, 50)
+  setTimeout(relayout, 50)
 }
 
 // ── Transcript (video documents) ───────────────────────────────────────────────
@@ -612,6 +656,7 @@ interface InitMsg {
   hlExpanded: boolean
   scrollFraction: number
   focusId?: string
+  pageMode?: boolean
 }
 
 function handleInit(msg: InitMsg): void {
@@ -649,12 +694,13 @@ function handleInit(msg: InitMsg): void {
   }
   setTimeout(updateGutter, 80)
 
-  // Restore scroll position
+  // Page mode is a global reading preference owned by the host — apply it before
+  // restoring the reading position so the position lands on the right page.
+  if (msg.pageMode) setPageMode(true)
+
+  // Restore reading position
   if (msg.scrollFraction && msg.scrollFraction > 0) {
-    setTimeout(() => {
-      const max = document.body.scrollHeight - window.innerHeight
-      if (max > 0) window.scrollTo(0, msg.scrollFraction * max)
-    }, 100)
+    setTimeout(() => seekFraction(msg.scrollFraction), 100)
   }
 
   // Focus deep-link — matches an annotation mark or a highlight card
@@ -664,7 +710,7 @@ function handleInit(msg: InitMsg): void {
       const m = document.querySelector<HTMLElement>(`mark[data-ann-id="${id}"]`)
       if (m) {
         m.classList.add('focused')
-        m.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        revealElement(m)
         return
       }
       const card = document.querySelector<HTMLElement>(`.hl-card[data-id="${id}"]`)
@@ -678,7 +724,7 @@ function handleInit(msg: InitMsg): void {
           if (arrow) arrow.textContent = '▲'
         }
         card.classList.add('focused')
-        card.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        revealElement(card)
       }
     }, 400)
   }
@@ -785,23 +831,45 @@ document.addEventListener('click', (e: MouseEvent) => {
 // article reading keeps normal arrow-scroll.
 const HOTKEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '[', ']', '=', 'n', 'N', 'a', 'A'])
 window.addEventListener('keydown', (e: KeyboardEvent) => {
+  // Page mode claims ←/→ for page turns. Same reason the transcript forwards its
+  // hotkeys: the host's window listener never sees a key pressed inside this frame.
+  if (_pageMode && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    e.preventDefault()
+    goToPage(_pageIdx + (e.key === 'ArrowRight' ? 1 : -1))
+    return
+  }
   if (!HOTKEYS.has(e.key)) return
   if (!document.querySelector('.seg[data-start-ms]')) return
   e.preventDefault()
   sendMsg({ type: 'hotkey', key: e.key })
 })
 
-// ── Scroll tracking ───────────────────────────────────────────────────────────
+// ── Reading progress ──────────────────────────────────────────────────────────
+// One fraction (0–1) reported to the host regardless of mode: vertical scroll
+// position when scrolling, page index when paginated.
 
 let _lastFrac = -1
+function reportFraction(frac: number): void {
+  const f = Math.min(1, Math.max(0, frac))
+  if (Math.abs(f - _lastFrac) <= 0.01) return
+  _lastFrac = f
+  sendMsg({ type: 'scroll', fraction: f })
+}
+
+// Jump to a stored reading fraction (progress restore / host scrollTo).
+function seekFraction(frac: number): void {
+  if (_pageMode) {
+    goToPage(Math.round(frac * (_pageCount - 1)), 'auto')
+    return
+  }
+  const max = document.body.scrollHeight - window.innerHeight
+  if (max > 0) window.scrollTo(0, frac * max)
+}
+
 window.addEventListener('scroll', () => {
   const max = document.body.scrollHeight - window.innerHeight
   if (max <= 0) return
-  const frac = Math.min(1, Math.max(0, window.scrollY / max))
-  if (Math.abs(frac - _lastFrac) > 0.01) {
-    _lastFrac = frac
-    sendMsg({ type: 'scroll', fraction: frac })
-  }
+  reportFraction(window.scrollY / max)
   reportActiveVisibility()
 }, { passive: true })
 
@@ -973,6 +1041,7 @@ function clearSwipe(card: HTMLElement | null): void {
 
 document.addEventListener('pointerdown', (e: PointerEvent) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return
+  if (_pageMode) return // a horizontal drag turns the page there; footer buttons still pin/delete
   const target = e.target as HTMLElement
   const card = target.closest && target.closest<HTMLElement>('.hl-card')
   if (!card || !card.dataset.id) return
@@ -1017,9 +1086,188 @@ document.addEventListener('pointercancel', () => {
   clearSwipe(card)
 })
 
-// ── Resize ────────────────────────────────────────────────────────────────────
+// ── Page mode ─────────────────────────────────────────────────────────────────
+// The body is a horizontal multi-column scroller (see the CSS block): the browser
+// reflows the text into columns, we only measure the geometry and drive scrollLeft.
+// Nothing about the DOM changes, so text offsets — and therefore every annotation
+// anchor — are identical in both modes.
+//
+// Navigation: touch panning is the body's own horizontal scroll (that IS the
+// "pull left/right"), snapped to the nearest page once it settles; desktop gets
+// wheel steps and ←/→. CSS scroll-snap can't be used because column boxes are
+// anonymous and cannot carry scroll-snap-align.
 
-window.addEventListener('resize', () => { setTimeout(updateGutter, 100) })
+const PAGE_GAP = 40 // px between two pages
+const PAGE_SNAP_MS = 140 // idle after a free pan before snapping to a page
+const PAGE_WHEEL_MS = 320 // one page per wheel gesture, not per tick
+const RESIZE_MS = 150
+
+function pageIndicator(): HTMLElement {
+  let el = document.getElementById('pg-ind')
+  if (!el) {
+    el = document.createElement('div')
+    el.id = 'pg-ind'
+    document.body.appendChild(el)
+  }
+  return el
+}
+
+// Measure the page box against the CURRENT viewport and publish it to CSS.
+function layoutPages(): void {
+  const b = document.body
+  const cs = getComputedStyle(b)
+  const w = b.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+  const h = b.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
+  const root = document.documentElement
+  root.style.setProperty('--pgw', `${w}px`)
+  root.style.setProperty('--pgh', `${h}px`)
+  root.style.setProperty('--pgg', `${PAGE_GAP}px`)
+  _pageStep = w + PAGE_GAP
+  // Reading scrollWidth flushes the layout the properties above just invalidated.
+  // maxScrollLeft == scrollWidth - clientWidth == (pages - 1) * step.
+  _pageCount = Math.max(1, Math.round((b.scrollWidth - b.clientWidth) / _pageStep) + 1)
+}
+
+function pageOfElement(el: Element): number {
+  if (_pageStep <= 0) return 0
+  const b = document.body
+  const origin = b.getBoundingClientRect().left + parseFloat(getComputedStyle(b).paddingLeft)
+  const x = el.getBoundingClientRect().left - origin + b.scrollLeft
+  return Math.max(0, Math.min(_pageCount - 1, Math.floor(x / _pageStep + 0.01)))
+}
+
+// The element at the top-left of what the reader is currently looking at — the
+// anchor we keep them on across a repagination or a mode switch. Captured whenever
+// the scroll settles, because a `resize` fires AFTER the browser has already
+// reflowed: by then the old reading position is gone and can only come from state.
+let _anchor: Element | null = null
+function readingAnchor(): Element | null {
+  const r = document.body.getBoundingClientRect()
+  const el = document.elementFromPoint(Math.round(r.left + 32), Math.round(r.top + 24))
+  return el && el !== document.body && el !== document.documentElement ? el : null
+}
+
+// Bring an element into view in whichever mode is active.
+function revealElement(el: Element): void {
+  if (_pageMode) goToPage(pageOfElement(el))
+  else el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+function goToPage(i: number, behavior: ScrollBehavior = 'smooth'): void {
+  _pageIdx = Math.max(0, Math.min(_pageCount - 1, i))
+  document.body.scrollTo({ left: _pageIdx * _pageStep, behavior })
+  syncPageState()
+}
+
+function syncPageState(): void {
+  pageIndicator().textContent = `${_pageIdx + 1} / ${_pageCount}`
+  reportFraction(_pageCount > 1 ? _pageIdx / (_pageCount - 1) : 0)
+}
+
+function setPageMode(on: boolean): void {
+  if (on === _pageMode) return
+  const anchor = readingAnchor()
+  _pageMode = on
+  document.documentElement.classList.toggle('pg', on)
+  if (on) {
+    layoutPages()
+    goToPage(anchor ? pageOfElement(anchor) : 0, 'auto')
+    _anchor = anchor
+  } else {
+    _pageIdx = 0
+    _pageStep = 0
+    _pageCount = 1
+    _anchor = null
+    if (anchor) anchor.scrollIntoView({ block: 'start' })
+  }
+  updateGutter()
+}
+
+// Re-measure after a viewport change, keeping the reader where they were: on the
+// last settled anchor, or — if we never got one — proportionally through the doc.
+function relayout(): void {
+  if (_pageMode) {
+    const anchor = _anchor
+    const frac = _pageCount > 1 ? _pageIdx / (_pageCount - 1) : 0
+    layoutPages()
+    goToPage(anchor && anchor.isConnected ? pageOfElement(anchor) : Math.round(frac * (_pageCount - 1)), 'auto')
+  }
+  updateGutter()
+}
+
+// A free pan (touch drag, trackpad) leaves the body between two pages — settle it.
+let _snapTimer: ReturnType<typeof setTimeout> | null = null
+function onBodyScroll(): void {
+  if (!_pageMode || _pageStep <= 0) return
+  const idx = Math.max(0, Math.min(_pageCount - 1, Math.round(document.body.scrollLeft / _pageStep)))
+  if (idx !== _pageIdx) {
+    _pageIdx = idx
+    syncPageState()
+  }
+  if (_snapTimer) clearTimeout(_snapTimer)
+  _snapTimer = setTimeout(() => {
+    if (!_pageMode) return
+    const target = _pageIdx * _pageStep
+    if (Math.abs(document.body.scrollLeft - target) > 1) {
+      document.body.scrollTo({ left: target, behavior: 'smooth' }) // re-fires this handler
+      return
+    }
+    _anchor = readingAnchor()
+  }, PAGE_SNAP_MS)
+}
+// Scroll doesn't bubble, but a capture listener on document still sees the body's.
+document.addEventListener('scroll', (e: Event) => {
+  if (e.target === document.body) onBodyScroll()
+}, true)
+
+// Can `el` (or an ancestor below the body) still scroll vertically by dy? A
+// highlight card or a code block taller than its page keeps the wheel for itself.
+function scrollableAncestor(el: HTMLElement | null, dy: number): boolean {
+  let n = el
+  while (n && n !== document.body) {
+    const oy = getComputedStyle(n).overflowY
+    if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight + 1) {
+      if (dy > 0 ? n.scrollTop + n.clientHeight < n.scrollHeight - 1 : n.scrollTop > 1) return true
+    }
+    n = n.parentElement
+  }
+  return false
+}
+
+let _wheelAt = 0
+window.addEventListener('wheel', (e: WheelEvent) => {
+  if (!_pageMode) return
+  if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return // horizontal trackpad → native pan + snap
+  if (Math.abs(e.deltaY) < 4) return
+  if (scrollableAncestor(e.target as HTMLElement, e.deltaY)) return
+  e.preventDefault()
+  const now = Date.now()
+  if (now - _wheelAt < PAGE_WHEEL_MS) return
+  _wheelAt = now
+  goToPage(_pageIdx + (e.deltaY > 0 ? 1 : -1))
+}, { passive: false })
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+// Throttled (leading edge + one trailing run for the final size) — a drag-resize
+// fires continuously and repagination forces a full reflow.
+
+let _resizePending = false
+let _resizeAt = 0
+window.addEventListener('resize', () => {
+  const wait = RESIZE_MS - (Date.now() - _resizeAt)
+  if (wait <= 0) {
+    _resizeAt = Date.now()
+    relayout()
+    return
+  }
+  if (_resizePending) return
+  _resizePending = true
+  setTimeout(() => {
+    _resizePending = false
+    _resizeAt = Date.now()
+    relayout()
+  }, wait)
+})
 
 // ── Message handler ───────────────────────────────────────────────────────────
 
@@ -1056,12 +1304,13 @@ function handleMessage(event: MessageEvent): void {
       setTheme(msg.theme as ThemeData)
       break
 
-    case 'scrollTo': {
-      const frac = msg.fraction as number
-      const max = document.body.scrollHeight - window.innerHeight
-      if (max > 0) window.scrollTo(0, frac * max)
+    case 'scrollTo':
+      seekFraction(msg.fraction as number)
       break
-    }
+
+    case 'setPageMode':
+      setPageMode(!!msg.on)
+      break
 
     case 'setAnnotations':
       setAnnotations((msg.annotations as AnnData[]) ?? [])
@@ -1072,7 +1321,7 @@ function handleMessage(event: MessageEvent): void {
       const m = document.querySelector<HTMLElement>(`mark[data-ann-id="${annId}"]`)
       if (m) {
         m.classList.add('focused')
-        m.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        revealElement(m)
       }
       break
     }

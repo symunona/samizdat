@@ -64,6 +64,23 @@ const TEXT_DOC = {
     // Hard case for the image lightbox: a figure wrapped in a link. Tapping it must
     // zoom, NOT navigate/open the link sheet. Inline data URI → no network in the test.
     `[![Release diagram](${PIXEL_PNG})](https://go.dev/blog/go1.21)`,
+    '',
+    // Filler prose — page mode needs a body that is genuinely several viewports
+    // long, otherwise "it paginates" and "resize repaginates" are untestable.
+    ...Array.from({ length: 12 }, (_, i) => [
+      `## Section ${i + 1}`,
+      '',
+      `Release engineering notes, part ${i + 1}. The toolchain now refuses to build a ` +
+        'module that declares a newer language version, which surfaces mismatches at ' +
+        'build time instead of at run time. Vendored dependencies keep their own ' +
+        'toolchain lines, so a workspace with mixed versions still resolves ' +
+        'deterministically across machines and CI runners.',
+      '',
+      `Profile-guided optimization graduates in part ${i + 1} as well: a profile ` +
+        'collected from production feeds the compiler, which inlines the hot paths it ' +
+        'actually sees rather than the ones a heuristic guesses at. Reported gains sit ' +
+        'in the low single digits for most services and rather more for parser-heavy ones.',
+    ].join('\n')),
   ].join('\n'),
 }
 
@@ -642,6 +659,171 @@ async function runHighlightSelectionLifecycle(token, deviceId) {
   await page.close()
 }
 
+// ── Page mode ─────────────────────────────────────────────────────────────────
+// Pagination happens inside the viewer frame; the toggle lives in the RN meta panel.
+// So every assertion here crosses the boundary: drive the host control, assert what
+// the frame actually laid out (and that the frame's own interactions still work).
+const pageTotal = (page) => page.evaluate(() => {
+  const ind = document.querySelector('iframe').contentDocument.getElementById('pg-ind')
+  const m = /(\d+)\s*\/\s*(\d+)/.exec(ind ? ind.textContent : '')
+  return m ? { idx: Number(m[1]), total: Number(m[2]) } : null
+})
+
+async function togglePageMode(page) {
+  if (!await clickByText(page, e => (e.innerText || '').trim() === '⋮', 'meta panel ⋮')) return false
+  await sleep(500)
+  const flipped = await page.evaluate(() => {
+    const box = document.querySelector('input[type="checkbox"]')
+    if (!box) return false
+    box.click()
+    return true
+  })
+  await sleep(400)
+  // The panel may still be up (it doesn't dismiss itself) — it would cover the frame.
+  const stillOpen = await page.evaluate(() => document.body.innerText.includes('Document info'))
+  if (stillOpen) {
+    await clickByText(page, e => (e.innerText || '').trim() === '×', 'close meta panel')
+    await sleep(400)
+  }
+  return flipped
+}
+
+// Vertical scrollability of the frame's document + horizontal of its body: the two
+// switch places between the modes (scrolling reader vs paginated reader).
+const frameOverflow = (page) => page.evaluate(() => {
+  const d = document.querySelector('iframe').contentDocument
+  return {
+    v: d.documentElement.scrollHeight - d.documentElement.clientHeight,
+    h: d.body.scrollWidth - d.body.clientWidth,
+  }
+})
+
+async function runPageMode(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 700 })
+  await page.goto(`${BASE_URL}/document/${TEXT_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+
+  await check('meta panel: the Page mode switch paginates the document', async () => {
+    if (!await togglePageMode(page)) return 'no Page mode switch in the meta panel'
+    try {
+      await page.waitForFunction(() =>
+        document.querySelector('iframe').contentDocument.documentElement.classList.contains('pg'),
+        { timeout: 4000 })
+    } catch { return 'viewer never entered page mode (html.pg missing)' }
+    const p = await pageTotal(page)
+    if (!p) return 'no page indicator rendered'
+    if (p.total < 2) return `document did not paginate (indicator says ${p.idx}/${p.total})`
+    // Reading direction flipped: a page is one viewport tall, pages run sideways.
+    const o = await frameOverflow(page)
+    if (o.v > 2) return `document still scrolls vertically by ${o.v}px in page mode`
+    if (o.h < 10) return `body has no horizontal page overflow (${o.h}px)`
+    return null
+  })
+
+  await check('page mode: text selection still raises the Annotate button', async () => {
+    const selText = await page.evaluate(() => {
+      const ifr = document.querySelector('iframe')
+      const d = ifr.contentDocument, w = ifr.contentWindow
+      const p = d.querySelector('#sam-article p')
+      const link = p.querySelector('a')
+      const r = d.createRange()
+      r.setStart(p.firstChild, 0)
+      const endNode = link.nextSibling && link.nextSibling.nodeType === 3 ? link.nextSibling : link.firstChild
+      r.setEnd(endNode, Math.min(5, (endNode.nodeValue || 'xxxxx').length))
+      const sel = w.getSelection(); sel.removeAllRanges(); sel.addRange(r)
+      const t = sel.toString()
+      d.dispatchEvent(new w.MouseEvent('mouseup', { bubbles: true }))
+      return t
+    })
+    if (!selText.includes('download page')) return `selection did not cross the link: "${selText}"`
+    const disp = await page.evaluate(() => {
+      const b = document.querySelector('iframe').contentDocument.getElementById('ann-btn')
+      return b ? b.style.display : '(no button)'
+    })
+    if (disp !== 'block') return `ann-btn display is "${disp}" — selection broken by page mode`
+    await page.evaluate(() => {
+      const w = document.querySelector('iframe').contentWindow
+      w.getSelection().removeAllRanges()
+      w.document.dispatchEvent(new w.MouseEvent('mouseup', { bubbles: true }))
+    })
+    return null
+  })
+
+  await check('page mode: tapping a figure still opens the lightbox', async () => {
+    await page.evaluate(() => {
+      const ifr = document.querySelector('iframe')
+      ifr.contentDocument.querySelector('#sam-article a img')
+        .dispatchEvent(new ifr.contentWindow.MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    try {
+      await page.waitForSelector('[data-testid="image-lightbox-close"]', { timeout: 5000 })
+    } catch { return 'no lightbox overlay after image click in page mode' }
+    await page.click('[data-testid="image-lightbox-close"]')
+    await sleep(300)
+    return null
+  })
+
+  await check('page mode: ArrowRight inside the frame advances the page', async () => {
+    const before = await pageTotal(page)
+    await page.evaluate(() => {
+      const ifr = document.querySelector('iframe')
+      ifr.contentDocument.dispatchEvent(
+        new ifr.contentWindow.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    })
+    await sleep(600)
+    const after = await pageTotal(page)
+    if (!after || after.idx !== before.idx + 1) {
+      return `page index went ${before && before.idx} → ${after && after.idx}`
+    }
+    const left = await page.evaluate(() => document.querySelector('iframe').contentDocument.body.scrollLeft)
+    return left > 0 ? null : 'indicator advanced but the body never scrolled'
+  })
+
+  await check('page mode: ArrowLeft goes back', async () => {
+    const before = await pageTotal(page)
+    await page.evaluate(() => {
+      const ifr = document.querySelector('iframe')
+      ifr.contentDocument.dispatchEvent(
+        new ifr.contentWindow.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+    })
+    await sleep(600)
+    const after = await pageTotal(page)
+    return after && after.idx === before.idx - 1 ? null : `page index went ${before.idx} → ${after && after.idx}`
+  })
+
+  await check('page mode: a narrower viewport recalculates the page count', async () => {
+    const before = await pageTotal(page)
+    await page.setViewport({ width: 480, height: 620 })
+    await sleep(1200) // > the 150ms resize throttle
+    const after = await pageTotal(page)
+    if (!after) return 'page indicator disappeared after resize'
+    if (after.total <= before.total) {
+      return `narrower viewport did not add pages (${before.total} → ${after.total})`
+    }
+    return after.idx >= 1 && after.idx <= after.total ? null : `page index ${after.idx} out of range`
+  })
+
+  await check('page mode: turning it off restores continuous scrolling', async () => {
+    if (!await togglePageMode(page)) return 'no Page mode switch in the meta panel'
+    try {
+      await page.waitForFunction(() =>
+        !document.querySelector('iframe').contentDocument.documentElement.classList.contains('pg'),
+        { timeout: 4000 })
+    } catch { return 'viewer stayed in page mode after toggling off' }
+    const o = await frameOverflow(page)
+    if (o.v < 100) return `document is not vertically scrollable again (overflow ${o.v}px)`
+    if (o.h > 2) return `body still has horizontal page overflow (${o.h}px)`
+    return null
+  })
+
+  await sleep(400)
+  if (errors.length) fail('page mode: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('page mode: no console/HTTP errors')
+
+  await page.close()
+}
+
 async function main() {
   console.log('\n=== Samizdat integration test ===\n')
   try {
@@ -660,6 +842,9 @@ async function main() {
     await runImageLightbox(token, deviceId)
     await runSelectionLifecycle(token, deviceId)
     await runHighlightSelectionLifecycle(token, deviceId)
+    // Last: page mode persists globally (AsyncStorage → shared localStorage), so
+    // leaving it on would silently paginate every earlier check's viewer.
+    await runPageMode(token, deviceId)
 
     const failed = results.filter(r => !r.ok)
     if (failed.length) {

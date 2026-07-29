@@ -87,3 +87,56 @@ is broken into discrete pages sized to the current viewport; navigate by horizon
   agent-browser (screenshot `tmp/screenshots/image-lightbox.png`) + 4 new checks in
   `e2e/integration.js` (`runImageLightbox`) — `just e2e-int` 31/31 green.
 - 2026-07-29 — feature 2 delegated.
+- 2026-07-29 — **feature 2 DONE**. CSS columns held up; scroll-snap did not.
+
+  **Approach as built.** `html.pg` (set by the viewer) turns the *body* into a
+  horizontal multi-column scroller: `column-width:var(--pgw)` + `column-fill:auto`
+  on a `100vh` box, `html{overflow:hidden}` so the body's overflow is NOT
+  propagated to the viewport and the body really is the scroll container. Every
+  page-mode rule is scoped to `html.pg` and **no DOM node is added or moved**, so
+  with the toggle off the reader is byte-identical, and body-text offsets — hence
+  every annotation anchor — are the same in both modes.
+
+  **Deviations from the plan, with reasons:**
+  - *No `scroll-snap`.* Column boxes are anonymous; nothing can carry
+    `scroll-snap-align`, so CSS snapping is impossible on a multicol. Replaced by
+    native panning + a 140ms scroll-idle snap to the nearest page (`onBodyScroll`).
+    That also removes the need for a bespoke pointer-drag: on touch, the body's own
+    horizontal pan IS the "pull left/right", and it settles on a page. Desktop gets
+    wheel steps (one page per gesture, 320ms cooldown, yielding to an inner
+    scroller) and ←/→ handled inside the frame (the frame swallows keydown).
+  - *One page per highlight card, not one page for the whole section* — the user's
+    wording ("make them one per page, they can scroll within"). `.hl-card` gets
+    `max-height:var(--pgh); overflow-y:auto; break-after:column`: a scroll container
+    never fragments, so the card is placed whole in one column and scrolls
+    internally when it doesn't fit. Same cap on `pre`/`img` (both are already
+    monolithic, so uncapped they would spill past their page). The section chrome
+    and its collapse toggle are hidden in page mode.
+  - *Card swipe-triage is off in page mode* — a horizontal drag turns the page
+    there; the footer buttons still pin/delete. `touch-action` is reset to `auto`
+    on the card, otherwise the base `pan-y` would swallow the page pan.
+  - *Gutter:* dots position by page index (`gutterPct`) instead of pixel height,
+    and a dot click calls the new `revealElement` (page jump vs `scrollIntoView`),
+    shared with `highlightAnnotation` and the `focusId` deep-link.
+  - *Progress:* one `reportFraction` used by both modes — vertical position when
+    scrolling, `pageIdx/(pageCount-1)` when paginated; `seekFraction` restores in
+    whichever mode is active.
+  - *Resize:* throttled 150ms (leading + one trailing). **Bug found and fixed
+    live:** resizing with an anchor read *inside* the handler loses the reader's
+    place, because `resize` fires AFTER the browser has already reflowed. The
+    anchor is now captured whenever the scroll settles (`_anchor`), with a
+    proportional fallback. Verified: the element at the top of page 41/85 landed
+    exactly on page 30/63 after a resize, indicator 30/63.
+  - Preference is **global** (`samizdat_page_mode`), not per-doc — it's a reading
+    preference. The pagination lives entirely in the WebView; the host owns only
+    the meta-panel `Switch` + persistence + the `pageMode` field on `init`.
+
+  **Verified:** `just lint` clean (incl. `spec parity` OK), `just build`,
+  `just webview-build`, `just e2e` green, `just e2e-int` 39/39 (7 new page-mode
+  checks). Live in agent-browser on a 109-page real document: real ArrowLeft/Right
+  keypresses with focus in the frame, a synthetic wheel gesture, a mid-page free
+  pan settling onto a page boundary, selection→Annotate, image→lightbox, gutter dot
+  → page jump, highlight pin, internal card scrolling at 390px wide, and toggle
+  off restoring continuous scroll. Screenshots in `tmp/screenshots/pagemode-*.png`.
+  **Not verifiable headless:** a real finger swipe on Android — it rides the
+  WebView's native horizontal overflow scroll, which no synthetic event exercises.

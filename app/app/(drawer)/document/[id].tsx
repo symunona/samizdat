@@ -10,6 +10,7 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   View,
 } from 'react-native'
@@ -50,6 +51,9 @@ import { ImageLightbox } from '../../../src/ImageViewer'
 import PendingPipelineBanner from '../../../src/PendingPipelineBanner'
 
 const DEBOUNCE_MS = 1000
+// Page mode is a reading preference, not a property of one article — one global key
+// (unlike `doc_hl_exp_<id>`, which is per-document state).
+const PAGE_MODE_KEY = 'samizdat_page_mode'
 
 type ParsedMsg = {
   type: string
@@ -122,6 +126,17 @@ export default function DocumentViewer() {
     }).catch(() => {})
   }, [id])
 
+  // Page mode: paginate the article into viewport-sized pages. The pagination
+  // itself lives in the WebView (only it knows the laid-out box sizes) — the host
+  // owns the toggle and its persistence.
+  const [pageMode, setPageMode] = useState(false)
+
+  useEffect(() => {
+    AsyncStorage.getItem(PAGE_MODE_KEY).then(val => {
+      if (val !== null) setPageMode(val === '1')
+    }).catch(() => {})
+  }, [])
+
   const [sourceFeed, setSourceFeed] = useState<Feed | null>(null)
 
   const handleThemeToggle = useCallback(async () => {
@@ -164,6 +179,12 @@ export default function DocumentViewer() {
     if (!isDocLoadedRef.current) return
     sendToWebView({ type: 'setAnnotations', annotations })
   }, [sendToWebView, annotations])
+
+  const handlePageModeChange = useCallback((next: boolean) => {
+    setPageMode(next)
+    AsyncStorage.setItem(PAGE_MODE_KEY, next ? '1' : '0').catch(() => {})
+    sendToWebView({ type: 'setPageMode', on: next })
+  }, [sendToWebView])
 
   // Meta panel state
   const [metaVisible, setMetaVisible] = useState(false)
@@ -354,6 +375,7 @@ export default function DocumentViewer() {
         annotations,
         theme: { background: bg, text: fg, surface: su, border: bo, accent: ac, muted: mu },
         hlExpanded,
+        pageMode,
         scrollFraction: savedProgressRef.current,
         focusId: highlight,
       })
@@ -429,7 +451,7 @@ export default function DocumentViewer() {
         return next
       })
     }
-  }, [id, headerAnim, annotations, highlights, hlExpanded, highlight,
+  }, [id, headerAnim, annotations, highlights, hlExpanded, highlight, pageMode,
     doc, bg, fg, su, bo, ac, mu, sendToWebView, toHlData, handleLinkPress, router])
 
   // Native WebView message handler
@@ -683,6 +705,20 @@ export default function DocumentViewer() {
               </Pressable>
             </View>
             <View style={s.metaDivider} />
+            <View style={s.metaToggleRow}>
+              <Ionicons name="book-outline" size={18} color={theme.colors.muted} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.metaToggleLabel}>Page mode</Text>
+                <Text style={s.metaToggleHint}>Read in pages — swipe or ← → to turn</Text>
+              </View>
+              <Switch
+                value={pageMode}
+                onValueChange={handlePageModeChange}
+                trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+                thumbColor={theme.colors.background}
+              />
+            </View>
+            <View style={s.metaDivider} />
             <View style={s.metaRow}>
               <Text style={s.metaLabel}>URL</Text>
               <Text style={s.metaValue} numberOfLines={3}>{doc.canonical_url}</Text>
@@ -789,6 +825,9 @@ function buildStyles(t: Theme) {
     themeToggleBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: t.spacing.sm },
     themeToggleTxt: { color: t.colors.muted, fontSize: 13 },
     metaRow: { marginBottom: t.spacing.sm },
+    metaToggleRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
+    metaToggleLabel: { color: t.colors.text, fontSize: 14, fontWeight: '600' },
+    metaToggleHint: { color: t.colors.muted, fontSize: 11 },
     metaLabel: { color: t.colors.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
     metaValue: { color: t.colors.text, fontSize: 14 },
     metaMuted: { color: t.colors.muted, fontSize: 12 },
