@@ -299,16 +299,98 @@ func spliceFigures(frags []pdfFrag, boxes []pdfBox, page, idBase int, bound floa
 			caption: captionFor(b, lines),
 		}
 		figs = append(figs, fig)
+		// The text drawn INSIDE the box — table cells, axis labels, in-plot
+		// legends — is not prose and must not be reflowed as if it were. Lift it
+		// out of the stream and re-attach it under the figure.
+		rest, inside := takeInterior(out, b, len(frags))
+		out = rest
 		// A figure that spans the gutter belongs to neither column; anchor it in
 		// the left one, which reads first.
 		x := b.l
 		if b.r > bound && b.l < bound {
 			x = bound - 1
 		}
-		out = insertFrag(out, pdfFrag{x: x, y: b.t, text: fig.markdown()}, bound)
+		out = insertFrag(out, pdfFrag{x: x, y: b.t, text: fig.markdown() + interiorBlock(inside, fig.caption)}, bound)
 	}
 	return out, figs
 }
+
+// interiorShare caps the fraction of a page's fragments one figure may absorb.
+// A mis-detected box can cover most of a page; swallowing the body into a
+// collapsed block would hide the article itself.
+const interiorShare = 0.6
+
+// minInteriorFrags is the fewest interior lines worth collapsing. One or two
+// stray axis labels read fine in place; a table does not.
+const minInteriorFrags = 3
+
+// takeInterior splits a page's fragments into those drawn outside the figure box
+// and those drawn inside it. It gives up (returning everything as outside) when
+// the box would absorb more than interiorShare of the page, or when too little
+// text sits inside to be worth collapsing.
+//
+// The geometry is the same test captionFor already applies to reject an axis
+// label as a caption — a fragment carries the x it starts at and its baseline y.
+func takeInterior(frags []pdfFrag, b pdfBox, pageFrags int) (outside, inside []pdfFrag) {
+	for _, f := range frags {
+		if f.y > b.b && f.y < b.t && f.x >= b.l && f.x <= b.r {
+			inside = append(inside, f)
+		} else {
+			outside = append(outside, f)
+		}
+	}
+	if len(inside) < minInteriorFrags || float64(len(inside)) > interiorShare*float64(pageFrags) {
+		return frags, nil
+	}
+	return outside, inside
+}
+
+// interiorBlock renders a figure's interior text as a collapsed HTML block that
+// follows the image.
+//
+// The text stays in documents.markdown — searchable, exported to the vault, and
+// visible to DetectFalseParse — it is only visually subordinate to the picture,
+// which is the readable rendering of the same content. Fragments sharing a
+// baseline are re-joined, so a table keeps its rows instead of being glued into
+// one paragraph by reflowParagraphs.
+//
+// The whole block is ONE line: joinFrags splits fragments on newlines and
+// reflowParagraphs would treat each row as wrapped prose. `<br>` carries the row
+// breaks instead, and reflowParagraphs skips the line by its `<details>` prefix.
+func interiorBlock(inside []pdfFrag, caption string) string {
+	if len(inside) == 0 {
+		return ""
+	}
+	rows := make([]string, 0, len(inside))
+	for i, f := range inside {
+		// Same baseline as the previous fragment → same printed row (a line the
+		// gutter split in two). Anything else starts a new row.
+		if i > 0 && f.y == inside[i-1].y {
+			rows[len(rows)-1] += "  " + escapeHTMLText(f.text)
+			continue
+		}
+		rows = append(rows, escapeHTMLText(f.text))
+	}
+	return "\n<details><summary>" + interiorSummary(caption) + "</summary><pre>" +
+		strings.Join(rows, "<br>") + "</pre></details>"
+}
+
+// interiorSummary labels the collapsed block with what the figure is called
+// ("Table 1 — text"), falling back to a generic label when it has no caption.
+func interiorSummary(caption string) string {
+	fields := strings.Fields(caption)
+	if len(fields) >= 2 && isCaptionLine(caption) {
+		return escapeHTMLText(strings.Trim(fields[0]+" "+fields[1], ":.")) + " — text"
+	}
+	return "Text in this figure"
+}
+
+// escapeHTMLText makes extracted glyphs safe inside the raw HTML block. The
+// markdown is rendered without a sanitizer, so a stray "<" in the source would
+// otherwise open a tag.
+var htmlTextEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
+func escapeHTMLText(s string) string { return htmlTextEscaper.Replace(s) }
 
 // insertFrag places a fragment in its column, below every line that sits higher
 // on the page than it does. Fragments are already ordered left column then right
@@ -369,8 +451,9 @@ func reflowParagraphs(text string) string {
 			continue
 		}
 		// A figure is its own block: it must never be glued onto the paragraph
-		// above it, and the paragraph below it starts fresh.
-		if strings.HasPrefix(ln, "![") {
+		// above it, and the paragraph below it starts fresh. So is the figure's
+		// interior text, which spliceFigures emits as one <details> line.
+		if strings.HasPrefix(ln, "![") || strings.HasPrefix(ln, "<details>") {
 			flush()
 			out = append(out, ln)
 			continue

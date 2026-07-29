@@ -2,8 +2,29 @@
 created: 2026-07-29
 topic: PDF tables — why the text is ugly, how to parse them properly, and what to do this week
 excerpt: The PDF figure work (1f022ca) renders tables as images, which the owner likes, but the same table also lands in the markdown as a flat blob of numbers with the rows glued together. This is not a table-parsing bug — there is no table parser; it is the generic prose path applied to glyphs that were never prose. MuPDF (already linked) has fz_table_hunt; go-fitz does not expose it. Near-term: keep the text, move it out of the prose stream, and frame the picture.
-status: research
+status: cheap-win-server-done
 ---
+
+## Status log
+- 2026-07-29 — research written (below).
+- 2026-07-29 — **§5 "cheap win now" step 1 (server) DONE.** `takeInterior` /
+  `interiorBlock` in `server/internal/worker/pdf.go`: figure-box interior text is
+  lifted out of the prose stream and re-attached under the image as a collapsed
+  `<details><pre>` block, one printed row per `<br>`, HTML-escaped. Guards: a box
+  absorbing >60% of a page's fragments is ignored (mis-detection), fewer than 3
+  interior lines are left in place. `reflowParagraphs` skips the block by its
+  `<details>` prefix. Verified against the real paper (`arxiv.org/pdf/2604.21751`):
+  Table 1 and Table 10 now read as rows, and the torn-off `Div Ent` columns land
+  inside their own table's block instead of after an unrelated paragraph.
+  Deviation from the plan: **column x-padding was not implemented** (a `pdfFrag`
+  carries no font size, so there is no honest points→characters scale; row
+  separation alone removes the unreadability). **The duplicated caption was NOT
+  dropped** — `captionFor` captures only the caption's FIRST line (the `alt` in
+  the DB is visibly truncated mid-sentence), so removing the inline copy would
+  lose the continuation. Consequently step 2's `<figcaption>` is also skipped:
+  it would render the truncated caption a second time, right above the full one.
+- 2026-07-29 — step 2 (app: figure frame CSS, `details`/`summary`/`pre` styling,
+  table CSS) pending: `document-viewer.ts` is being edited by the page-mode work.
 
 # PDF tables: current mechanism, options, recommendation
 

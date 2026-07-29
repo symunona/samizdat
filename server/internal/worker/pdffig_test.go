@@ -166,6 +166,128 @@ func TestSpliceFiguresPlacesFigureByHeight(t *testing.T) {
 	}
 }
 
+// A table's cells are drawn inside the figure box. Left in the prose stream they
+// reflow into one unreadable blob of numbers; they belong under the picture.
+func TestSpliceFiguresCollapsesInteriorText(t *testing.T) {
+	frags := []pdfFrag{
+		{x: 100, y: 700, text: "body text above"},
+		{x: 110, y: 560, text: "Model Own"},
+		{x: 110, y: 540, text: "GPT 24,763"},
+		{x: 110, y: 520, text: "Gemini 20,172"},
+		{x: 100, y: 380, text: "Table 1: frontier model outputs"},
+		{x: 100, y: 300, text: "body text below"},
+	}
+	boxes := []pdfBox{{l: 100, b: 400, r: 400, t: 600}}
+	media := pdfBox{r: 612, t: 792}
+
+	got, figs := spliceFigures(frags, boxes, 3, 0, pdfSingleColumn, media)
+
+	var joined []string
+	for _, f := range got {
+		joined = append(joined, f.text)
+	}
+	all := strings.Join(joined, "\n")
+
+	for _, cell := range []string{"GPT 24,763", "Gemini 20,172", "Model Own"} {
+		if !strings.Contains(all, cell) {
+			t.Errorf("interior text %q was dropped — it must stay searchable", cell)
+		}
+		if strings.Contains(joined[0], cell) || strings.Contains(joined[len(joined)-1], cell) {
+			t.Errorf("interior text %q still sits in the prose stream", cell)
+		}
+	}
+
+	figLine := joined[1]
+	if !strings.HasPrefix(figLine, figs[0].markdown()) {
+		t.Fatalf("figure line does not open with the image: %q", figLine)
+	}
+	if !strings.Contains(figLine, "<details><summary>Table 1 — text</summary><pre>") {
+		t.Errorf("no captioned collapsible under the figure: %q", figLine)
+	}
+	// Rows must survive as rows, not be glued together.
+	if !strings.Contains(figLine, "GPT 24,763<br>Gemini 20,172") {
+		t.Errorf("printed rows were glued: %q", figLine)
+	}
+	// One line, or joinFrags + reflowParagraphs would treat each row as prose.
+	if strings.Contains(strings.TrimPrefix(figLine, figs[0].markdown()+"\n"), "\n") {
+		t.Errorf("the block must be a single line: %q", figLine)
+	}
+}
+
+// A mis-detected box can cover most of a page. Collapsing that would hide the
+// article behind a "show text" toggle.
+func TestSpliceFiguresKeepsProseWhenBoxSwallowsThePage(t *testing.T) {
+	var frags []pdfFrag
+	for i := 0; i < 10; i++ {
+		frags = append(frags, pdfFrag{x: 100, y: float64(600 - i*20), text: "a line of ordinary body prose"})
+	}
+	boxes := []pdfBox{{l: 50, b: 100, r: 500, t: 700}}
+
+	got, _ := spliceFigures(frags, boxes, 1, 0, pdfSingleColumn, pdfBox{r: 612, t: 792})
+	for _, f := range got {
+		if strings.Contains(f.text, "<details>") {
+			t.Fatalf("a page-sized box swallowed the body: %q", f.text)
+		}
+	}
+	if len(got) != len(frags)+1 { // every line kept, plus the image
+		t.Errorf("got %d fragments, want %d", len(got), len(frags)+1)
+	}
+}
+
+// A stray axis label reads fine where it is; a collapsible for it is noise.
+func TestSpliceFiguresLeavesTinyInteriorTextAlone(t *testing.T) {
+	frags := []pdfFrag{
+		{x: 100, y: 700, text: "body text above"},
+		{x: 110, y: 500, text: "accuracy"},
+	}
+	boxes := []pdfBox{{l: 100, b: 400, r: 400, t: 600}}
+
+	got, _ := spliceFigures(frags, boxes, 1, 0, pdfSingleColumn, pdfBox{r: 612, t: 792})
+	for _, f := range got {
+		if strings.Contains(f.text, "<details>") {
+			t.Fatalf("one axis label was collapsed: %q", f.text)
+		}
+	}
+}
+
+func TestReflowKeepsInteriorTextBlockIntact(t *testing.T) {
+	block := "<details><summary>Table 1 — text</summary><pre>a<br>b</pre></details>"
+	text := strings.Join([]string{
+		"a wrapped line of body text that runs the full column width here",
+		"a wrapped line of body text that runs the full column width here",
+		block,
+		"a wrapped line of body text that runs the full column width here",
+		"short tail.",
+		"a wrapped line of body text that runs the full column width here",
+		"a wrapped line of body text that runs the full column width here",
+		"another line of body text that runs the full column width in here",
+		"one more line of body text that runs the full column width in here",
+	}, "\n")
+
+	for _, para := range strings.Split(reflowParagraphs(text), "\n\n") {
+		if strings.Contains(para, "<details>") && para != block {
+			t.Fatalf("interior-text block merged into a paragraph: %q", para)
+		}
+	}
+}
+
+func TestInteriorBlockEscapesMarkup(t *testing.T) {
+	got := interiorBlock([]pdfFrag{
+		{x: 1, y: 3, text: "p < 0.05 & rising"},
+		{x: 1, y: 2, text: "n > 10"},
+		{x: 1, y: 1, text: "ok"},
+	}, "")
+	if strings.Contains(got, "p < 0.05") || strings.Contains(got, "n > 10") {
+		t.Errorf("raw markup reached the HTML block: %q", got)
+	}
+	if !strings.Contains(got, "p &lt; 0.05 &amp; rising") {
+		t.Errorf("escaping is wrong: %q", got)
+	}
+	if !strings.Contains(got, "<summary>Text in this figure</summary>") {
+		t.Errorf("uncaptioned figure lost its fallback label: %q", got)
+	}
+}
+
 func TestReflowKeepsFigureOnItsOwnLine(t *testing.T) {
 	// The line above runs the full column width, so without the figure guard it
 	// would swallow the image into its paragraph.

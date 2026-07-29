@@ -222,8 +222,27 @@ Additive changes (new table / new column with default) go in the `additiveMigrat
       `resolveFigures` deletes any placeholder that never got one, so a failed
       render can never leave a broken image.
     - Tables are detected too (they are ruled drawings) — you get both the crop
-      and the flattened table text. Deliberate: the column-flattened text of a
-      table is often unreadable, the picture is not.
+      and the table text. Deliberate: the column-flattened text of a table is
+      often unreadable, the picture is not.
+    - **Text drawn INSIDE a figure box is lifted out of the prose stream**
+      (`takeInterior` → `interiorBlock` in `pdf.go`) and re-attached under the
+      image as a collapsed `<details><pre>` block, one printed row per `<br>`.
+      Without this, `reflowParagraphs` reads every full-width table row as a
+      wrapped line and glues the whole table into one paragraph of numbers, and
+      `splitAtGutter` tears a wide table's right-hand columns off to a different
+      part of the page. The text stays in `documents.markdown` — searchable,
+      exported, visible to `DetectFalseParse` — only visually subordinate.
+      Two guards: a box absorbing > 60% of a page's fragments is treated as
+      mis-detected and nothing is moved; fewer than 3 interior lines (a lone axis
+      label) are left in place. The block is ONE line and `reflowParagraphs`
+      skips it by its `<details>` prefix, the same way it skips `![`.
+    - Still open: the caption is duplicated — once (truncated to its first line)
+      in the image `alt`, once inline as prose. `captionFor` only ever takes one
+      line, so dropping the inline copy would lose the continuation.
+    - There is **no table parser**. MuPDF's `fz_table_hunt` is inside the static
+      archive we already link, but go-fitz doesn't expose it (`opts.flags = 0`);
+      a real `| a | b |` needs a go-fitz fork. See
+      `plan/2026-07-29-pdf-table-parsing-research.md`.
   - A scanned/image-only PDF has no text layer → `DetectFalseParse` flags the
     Document and the job fails permanently. No OCR.
   - **cgo is REQUIRED for the server** because of MuPDF (`just build` sets
