@@ -3,6 +3,7 @@ package linting
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -66,6 +67,12 @@ func reviewProject(repoRoot, proj string, ai *claude.Client) error {
 
 	prompt := buildReviewPrompt(proj, string(claudeMD), diff)
 	result, err := ai.Complete(context.Background(), claude.ModelSonnet, prompt)
+	if errors.Is(err, claude.ErrTruncated) {
+		// The reply is a PREFIX of the intended CLAUDE.md. Writing it deletes
+		// everything past the cut — which is exactly how server/CLAUDE.md lost 67
+		// lines of PDF and video notes. Never write a truncated rewrite.
+		return fmt.Errorf("review of %s/ was truncated at max_tokens — refusing to touch CLAUDE.md", proj)
+	}
 	if err != nil {
 		return fmt.Errorf("claude complete: %w", err)
 	}
@@ -78,6 +85,14 @@ func reviewProject(repoRoot, proj string, ai *claude.Client) error {
 	if !update || updatedMD == "" {
 		fmt.Println("  No CLAUDE.md changes suggested.")
 		return nil
+	}
+
+	// Second guard, independent of the API: a doc review ADDS institutional
+	// knowledge. A rewrite that loses a meaningful share of the file is a
+	// truncation or a misfire, not an edit — and the Y/n prompt defaults to yes,
+	// so nothing else stands between it and the file.
+	if lost, ok := shrinksTooMuch(string(claudeMD), updatedMD); !ok {
+		return fmt.Errorf("proposed %s/CLAUDE.md drops %d%% of the file — refusing to write", proj, lost)
 	}
 
 	showClaudeMDDiff(string(claudeMD), updatedMD)
@@ -95,6 +110,21 @@ func reviewProject(repoRoot, proj string, ai *claude.Client) error {
 	}
 	fmt.Printf("Updated %s/CLAUDE.md\n", proj)
 	return nil
+}
+
+// maxShrinkPct is how much smaller a proposed CLAUDE.md may be than the current
+// one. Some shrink is legitimate (tightening prose, dropping a stale section);
+// losing a third of the file is not.
+const maxShrinkPct = 15
+
+// shrinksTooMuch reports whether a proposed rewrite keeps enough of the original,
+// and by what percentage it shrank when it does not.
+func shrinksTooMuch(current, proposed string) (int, bool) {
+	if len(current) == 0 {
+		return 0, true // no file yet: anything is an addition
+	}
+	lost := 100 * (len(current) - len(proposed)) / len(current)
+	return lost, lost <= maxShrinkPct
 }
 
 func buildReviewPrompt(proj, claudeMD, diff string) string {

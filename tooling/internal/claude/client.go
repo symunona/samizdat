@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -30,10 +31,17 @@ type response struct {
 	Content []struct {
 		Text string `json:"text"`
 	} `json:"content"`
-	Error *struct {
+	StopReason string `json:"stop_reason"`
+	Error      *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
 }
+
+// ErrTruncated reports that the model hit max_tokens, so the text returned is a
+// PREFIX of the intended answer. A caller that writes the response to a file must
+// treat this as fatal — see diff_review, where ignoring it silently overwrote a
+// CLAUDE.md with two thirds of it missing.
+var ErrTruncated = errors.New("response truncated at max_tokens")
 
 func New() (*Client, error) {
 	key := os.Getenv("ANTHROPIC_API_KEY")
@@ -47,8 +55,10 @@ func New() (*Client, error) {
 // model: use ModelHaiku for quick tasks, ModelSonnet for analysis.
 func (c *Client) Complete(ctx context.Context, model, prompt string) (string, error) {
 	body, err := json.Marshal(request{
-		Model:     model,
-		MaxTokens: 4096,
+		Model: model,
+		// A full CLAUDE.md rewrite is the largest response any tool here asks for;
+		// server/CLAUDE.md alone is ~4k tokens, which 4096 could not hold.
+		MaxTokens: 16384,
 		Messages:  []message{{Role: "user", Content: prompt}},
 	})
 	if err != nil {
@@ -78,6 +88,9 @@ func (c *Client) Complete(ctx context.Context, model, prompt string) (string, er
 	}
 	if len(result.Content) == 0 {
 		return "", fmt.Errorf("empty response from api")
+	}
+	if result.StopReason == "max_tokens" {
+		return result.Content[0].Text, ErrTruncated
 	}
 	return result.Content[0].Text, nil
 }
