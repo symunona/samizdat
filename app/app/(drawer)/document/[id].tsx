@@ -46,6 +46,7 @@ import { useScrapeQueue } from '../../../src/ScrapeQueueContext'
 import { buildDocumentHtml, mdToHtml } from '../../../src/markdownToHtml'
 import { useSyncStore } from '../../../src/store/syncStore'
 import VideoDocument from '../../../src/VideoDocument'
+import { ImageLightbox } from '../../../src/ImageViewer'
 import PendingPipelineBanner from '../../../src/PendingPipelineBanner'
 
 const DEBOUNCE_MS = 1000
@@ -58,6 +59,8 @@ type ParsedMsg = {
   href?: string
   doc_id?: string
   msg?: string
+  src?: string
+  alt?: string
 }
 
 export default function DocumentViewer() {
@@ -77,6 +80,8 @@ export default function DocumentViewer() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [scrollProgress, setScrollProgress] = useState(0)
+  // Image tapped inside the document-viewer WebView (raw DOM — no RN component there).
+  const [lightbox, setLightbox] = useState<{ src: string; alt?: string } | null>(null)
 
   const { activeUrl, token, status } = useConnection()
   const { toast } = useToast()
@@ -382,6 +387,8 @@ export default function DocumentViewer() {
         setPendingSelection(undefined)
         setAnnVisible(true)
       }
+    } else if (msg.type === 'image_tap' && msg.src) {
+      setLightbox({ src: msg.src, alt: msg.alt })
     } else if (msg.type === 'link_press' && msg.href) {
       if (msg.doc_id) {
         router.push(`/document/${encodeURIComponent(msg.doc_id)}`)
@@ -617,6 +624,10 @@ export default function DocumentViewer() {
         }}
         onClose={() => setTagModalVisible(false)}
       />
+
+      {lightbox && (
+        <ImageLightbox src={lightbox.src} alt={lightbox.alt} onClose={() => setLightbox(null)} />
+      )}
 
       <LinkActionSheet
         url={linkUrl}

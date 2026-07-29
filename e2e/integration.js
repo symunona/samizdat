@@ -45,6 +45,8 @@ const HL_BODY = [
 // Markdown with inline elements (bold + link + code) so a selection spanning them
 // crosses MULTIPLE text nodes — the exact case the old single-node highlighter
 // silently dropped.
+const PIXEL_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
 const TEXT_DOC = {
   id: TEXT_DOC_ID,
   title: 'Integration Article',
@@ -58,6 +60,10 @@ const TEXT_DOC = {
     '',
     'The standard library gains packages for structured logging and slices, and a ' +
       'preview of loop variable capture fixes.',
+    '',
+    // Hard case for the image lightbox: a figure wrapped in a link. Tapping it must
+    // zoom, NOT navigate/open the link sheet. Inline data URI → no network in the test.
+    `[![Release diagram](${PIXEL_PNG})](https://go.dev/blog/go1.21)`,
   ].join('\n'),
 }
 
@@ -229,6 +235,53 @@ async function runAddUrlSheet(token, deviceId) {
 }
 
 // ── The document-viewer selection lifecycle (the hard case) ───────────────────
+// Tapping an image in the document body must pop the host lightbox. The <img> lives in
+// raw DOM inside the viewer iframe/WebView, so the only proof is: click INSIDE the frame,
+// assert the overlay appears OUTSIDE it (in the RN host document).
+async function runImageLightbox(token, deviceId) {
+  const { page } = await newConnectedPage(browser, token, deviceId)
+  await page.goto(`${BASE_URL}/document/${TEXT_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+
+  await check('document body renders the linked figure', async () => {
+    const n = await page.evaluate(() =>
+      document.querySelector('iframe').contentDocument.querySelectorAll('#sam-article a img').length)
+    return n === 1 ? null : `expected 1 linked <img> in the article, got ${n}`
+  })
+
+  await page.evaluate(() => {
+    const ifr = document.querySelector('iframe')
+    const img = ifr.contentDocument.querySelector('#sam-article a img')
+    img.dispatchEvent(new ifr.contentWindow.MouseEvent('click', { bubbles: true, cancelable: true }))
+  })
+
+  await check('tapping a figure opens the lightbox in the host', async () => {
+    try {
+      await page.waitForSelector('[data-testid="image-lightbox-close"]', { timeout: 6000 })
+    } catch { return 'no lightbox overlay after image click' }
+    const src = await page.evaluate(() => {
+      const i = document.querySelector('img')
+      return i ? i.getAttribute('src') : null
+    })
+    return src && src.startsWith('data:image/png') ? null : `lightbox image src is "${String(src).slice(0, 40)}"`
+  })
+
+  await check('the wrapping link did NOT fire (image tap wins over link_press)', async () => {
+    const sheet = await page.evaluate(() =>
+      [...document.querySelectorAll('*')].some(e => e.offsetParent && e.innerText === 'Read as document'))
+    return sheet ? 'LinkActionSheet opened — the <a> swallowed the image tap' : null
+  })
+
+  await page.click('[data-testid="image-lightbox-close"]')
+  await check('closing the lightbox removes the overlay', async () => {
+    try {
+      await page.waitForFunction(() =>
+        !document.querySelector('[data-testid="image-lightbox-close"]'), { timeout: 4000 })
+    } catch { return 'lightbox still mounted after pressing ✕' }
+    return null
+  })
+}
+
 async function runSelectionLifecycle(token, deviceId) {
   const { page, errors } = await newConnectedPage(browser, token, deviceId)
   await page.goto(`${BASE_URL}/document/${TEXT_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
@@ -604,6 +657,7 @@ async function main() {
 
     await runPageChecks(token, deviceId)
     await runAddUrlSheet(token, deviceId)
+    await runImageLightbox(token, deviceId)
     await runSelectionLifecycle(token, deviceId)
     await runHighlightSelectionLifecycle(token, deviceId)
 

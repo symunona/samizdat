@@ -738,6 +738,15 @@ document.addEventListener('click', (e: MouseEvent) => {
     return
   }
 
+  // Images — pop the host's full-screen viewer. Checked BEFORE links: a figure
+  // wrapped in an <a> should still zoom rather than navigate away.
+  const img = target.closest && target.closest<HTMLImageElement>('img')
+  if (img) {
+    e.preventDefault()
+    sendMsg({ type: 'image_tap', src: img.getAttribute('src') || img.src, alt: img.alt })
+    return
+  }
+
   // Annotation marks
   const mark = target.closest && target.closest<HTMLElement>('mark[data-ann-id]')
   if (mark) {
