@@ -19,6 +19,7 @@ import {
 
 const VIDEO_DOC_ID = 'eeeeeeee-0000-4000-8000-000000000001'
 const TEXT_DOC_ID = 'dddddddd-0000-4000-8000-000000000001'
+const FIGURE_DOC_ID = 'dddddddd-0000-4000-8000-000000000002'
 const HL_ID = 'ffffffff-0000-4000-8000-000000000001'
 
 // Highlight body whose FIRST paragraph crosses bold + link + code (multiple text
@@ -81,6 +82,28 @@ const TEXT_DOC = {
         'actually sees rather than the ones a heuristic guesses at. Reported gains sit ' +
         'in the low single digits for most services and rather more for parser-heavy ones.',
     ].join('\n')),
+  ].join('\n'),
+}
+
+// What a PDF scrape now produces for a table: the rendered crop, then the same
+// table's text lifted out of the prose into a collapsed block (server-side
+// `interiorBlock`). Plus a GFM table, which had no CSS at all until this doc.
+const FIGURE_DOC = {
+  id: FIGURE_DOC_ID,
+  title: 'Figure Rendering',
+  canonicalUrl: 'https://example.com/figure-rendering',
+  markdown: [
+    '# Figure Rendering',
+    '',
+    'The paragraph that introduces the table below.',
+    '',
+    `![Table 1: Frontier model outputs](${PIXEL_PNG})`,
+    '<details><summary>Table 1 — text</summary><pre>Model Own (%) NA<br>GPT 24,763 (.78) 1,136<br>Gemini 20,172 (.64) 1,853</pre></details>',
+    '',
+    '| Model | Own | NA |',
+    '| --- | --- | --- |',
+    '| GPT | 24,763 | 1,136 |',
+    '| Gemini | 20,172 | 1,853 |',
   ].join('\n'),
 }
 
@@ -249,6 +272,59 @@ async function runAddUrlSheet(token, deviceId) {
   else pass('feed add-URL: no console/HTTP errors')
 
   await page.close()
+}
+
+// A PDF figure must read as one framed object with its text subordinate to it,
+// and a GFM table must have borders. Assert COMPUTED style — the markup can be
+// perfect while the stylesheet never reaches the frame.
+async function runFigureRendering(token, deviceId) {
+  const { page } = await newConnectedPage(browser, token, deviceId)
+  await page.goto(`${BASE_URL}/document/${FIGURE_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+
+  const style = await page.evaluate(() => {
+    const d = document.querySelector('iframe').contentDocument
+    const cs = el => (el ? d.defaultView.getComputedStyle(el) : null)
+    const det = d.querySelector('#sam-article details')
+    const img = cs(d.querySelector('#sam-article img'))
+    const td = cs(d.querySelector('#sam-article td'))
+    const tbl = cs(d.querySelector('#sam-article table'))
+    return {
+      imgBorder: img && img.borderTopWidth,
+      imgPad: img && img.paddingTop,
+      hasDetails: !!det,
+      detailsOpen: det ? det.open : null,
+      detailsBorder: det ? cs(det).borderLeftWidth : null,
+      summaryText: det ? det.querySelector('summary').textContent : null,
+      // textContent, not innerText: the block is collapsed, so it has no layout
+      // and innerText would read empty on working code.
+      preText: det ? det.querySelector('pre').textContent : null,
+      preRows: det ? det.querySelectorAll('pre br').length + 1 : 0,
+      tableCollapse: tbl && tbl.borderCollapse,
+      tdBorder: td && td.borderTopWidth,
+    }
+  })
+
+  await check('a figure is framed like a quotation', async () =>
+    style.imgBorder !== '0px' && style.imgPad !== '0px'
+      ? null : `img has no frame (border ${style.imgBorder}, padding ${style.imgPad})`)
+
+  await check("a figure's interior text renders collapsed under it", async () => {
+    if (!style.hasDetails) return 'the <details> block did not survive markdown rendering'
+    if (style.detailsOpen) return 'the block is expanded by default — it must be subordinate'
+    if (style.detailsBorder === '0px') return 'the block has no rule marking it as an aside'
+    return style.summaryText.includes('Table 1') ? null : `summary reads "${style.summaryText}"`
+  })
+
+  await check("a figure's interior text stays searchable and keeps its rows", async () => {
+    if (!style.preText || !style.preText.includes('24,763')) return 'the numbers are gone from the DOM'
+    // One <br> per printed row — a single blob of numbers is the bug this replaced.
+    return style.preRows >= 3 ? null : `rows were glued: ${style.preRows} row(s)`
+  })
+
+  await check('a markdown table has borders', async () =>
+    style.tableCollapse === 'collapse' && style.tdBorder !== '0px'
+      ? null : `table unstyled (collapse ${style.tableCollapse}, td border ${style.tdBorder})`)
 }
 
 // ── The document-viewer selection lifecycle (the hard case) ───────────────────
@@ -832,6 +908,7 @@ async function main() {
     const { token, deviceId } = await pairDevice('integration-device')
     seedVideoDoc(deviceId, VIDEO_DOC_ID)
     seedTextDoc(TEXT_DOC)
+    seedTextDoc(FIGURE_DOC)
     seedHighlight({ id: HL_ID, documentId: TEXT_DOC_ID, title: 'Go 1.21 Release', body: HL_BODY })
 
     console.log('  launching browser...')
@@ -840,6 +917,7 @@ async function main() {
     await runPageChecks(token, deviceId)
     await runAddUrlSheet(token, deviceId)
     await runImageLightbox(token, deviceId)
+    await runFigureRendering(token, deviceId)
     await runSelectionLifecycle(token, deviceId)
     await runHighlightSelectionLifecycle(token, deviceId)
     // Last: page mode persists globally (AsyncStorage → shared localStorage), so

@@ -23,8 +23,23 @@ status: cheap-win-server-done
   the DB is visibly truncated mid-sentence), so removing the inline copy would
   lose the continuation. Consequently step 2's `<figcaption>` is also skipped:
   it would render the truncated caption a second time, right above the full one.
-- 2026-07-29 — step 2 (app: figure frame CSS, `details`/`summary`/`pre` styling,
-  table CSS) pending: `document-viewer.ts` is being edited by the page-mode work.
+- 2026-07-29 — **step 2 (app) DONE.** `document-viewer.ts` `BASE_CSS`: figures get a
+  blockquote-like frame (border + inset background + padding), the `<details>` block
+  gets an aside rule + uppercase muted summary with a ▸/▾ marker and a tabular-numerals
+  `<pre>`, and `table`/`th`/`td` get collapsed borders + `overflow-x:auto` — the viewer
+  had **zero** table CSS before, so a GFM table rendered borderless with no cell padding
+  under the `*{margin:0;padding:0}` reset. Page-mode caps added to match `pre`/`img`
+  (`html.pg table`, `html.pg details`), with the inner `pre` cap released so the block
+  scrolls once, not twice.
+  Verified: 4 new checks in `e2e/integration.js` (`runFigureRendering`, seeded
+  `FIGURE_DOC`) asserting **computed** style — `just e2e-int` 43/43; figure frame checked
+  live on the arXiv document (`tmp/screenshots/figure-frame.png`); the collapsed block
+  and table rendered from the real `BASE_CSS`
+  (`tmp/screenshots/figure-css-{collapsed,open}.png`). `just e2e` and `just lint` green.
+  Test gotcha worth keeping: `innerText` reads **empty** inside a collapsed `<details>`
+  (no layout) — assert on `textContent`, or the check fails on working code.
+- **Still open** (unchanged by this work): the duplicated caption, and a real
+  `| a | b |` table (the go-fitz fork, §3a).
 
 # PDF tables: current mechanism, options, recommendation
 

@@ -91,7 +91,21 @@ code{background:var(--su);border-radius:4px;padding:2px 5px;font-family:monospac
 pre{background:var(--su);border-radius:6px;padding:14px;overflow-x:auto;margin-bottom:1em}
 pre code{background:none;padding:0;color:var(--fg)}
 blockquote{border-left:3px solid var(--ac);padding-left:14px;color:var(--mu);margin-bottom:1em}
-img{max-width:100%;border-radius:6px;margin-bottom:1em}
+/* Figures are framed like a blockquote: a picture is a quotation from the source,
+   not body text, and a PDF figure crop needs an edge to read as one object. */
+img{max-width:100%;border-radius:6px;margin-bottom:1em;border:1px solid var(--bo);padding:6px;background:var(--su)}
+/* A PDF figure's interior text (table cells, axis labels) rides under its picture
+   in a collapsed block — present and searchable, visually subordinate. */
+details{margin:0 0 1.4em;border-left:3px solid var(--bo);padding-left:12px}
+summary{cursor:pointer;list-style:none;padding:2px 0;color:var(--mu);font-size:0.82em;font-weight:700;text-transform:uppercase;letter-spacing:0.4px}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"▸ "}
+details[open]>summary::before{content:"▾ "}
+summary:hover{color:var(--ac)}
+details>pre{margin:6px 0 0;font-size:0.82em;line-height:1.5;font-variant-numeric:tabular-nums}
+table{border-collapse:collapse;margin-bottom:1em;font-size:0.9em;display:block;max-width:100%;overflow-x:auto}
+th,td{border:1px solid var(--bo);padding:6px 10px;text-align:left;vertical-align:top}
+th{background:var(--su);font-weight:600}
 ul,ol{padding-left:1.5em;margin-bottom:1em}
 li{margin-bottom:0.3em}
 hr{border:none;border-top:1px solid var(--bo);margin:1.5em 0}
@@ -182,6 +196,11 @@ html.pg body::-webkit-scrollbar{display:none}
    past it — cap them to the page box and let them scroll inside their page. */
 html.pg pre{max-height:var(--pgh)}
 html.pg img{max-height:calc(var(--pgh) - 24px);object-fit:contain}
+html.pg table{max-height:var(--pgh);overflow-y:auto}
+/* The <details> is the scroll container here — an inner cap would nest a second
+   scrollbar inside the first. */
+html.pg details{max-height:var(--pgh);overflow-y:auto}
+html.pg details>pre{max-height:none}
 /* Highlights + summaries: one card per page, scrolling internally (content may be
    cut there — accepted). The section chrome is a scroll container itself and its
    collapse toggle has no meaning without the section, so both flatten out. */
