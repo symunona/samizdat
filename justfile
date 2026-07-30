@@ -490,11 +490,16 @@ build-android-remote level="patch":
     [ "${daemons:-0}" = "0" ] || echo "ℹ ${daemons} gradle daemon(s) resident on ${BUILD_NODE_DEST} (idle-timeout will reap them)"
 
 [group('build')]
-[doc('Build the APK on THIS box — throttled for 4GB, ~35 min. Offline fallback for build-android (level=patch|minor|major)')]
+[doc('Build the APK on THIS box — throttled for 4GB, ~35 min (+ NDK re-download). Offline fallback for build-android (level=patch|minor|major)')]
 build-android-local level="patch":
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{justfile_directory()}}"
+    # The NDK was reclaimed from this 4GB/75G box once xayah became the build node
+    # (it is ~2GB and only a local build needs it). AGP re-fetches it — the accepted
+    # licenses in Sdk/licenses are what allow that — but say so before the wait starts.
+    [ -d "${ANDROID_HOME:-$HOME/Android/Sdk}/ndk" ] || \
+      echo "ℹ no local NDK — AGP will download ~2GB first (kept off this box; see CLAUDE.md)"
     # Auto-bump the version FIRST so prebuild stamps the new version/versionCode
     # into the native manifest. Default patch; `just build-android-local minor|major`
     # for the bigger bumps. See tools/bump-version.mjs + CLAUDE.md.

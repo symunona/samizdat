@@ -119,7 +119,11 @@ Always run `just build` before you call a job done.
 written by `just setup-build-node <ssh-dest> [workspace]`), not here — this box has 4GB and
 the throttled local build takes ~35 min vs a few minutes on a real machine. `just
 build-android-local` is the offline fallback; an unreachable node **fails loud** rather than
-silently costing 35 min. `just build-times` shows history; `just status` reports node
+silently costing 35 min. **This box keeps only a partial SDK** — `build-tools/36.0.0` (for
+`verify-apk.sh`), `platforms`, `cmdline-tools`, `licenses` and `~/.jdks/jdk-17`. The NDK
+(~2GB), `cmake`, `platform-tools` and the generated `app/android/` tree were reclaimed when
+xayah took over; AGP re-downloads the NDK on the first local build (the accepted licenses
+are what let it), so the fallback costs a couple of GB before it costs 35 minutes. `just build-times` shows history; `just status` reports node
 reachability. Both paths share `_apk-gradle`, so flags can't drift.
 
 - **Transport is `git push` over ssh** (`build-node` remote), not rsync and not GitHub —
