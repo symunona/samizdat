@@ -2,7 +2,7 @@
 created: 2026-07-18
 topic: Budapest newsletter — topic-split pipeline, pre-render fix, visit-on-web fix
 excerpt: New llm_topics step (verbatim topic split, no summarizer) + Budapest pipeline; fix plaintext-email <pre> code-fence render; fix broken "Visit on web" for non-http docs.
-status: in_progress
+status: done — shipped on main (2439012 pipeline/plaintext, 8789a7c openExternal); verified live 2026-07-30: 5 issues ingested, prose (no fence), 5–8 `topic` highlights each
 ---
 
 # Budapest Newsletter — topics pipeline + two bug fixes
@@ -72,5 +72,6 @@ napirajz/latent.space/natesnewsletter) and delete the 3 stale summary highlights
 - [x] app: openExternal.ts + wire document viewer / VideoDocument / LinkActionSheet + hide button
 - [x] just build + lint (0 issues) + go tests
 - [x] agent-browser: prose render ✓, 5 topic highlights ✓, web button hidden on email doc ✓, present+opens on http doc ✓
-- [ ] just e2e green
-- [ ] commit
+- [x] commit — 2439012 (server) + 8789a7c (app), both on `main`
+- [ ] just e2e green — never re-run after the last edit; superseded by 12 days of live
+      prod use (weekly issues 07.03/07.10/07.17/07.24 all ingested + topic-split)
