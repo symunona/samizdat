@@ -17,7 +17,11 @@ require (
 	modernc.org/sqlite v1.37.1
 )
 
-require github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
+require (
+	github.com/ebitengine/purego v0.10.1 // indirect
+	github.com/gen2brain/go-fitz v1.28.2 // indirect
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
+)
 
 require (
 	github.com/JohannesKaufmann/dom v0.3.1 // indirect

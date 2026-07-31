@@ -22,7 +22,7 @@ The app logo source of truth is `assets/samizdat.svg` (repo root). Edit that one
 3. **Scrape one URL once** — dedup by `canonical_url` before scraping; scraping is expensive and ban-prone.
 4. **Phase split is sacred:** `Scraper`→`Document` (shared, opinion-free) vs `Pipeline`→`Highlight` (personal). Never personalize a Scraper; never re-fetch in a Pipeline.
 5. **Credentialed/paywalled content stays per-user** — never in the shared cache, never sent to a cloud LLM by default (route those jobs to a local provider).
-6. **Single static binary, no Docker, no nginx** on the happy path. TLS via CertMagic in-binary.
+6. **Single binary, no Docker, no nginx** on the happy path. TLS via CertMagic in-binary. One deliberate exception to "static": the server links MuPDF (PDF figure rendering) via cgo, so it is dynamically linked against glibc — still one binary, no system packages, no sidecars. The CLI stays pure-Go/static. This puts the repo under **AGPL-3.0** (see `LICENSE`).
 
 ## Domain vocabulary (use these exact names)
 `Document` (scraped source, 1 per canonical URL) · `Highlight` (**LLM-extracted** bite-sized unit from a Document; machine data, server→phone one-way) · `Annotation` (**user-created** text selection on a Document or Highlight, with optional note body + W3C TextQuoteSelector anchor; user-authored, two-way sync) · `Note` (user-authored vault md) · `Feed` (pollable source) · `Subscription` (user↔Feed + Schedule) · `Scraper` (URL→Document) · `Pipeline`/`PipelineStep` (Document→Highlights) · `Job` (queued work w/ cost metering) · `Schedule` · `Tag` · `UserProfile` (master prompt/persona). Conventions: PascalCase singular types, snake_case plural tables, `<singular>_id` FKs. Banned name fragments: `Content`, `Memory`, `Source` (ambiguous), `Parsed*`, `Cron`, `Url`.
@@ -113,6 +113,46 @@ No dead code. Only functional code.
 Keep repo CLEAN code.
 Try always everything DRY.
 Always run `just build` before you call a job done.
+
+## Android APK: builds on a remote build node
+`just build-android` **builds on the machine named in `config/build-node.env`** (gitignored,
+written by `just setup-build-node <ssh-dest> [workspace]`), not here — this box has 4GB and
+the throttled local build takes ~35 min vs a few minutes on a real machine. `just
+build-android-local` is the offline fallback; an unreachable node **fails loud** rather than
+silently costing 35 min. **This box keeps only a partial SDK** — `build-tools/36.0.0` (for
+`verify-apk.sh`), `platforms`, `cmdline-tools`, `licenses` and `~/.jdks/jdk-17`. The NDK
+(~2GB), `cmake`, `platform-tools` and the generated `app/android/` tree were reclaimed when
+xayah took over; AGP re-downloads the NDK on the first local build (the accepted licenses
+are what let it), so the fallback costs a couple of GB before it costs 35 minutes. `just build-times` shows history; `just status` reports node
+reachability. Both paths share `_apk-gradle`, so flags can't drift.
+
+- **Transport is `git push` over ssh** (`build-node` remote), not rsync and not GitHub —
+  the node needs no GitHub credentials. Consequence: **the node builds `HEAD`, so the tree
+  must be committed**; the version bump is committed automatically for that reason (and
+  because an uncommitted bump regresses `versionCode`, see Versioning).
+- The node's checkout stays on `main` while builds push to `build`, so the pushed ref is
+  never the checked-out branch (no `receive.denyCurrentBranch` refusal, no reliance on
+  `updateInstead`, which balks on a dirty remote tree).
+- Remote reset uses **`git clean -fd`, never `-fdx`**: ignored paths (`node_modules`,
+  `app/android/`, `secrets/`) must survive or every build pays a reinstall + cold gradle
+  cache. The pnpm lock stamp therefore lives in `GRADLE_USER_HOME`, outside the repo.
+- The node gets its own `GRADLE_USER_HOME` (cache **and** memory tuning, sized from its
+  cores/RAM by setup) so it never inherits this box's one-small-JVM survival config or
+  whatever lives in the node's own `~/.gradle`.
+- **`secrets/debug.keystore` is the APK's install-over identity.** `app/android` is
+  gitignored, so the keystore never travels with the source; if a host lets `expo prebuild`
+  mint its own, the APK installs on a clean phone but Android **silently refuses** to
+  install it over a build signed by the other key. Setup ships it, every build re-syncs it,
+  and `tools/verify-apk.sh` compares signer certs against `dist/samizdat.apk.prev`. Back
+  that file up outside the repo — it is gitignored and lives nowhere else.
+- Version metadata never comes back from the node: the bump, `extra.buildEpoch` and the
+  sidecar (`tools/write-apk-sidecar.mjs`) are all produced here.
+- `tools/verify-apk.sh` gates every build (signer identity, versionCode monotonic, bundled
+  `assets/app.config` freshness, single arm64 ABI, sidecar↔buildEpoch, served version).
+  Run it on any APK: `tools/verify-apk.sh dist/samizdat.apk --against dist/samizdat.apk.prev`.
+- `app/src/webview/document-viewer-bundle.ts` is generated + gitignored, so `_apk-gradle`
+  runs `just webview-build` every build — otherwise a build host has none, and this box
+  ships whatever stale copy was last left on disk.
 
 ## Versioning (app)
 `just build-android` **auto-bumps the version every build** — default **PATCH**

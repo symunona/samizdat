@@ -270,6 +270,88 @@ after `just build-android`. Do not claim them working from web tests.
 
 `Platform.OS === 'web'` is true for ALL browsers — desktop Chrome and mobile Safari alike. Never use it to mean "desktop". To branch on touch capability use `window.matchMedia('(pointer: coarse').matches`. Mobile web and native app must behave identically; `Platform.OS === 'web'` silently breaks one of them.
 
+## Document body images — ONE lightbox, two callers (`src/ImageViewer.tsx`)
+
+`ImageLightbox` (named export) is the controlled full-screen zoomable overlay: visible
+while mounted, gone when the caller stops rendering it. Do not write a second one.
+- `ImageViewer` (default export) = thumb + `ImageLightbox`, used by `MarkdownBody`
+  (highlight bodies, RN markdown).
+- The **document body** is raw DOM inside the WebView/iframe, so its `<img>` has no RN
+  component. `document-viewer.ts`'s click delegate posts `image_tap {src, alt}` and
+  `document/[id].tsx` renders `ImageLightbox` from that. The `img` check runs **before**
+  the `a[href]` check — a figure wrapped in a link must zoom, not navigate.
+- Keep `src` as the raw `getAttribute('src')`: on web the body is an `iframe srcDoc`
+  (base `about:srcdoc`), where `img.src` resolves to nonsense. `ImageLightbox`
+  absolutizes a leading `/` against `activeUrl` — native RN `Image` cannot load a
+  relative URL (it silently reports a 1×1).
+
+## Page mode (document viewer)
+
+A reading preference — **strictly additive**. Every rule is scoped to
+`html.pg` and **no DOM node is added or moved**, so with it off the reader is unchanged
+and body-text offsets (hence every annotation anchor) are identical in both modes.
+
+### The preference is three-way: `flow` | `auto` | `page` (default `auto`)
+
+`src/store/readingModeStore.ts` is the ONE source of truth (zustand + AsyncStorage via
+`storage.ts`), **global, never per-document**. Both writers use it: the meta panel's
+`Flow · Auto · Page` segmented control, and Settings → **Auto Page Mode** (whose switch
+*is* `mode === 'auto'` — on writes `auto`, off writes `flow`; when the mode is `page` it
+reads off and says so). Settings also owns the **threshold** (`pageThreshold`, default
+**20**, digits-only, committed on blur, clamped 1–999 — junk restores the last good
+value). `loadReadingPrefs()` migrates the old boolean key `samizdat_page_mode`
+('1'→`page`, '0'→`flow`, absent→`auto`) once, then deletes it.
+
+- `flow` — always continuous. `page` — always paginated. `auto` — paginate only past the
+  threshold.
+- **`auto` resolves inside the WebView**, because only it can measure. `estimatePages()`
+  = `ceil(body.scrollHeight / innerHeight)` — a page IS one column of the body laid out at
+  the same width and cut to the viewport, so the two are the same quantity (±1–2 pages of
+  break-avoidance slack, irrelevant to a whole-page threshold). **Always measured the same
+  way**: if the viewer is currently paginated, `html.pg` comes off for the read and goes
+  straight back in the same task (no paint, `scrollLeft` restored). Using the real
+  `_pageCount` while paginated and the estimate while not would let a document sitting on
+  the threshold flip on every resize. Re-resolved on `init`, on `window.load` (images have
+  no height before that), on each throttled `resize`, and on every host push.
+- **Lives in the WebView** (`document-viewer.ts`) — only it knows real laid-out box
+  heights. The host owns the preference, the `setReadingMode {mode, threshold}` message
+  and the `readingMode`/`pageThreshold` fields on `init`; the viewer reports the
+  resolution back as `readingMode {mode, paginated, pages}`, which is the only source for
+  the meta panel's one-line summary (`~95 pages here, limit 20 → paginated`).
+- **Mechanism:** the *body* becomes a horizontal multi-column scroller
+  (`column-width:var(--pgw)` + `column-fill:auto` on a `100vh` box; `html{overflow:hidden}`
+  so the body really is the scroll container). Geometry comes from JS (`layoutPages`)
+  because `column-width` takes no percentages.
+- **No `scroll-snap`** — column boxes are anonymous, so nothing can carry
+  `scroll-snap-align`. Snapping is a 140ms scroll-idle settle instead, which also means
+  touch needs no bespoke drag handler: the body's own pan IS the page turn.
+- **Scroll containers never fragment**, so anything taller than a page spills past it.
+  Cap each to the page box and let it scroll inside: `pre`, `img`, `table`, `details`,
+  `.hl-card` (one highlight/summary card per page — content may be cut there, accepted).
+  When nesting, cap the OUTER one only (`html.pg details>pre{max-height:none}`) or you
+  get two scrollbars.
+- **Resize** is throttled 150ms, but capture the anchor when the scroll SETTLES, not in
+  the handler — `resize` fires after the browser has already reflowed, so reading it
+  there loses the reader's place.
+- Card swipe-triage is off in page mode (a horizontal drag turns the page); `touch-action`
+  must be reset to `auto` there or the card's base `pan-y` swallows the pan.
+- Reading progress: one `reportFraction` for both modes — scroll position when scrolling,
+  `pageIdx/(pageCount-1)` when paginated. `revealElement` (page jump vs `scrollIntoView`)
+  is the single way to bring anything into view.
+- **Not verifiable headless:** a real finger swipe on Android rides the WebView's native
+  horizontal overflow scroll, which no synthetic event exercises. Test on a device.
+
+## PDF figures in the viewer
+
+A figure is framed like a blockquote (border + inset background + padding) so a crop
+reads as one object. The text the scraper lifts out of a figure box (server-side
+`interiorBlock`) arrives as a raw `<details><summary>…</summary><pre>` block, rows
+separated by `<br>` — it renders collapsed, subordinate to the picture, and stays
+searchable. `table`/`th`/`td` are styled too (there was **no** table CSS at all: under
+the `*{margin:0;padding:0}` reset a GFM table rendered borderless).
+Test gotcha: `innerText` reads **empty** inside a collapsed `<details>` (no layout) —
+assert on `textContent`, or the check fails on working code.
+
 ## Video / podcast Documents (`media_type === 'video'`)
 
 Documents with `media_type === 'video'` get a dedicated player screen (`src/VideoDocument.tsx`) instead of the article WebView. The document viewer (`app/(drawer)/document/[id].tsx`) early-returns `<VideoDocument doc={doc} from={from} />` before building article HTML.

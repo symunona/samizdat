@@ -52,7 +52,7 @@ func isBrowserDownloadErr(err error) bool {
 
 // handlePDF ingests a PDF URL into a media_type='pdf' Document: plain HTTP GET
 // (no browser), pure-Go text extraction, then the shared Document finalize.
-func handlePDF(ctx context.Context, q *store.Queries, job store.Job, canonical string, feedID *string, manual bool) (string, error) {
+func handlePDF(ctx context.Context, q *store.Queries, job store.Job, canonical string, feedID *string, cacheDir string, manual bool) (string, error) {
 	logScraper.Printf("scraping pdf %s", canonical)
 
 	raw, err := fetchPDF(ctx, canonical)
@@ -70,7 +70,12 @@ func handlePDF(ctx context.Context, q *store.Queries, job store.Job, canonical s
 	if title == "" {
 		title = pdfTitleFromURL(canonical)
 	}
-	md := doc.text
+
+	// Figures are stored against the Document, so the Document row has to exist
+	// first — but its markdown still carries placeholder tokens at that point.
+	// Store, then render the figures, then rewrite the markdown with the real
+	// media URLs.
+	md := resolveFigures(doc.text, nil)
 
 	excerpt := firstRunes(strings.ReplaceAll(md, "\n", " "), 500)
 
@@ -102,6 +107,25 @@ func handlePDF(ctx context.Context, q *store.Queries, job store.Job, canonical s
 
 	logScraper.Printf("upserted pdf document %s for %s", stored.ID[:8], canonical)
 
+	// Figures need the Document row to hang off, so they are rendered after the
+	// upsert and the markdown is rewritten with their URLs. A figure that fails
+	// to render leaves no trace: its placeholder was already stripped above.
+	if urls := storePDFFigures(ctx, q, cacheDir, stored.ID, raw, doc.figures); len(urls) > 0 {
+		md = resolveFigures(doc.text, urls)
+		excerpt = firstRunes(strings.ReplaceAll(md, "\n", " "), 500)
+		sum := sha256.Sum256([]byte(md))
+		if err := q.UpdateDocumentMarkdown(ctx, store.UpdateDocumentMarkdownParams{
+			Markdown:    md,
+			Excerpt:     excerpt,
+			ContentHash: hex.EncodeToString(sum[:]),
+			UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
+			ID:          stored.ID,
+		}); err != nil {
+			return "", fmt.Errorf("update pdf markdown: %w", err)
+		}
+		stored.Markdown = md
+	}
+
 	// A scanned (image-only) PDF has no text layer, so extraction yields nothing
 	// usable. Flag the Document and fail permanently rather than retry — the
 	// result is deterministic, and an empty body would feed the pipeline junk.
@@ -113,7 +137,8 @@ func handlePDF(ctx context.Context, q *store.Queries, job store.Job, canonical s
 	finishDocument(ctx, q, job, stored, title, manual)
 
 	res, _ := json.Marshal(map[string]any{
-		"document_id": stored.ID, "title": title, "media_type": "pdf", "pages": doc.pages,
+		"document_id": stored.ID, "title": title, "media_type": "pdf",
+		"pages": doc.pages, "figures": len(doc.figures),
 	})
 	return string(res), nil
 }
@@ -176,10 +201,11 @@ func urlIsPDF(ctx context.Context, rawURL string) bool {
 
 // pdfDoc is the outcome of a text extraction pass.
 type pdfDoc struct {
-	text   string
-	title  string
-	author string
-	pages  int
+	text    string
+	title   string
+	author  string
+	pages   int
+	figures []pdfFigure
 }
 
 // extractPDF pulls the text layer out of a PDF as markdown-ish plain text.
@@ -207,19 +233,187 @@ func extractPDF(raw []byte) (pdfDoc, error) {
 	// peak memory at one page of glyphs.
 	bound := documentGutter(r)
 
-	var sb strings.Builder
+	// Text and figure boxes are collected page by page, but the figures can only
+	// be filtered once every page has been seen: a running header gives itself
+	// away by repeating, which is invisible from any single page.
+	type pdfPage struct {
+		frags []pdfFrag
+		media pdfBox
+	}
+	pages := make([]pdfPage, 0, r.NumPage())
+	boxesByPage := make([][]pdfBox, 0, r.NumPage())
 	for i := 1; i <= r.NumPage(); i++ {
 		p := r.Page(i)
 		if p.V.IsNull() {
+			pages = append(pages, pdfPage{})
+			boxesByPage = append(boxesByPage, nil)
 			continue
 		}
-		if txt := pageText(p.Content().Text, bound); txt != "" {
+		pages = append(pages, pdfPage{
+			frags: pageFragments(p.Content().Text, bound),
+			media: mediaBox(p),
+		})
+		boxesByPage = append(boxesByPage, figureBoxes(pageDrawings(p)))
+	}
+	boxesByPage = dropRepeating(boxesByPage)
+
+	var sb strings.Builder
+	for i := range pages {
+		frags, figs := spliceFigures(pages[i].frags, boxesByPage[i], i+1, len(out.figures), bound, pages[i].media)
+		out.figures = append(out.figures, figs...)
+		if txt := joinFrags(frags); txt != "" {
 			sb.WriteString(txt)
 			sb.WriteString("\n\n")
 		}
 	}
 	out.text = reflowParagraphs(stripLineMarks(strings.TrimSpace(sb.String())))
 	return out, nil
+}
+
+// spliceFigures inserts one markdown image per figure box into a page's
+// fragment stream, at the height and in the column the figure was drawn, and
+// returns the figures it created.
+//
+// The link target is a placeholder token, not a URL: the asset does not exist
+// yet at extraction time. handlePDF renders and stores each figure, then swaps
+// the tokens for the real media URLs. Keeping extraction free of DB and disk is
+// what makes it unit-testable.
+func spliceFigures(frags []pdfFrag, boxes []pdfBox, page, idBase int, bound float64, media pdfBox) ([]pdfFrag, []pdfFigure) {
+	if len(boxes) == 0 {
+		return frags, nil
+	}
+
+	lines := make([]pdfTextLine, 0, len(frags))
+	for _, f := range frags {
+		lines = append(lines, pdfTextLine{y: f.y, x: f.x, text: f.text})
+	}
+
+	figs := make([]pdfFigure, 0, len(boxes))
+	out := frags
+	for i, b := range boxes {
+		fig := pdfFigure{
+			id:      idBase + i,
+			page:    page,
+			box:     b,
+			pageBox: media,
+			caption: captionFor(b, lines),
+		}
+		figs = append(figs, fig)
+		// The text drawn INSIDE the box — table cells, axis labels, in-plot
+		// legends — is not prose and must not be reflowed as if it were. Lift it
+		// out of the stream and re-attach it under the figure.
+		rest, inside := takeInterior(out, b, len(frags))
+		out = rest
+		// A figure that spans the gutter belongs to neither column; anchor it in
+		// the left one, which reads first.
+		x := b.l
+		if b.r > bound && b.l < bound {
+			x = bound - 1
+		}
+		out = insertFrag(out, pdfFrag{x: x, y: b.t, text: fig.markdown() + interiorBlock(inside, fig.caption)}, bound)
+	}
+	return out, figs
+}
+
+// interiorShare caps the fraction of a page's fragments one figure may absorb.
+// A mis-detected box can cover most of a page; swallowing the body into a
+// collapsed block would hide the article itself.
+const interiorShare = 0.6
+
+// minInteriorFrags is the fewest interior lines worth collapsing. One or two
+// stray axis labels read fine in place; a table does not.
+const minInteriorFrags = 3
+
+// takeInterior splits a page's fragments into those drawn outside the figure box
+// and those drawn inside it. It gives up (returning everything as outside) when
+// the box would absorb more than interiorShare of the page, or when too little
+// text sits inside to be worth collapsing.
+//
+// The geometry is the same test captionFor already applies to reject an axis
+// label as a caption — a fragment carries the x it starts at and its baseline y.
+func takeInterior(frags []pdfFrag, b pdfBox, pageFrags int) (outside, inside []pdfFrag) {
+	for _, f := range frags {
+		if f.y > b.b && f.y < b.t && f.x >= b.l && f.x <= b.r {
+			inside = append(inside, f)
+		} else {
+			outside = append(outside, f)
+		}
+	}
+	if len(inside) < minInteriorFrags || float64(len(inside)) > interiorShare*float64(pageFrags) {
+		return frags, nil
+	}
+	return outside, inside
+}
+
+// interiorBlock renders a figure's interior text as a collapsed HTML block that
+// follows the image.
+//
+// The text stays in documents.markdown — searchable, exported to the vault, and
+// visible to DetectFalseParse — it is only visually subordinate to the picture,
+// which is the readable rendering of the same content. Fragments sharing a
+// baseline are re-joined, so a table keeps its rows instead of being glued into
+// one paragraph by reflowParagraphs.
+//
+// The whole block is ONE line: joinFrags splits fragments on newlines and
+// reflowParagraphs would treat each row as wrapped prose. `<br>` carries the row
+// breaks instead, and reflowParagraphs skips the line by its `<details>` prefix.
+func interiorBlock(inside []pdfFrag, caption string) string {
+	if len(inside) == 0 {
+		return ""
+	}
+	rows := make([]string, 0, len(inside))
+	for i, f := range inside {
+		// Same baseline as the previous fragment → same printed row (a line the
+		// gutter split in two). Anything else starts a new row.
+		if i > 0 && f.y == inside[i-1].y {
+			rows[len(rows)-1] += "  " + escapeHTMLText(f.text)
+			continue
+		}
+		rows = append(rows, escapeHTMLText(f.text))
+	}
+	return "\n<details><summary>" + interiorSummary(caption) + "</summary><pre>" +
+		strings.Join(rows, "<br>") + "</pre></details>"
+}
+
+// interiorSummary labels the collapsed block with what the figure is called
+// ("Table 1 — text"), falling back to a generic label when it has no caption.
+func interiorSummary(caption string) string {
+	fields := strings.Fields(caption)
+	if len(fields) >= 2 && isCaptionLine(caption) {
+		return escapeHTMLText(strings.Trim(fields[0]+" "+fields[1], ":.")) + " — text"
+	}
+	return "Text in this figure"
+}
+
+// escapeHTMLText makes extracted glyphs safe inside the raw HTML block. The
+// markdown is rendered without a sanitizer, so a stray "<" in the source would
+// otherwise open a tag.
+var htmlTextEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
+func escapeHTMLText(s string) string { return htmlTextEscaper.Replace(s) }
+
+// insertFrag places a fragment in its column, below every line that sits higher
+// on the page than it does. Fragments are already ordered left column then right
+// column, top to bottom within each, and this preserves that.
+func insertFrag(frags []pdfFrag, f pdfFrag, bound float64) []pdfFrag {
+	sameColumn := func(g pdfFrag) bool { return (g.x < bound) == (f.x < bound) }
+
+	at := len(frags)
+	for i, g := range frags {
+		if sameColumn(g) && g.y < f.y {
+			at = i
+			break
+		}
+		// Right-column text always follows a left-column figure.
+		if f.x < bound && g.x >= bound {
+			at = i
+			break
+		}
+	}
+	out := make([]pdfFrag, 0, len(frags)+1)
+	out = append(out, frags[:at]...)
+	out = append(out, f)
+	return append(out, frags[at:]...)
 }
 
 // reflowParagraphs joins lines that the typesetter wrapped back into paragraphs.
@@ -254,6 +448,14 @@ func reflowParagraphs(text string) string {
 	for _, ln := range lines {
 		if strings.TrimSpace(ln) == "" {
 			flush()
+			continue
+		}
+		// A figure is its own block: it must never be glued onto the paragraph
+		// above it, and the paragraph below it starts fresh. So is the figure's
+		// interior text, which spliceFigures emits as one <details> line.
+		if strings.HasPrefix(ln, "![") || strings.HasPrefix(ln, "<details>") {
+			flush()
+			out = append(out, ln)
 			continue
 		}
 		if cur.Len() > 0 {
@@ -406,11 +608,15 @@ func documentGutter(r *pdf.Reader) float64 {
 		}
 	}
 	if len(votes) < 3 || len(votes)*20 < lines {
-		return math.Inf(1)
+		return pdfSingleColumn
 	}
 	sort.Float64s(votes)
 	return votes[len(votes)/2] - pdfGutterMargin // median — robust to tables and captions
 }
+
+// pdfSingleColumn is the gutter boundary of a page with no second column: every
+// x sorts left of it.
+var pdfSingleColumn = math.Inf(1)
 
 // Layout thresholds, all relative to font size so they hold at any zoom.
 const (
@@ -442,39 +648,55 @@ const (
 )
 
 // pdfFrag is one same-column run of text on a line, tagged with the x it starts
-// at so fragments can be re-grouped into columns.
+// at so fragments can be re-grouped into columns, and the baseline y so figures
+// can be slotted into the same stream at the height they were drawn.
 type pdfFrag struct {
 	x    float64
+	y    float64
 	text string
 }
 
-// pageText reconstructs a page's reading order from positioned glyphs: group by
-// baseline into lines, split lines at the column gutter, then emit each column's
-// lines top-to-bottom, left column first. A bound of +Inf means single-column,
-// which degenerates to plain baseline order.
-func pageText(glyphs []pdf.Text, bound float64) string {
+// pageFragments reconstructs a page's reading order from positioned glyphs:
+// group by baseline into lines, split lines at the column gutter, then emit each
+// column's lines top-to-bottom, left column first. A bound of +Inf means
+// single-column, which degenerates to plain baseline order.
+func pageFragments(glyphs []pdf.Text, bound float64) []pdfFrag {
 	// Split every line at the gutter, so a line carrying both columns becomes two
 	// fragments, each tagged with the x it starts at.
 	var frags []pdfFrag
 	for _, ln := range groupLines(glyphs) {
 		for _, seg := range splitAtGutter(ln, bound) {
 			if s := renderSegment(seg); s != "" {
-				frags = append(frags, pdfFrag{x: seg[0].X, text: s})
+				frags = append(frags, pdfFrag{x: seg[0].X, y: seg[0].Y, text: s})
 			}
 		}
 	}
 
 	// Order fragments by column, preserving the top-to-bottom order groupLines
 	// already established within each column.
-	var left, right []string
+	var left, right []pdfFrag
 	for _, f := range frags {
 		if f.x < bound {
-			left = append(left, f.text)
+			left = append(left, f)
 		} else {
-			right = append(right, f.text)
+			right = append(right, f)
 		}
 	}
-	return strings.Join(append(left, right...), "\n")
+	return append(left, right...)
+}
+
+// pageText renders a page's fragments as text, one per line.
+func pageText(glyphs []pdf.Text, bound float64) string {
+	return joinFrags(pageFragments(glyphs, bound))
+}
+
+// joinFrags writes one fragment per line.
+func joinFrags(frags []pdfFrag) string {
+	lines := make([]string, 0, len(frags))
+	for _, f := range frags {
+		lines = append(lines, f.text)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // groupLines buckets glyphs into lines by baseline (Y), each sorted left to

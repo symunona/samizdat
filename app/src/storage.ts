@@ -83,6 +83,59 @@ export async function loadDebugLogStream(): Promise<boolean> {
   }
 }
 
+// ── Reading mode (document viewer) ────────────────────────────────────────────
+// A global reading preference, not a property of one article. `auto` paginates
+// only documents that would run past READING_PAGE_THRESHOLD pages — the viewer
+// resolves that itself (only it can measure). See src/store/readingModeStore.ts.
+
+export type ReadingMode = 'flow' | 'auto' | 'page'
+
+export const DEFAULT_READING_MODE: ReadingMode = 'auto'
+export const DEFAULT_PAGE_THRESHOLD = 20
+const MAX_PAGE_THRESHOLD = 999
+
+const READING_MODE_KEY = 'samizdat_reading_mode'
+const PAGE_THRESHOLD_KEY = 'samizdat_page_threshold'
+// Pre-three-way key: '1' = paginate everything, '0' = never. Migrated once, then
+// removed — a user who deliberately turned page mode off must land on `flow`, not
+// on the new `auto` default.
+const LEGACY_PAGE_MODE_KEY = 'samizdat_page_mode'
+
+// A junk threshold must not wedge the reader into a mode it can't leave.
+export function clampThreshold(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_PAGE_THRESHOLD
+  return Math.min(MAX_PAGE_THRESHOLD, Math.max(1, Math.round(n)))
+}
+
+export async function loadReadingPrefs(): Promise<{ mode: ReadingMode; threshold: number }> {
+  let mode = DEFAULT_READING_MODE
+  let threshold = DEFAULT_PAGE_THRESHOLD
+  try {
+    const raw = await AsyncStorage.getItem(READING_MODE_KEY)
+    if (raw === 'flow' || raw === 'auto' || raw === 'page') {
+      mode = raw
+    } else {
+      const legacy = await AsyncStorage.getItem(LEGACY_PAGE_MODE_KEY)
+      if (legacy !== null) {
+        mode = legacy === '1' ? 'page' : 'flow'
+        await AsyncStorage.setItem(READING_MODE_KEY, mode)
+        await AsyncStorage.removeItem(LEGACY_PAGE_MODE_KEY)
+      }
+    }
+    const n = Number(await AsyncStorage.getItem(PAGE_THRESHOLD_KEY))
+    if (n > 0) threshold = clampThreshold(n)
+  } catch { /* defaults */ }
+  return { mode, threshold }
+}
+
+export async function saveReadingMode(mode: ReadingMode): Promise<void> {
+  await AsyncStorage.setItem(READING_MODE_KEY, mode)
+}
+
+export async function savePageThreshold(n: number): Promise<void> {
+  await AsyncStorage.setItem(PAGE_THRESHOLD_KEY, String(clampThreshold(n)))
+}
+
 export async function saveLastSuccessfulUrl(url: string): Promise<void> {
   await AsyncStorage.setItem(LAST_URL_KEY, url)
 }

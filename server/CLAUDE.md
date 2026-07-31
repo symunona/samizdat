@@ -63,6 +63,9 @@ server/
       vtt.go                # WebVTT parser → []Segment{StartMs,EndMs,Text}
     worker/
       youtube.go            # yt-dlp ingest: audio + transcript → video Document
+      pdf.go                # PDF text extraction, figure splicing, layout reconstruction
+      pdffig.go             # figure detection (content-stream walk), box geometry, captions
+      pdfrender.go          # MuPDF rendering via go-fitz: page→bitmap, crop→PNG, asset store
 ```
 
 > `sam qr` (CLI) calls `POST /api/v1/admin/pair/new` authenticated by `Authorization: Passphrase <argon2-hash>`, loopback only. Server returns `{code, qr_data_uri}`. CLI prints the QR. Keeps DB ownership in the server; CLI stays a thin client.
@@ -201,8 +204,57 @@ Additive changes (new table / new column with default) go in the `additiveMigrat
     Word spaces come back from the inter-glyph gaps; the two-column reading order
     comes from a document-wide gutter x (measured across all pages, because one
     page's evidence is too weak) used to cut lines that carry both columns.
+  - **Figures** (`worker/pdffig.go` + `worker/pdfrender.go`). Two problems hide
+    behind "extract the images": raster figures are image XObjects, but most
+    academic figures (TikZ, matplotlib, pgfplots) are *drawing operators* with
+    nothing to extract — the ResNet paper yields **zero** image XObjects. So
+    figures are **rendered, not extracted**:
+    - **Detection** walks the content stream with `pdf.Interpret` (`cm` CTM +
+      `Do` on Image/Form XObjects + painted path ops). Clipping paths (`W n`)
+      are ignored — a clip is usually the whole page and would swallow it.
+      Boxes within 12pt merge; < 60×40pt is furniture; a box repeating at the
+      same spot on >half the pages is a running header. **Do not** try to get
+      these boxes from go-fitz — MuPDF exposes whole-page output only
+      (`Image`/`ImageDPI`/`SVG`/`Text`/`HTML`), no page-object enumeration.
+    - **Rendering** is MuPDF at 150dpi, one render per page, cropped per figure
+      (`pixelRect` maps points→pixels off the MediaBox and the bitmap's own
+      size, never the nominal DPI). PNG, not JPEG — figures are line art.
+    - Assets get a synthetic `original_url` (`pdf://<doc>/p<page>/fig<n>`) so
+      re-scraping overwrites instead of duplicating. Markdown carries a
+      `sam-figure:N` placeholder until `storePDFFigures` returns real URLs;
+      `resolveFigures` deletes any placeholder that never got one, so a failed
+      render can never leave a broken image.
+    - Tables are detected too (they are ruled drawings) — you get both the crop
+      and the table text. Deliberate: the column-flattened text of a table is
+      often unreadable, the picture is not.
+    - **Text drawn INSIDE a figure box is lifted out of the prose stream**
+      (`takeInterior` → `interiorBlock` in `pdf.go`) and re-attached under the
+      image as a collapsed `<details><pre>` block, one printed row per `<br>`.
+      Without this, `reflowParagraphs` reads every full-width table row as a
+      wrapped line and glues the whole table into one paragraph of numbers, and
+      `splitAtGutter` tears a wide table's right-hand columns off to a different
+      part of the page. The text stays in `documents.markdown` — searchable,
+      exported, visible to `DetectFalseParse` — only visually subordinate.
+      Two guards: a box absorbing > 60% of a page's fragments is treated as
+      mis-detected and nothing is moved; fewer than 3 interior lines (a lone axis
+      label) are left in place. The block is ONE line and `reflowParagraphs`
+      skips it by its `<details>` prefix, the same way it skips `![`.
+    - Still open: the caption is duplicated — once (truncated to its first line)
+      in the image `alt`, once inline as prose. `captionFor` only ever takes one
+      line, so dropping the inline copy would lose the continuation.
+    - There is **no table parser**. MuPDF's `fz_table_hunt` is inside the static
+      archive we already link, but go-fitz doesn't expose it (`opts.flags = 0`);
+      a real `| a | b |` needs a go-fitz fork. See
+      `plan/2026-07-29-pdf-table-parsing-research.md`.
   - A scanned/image-only PDF has no text layer → `DetectFalseParse` flags the
     Document and the job fails permanently. No OCR.
+  - **cgo is REQUIRED for the server** because of MuPDF (`just build` sets
+    `CGO_ENABLED=1`). `CGO_ENABLED=0` still *compiles* — go-fitz silently swaps
+    in a purego path that dlopens a `libmupdf.so` this box does not have — and
+    then fails at scrape time. go-fitz vendors static `.a` archives per platform,
+    so there is no system package to install; the binary just links glibc
+    dynamically (~29MB → ~42MB). `cli/` stays `CGO_ENABLED=0`.
+  - MuPDF is **AGPL-3.0**, which is why the repo now carries an AGPL `LICENSE`.
   - Library: `github.com/ledongthuc/pdf` (pure Go, no cgo). `dslipak/pdf` was
     tried and rejected — its `GetPlainText` burned >2min of CPU on a 21-page paper.
 - **`media_type = 'video'`** — YouTube/podcast ingest via yt-dlp. Fields:

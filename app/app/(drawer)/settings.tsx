@@ -18,6 +18,7 @@ import { useConfirm } from '../../src/ConfirmContext'
 import { useToast } from '../../src/ToastContext'
 import { useSyncStore } from '../../src/store/syncStore'
 import { useDebugLogStore } from '../../src/store/debugLogStore'
+import { useReadingModeStore } from '../../src/store/readingModeStore'
 
 function hostname(url: string): string {
   try { return new URL(url).hostname } catch { return url }
@@ -79,6 +80,13 @@ export default function SettingsScreen() {
   const { confirm } = useConfirm()
   const debugLogEnabled = useDebugLogStore((st) => st.enabled)
   const setDebugLogEnabled = useDebugLogStore((st) => st.setEnabled)
+  // One reading preference, shared with the document viewer's Flow/Auto/Page control.
+  const readingMode = useReadingModeStore((st) => st.mode)
+  const pageThreshold = useReadingModeStore((st) => st.threshold)
+  const setReadingMode = useReadingModeStore((st) => st.setMode)
+  const setPageThreshold = useReadingModeStore((st) => st.setThreshold)
+  const hydrateReadingMode = useReadingModeStore((st) => st.hydrate)
+  const [thresholdInput, setThresholdInput] = useState(String(pageThreshold))
 
   const [probing, setProbing] = useState(false)
   const [devices, setDevices] = useState<DeviceInfo[]>([])
@@ -166,6 +174,11 @@ export default function SettingsScreen() {
     loadUrlLastUsedMap().then(setUrlLastUsed)
   }, [])
 
+  useEffect(() => { void hydrateReadingMode() }, [hydrateReadingMode])
+  // Follow the store (hydration, or the reader's own control) — not the keystrokes,
+  // which only land here once they parse (see handleThresholdChange).
+  useEffect(() => { setThresholdInput(String(pageThreshold)) }, [pageThreshold])
+
   // Auto-recheck the proxy on connect + poll every 20s so it flips to green
   // automatically when the proxy host (e.g. fiona) comes back online.
   useEffect(() => {
@@ -246,6 +259,19 @@ export default function SettingsScreen() {
       }
     }, 800)
   }
+
+  // Digits only while typing, committed on blur/submit — a half-typed "2" on its way
+  // to "200" must not become the setting, and junk must restore the last good value
+  // rather than leave the reader on a threshold that resolves to nothing.
+  const handleThresholdChange = useCallback((raw: string) => {
+    setThresholdInput(raw.replace(/[^0-9]/g, '').slice(0, 3))
+  }, [])
+
+  const handleThresholdCommit = useCallback(() => {
+    const n = Number(thresholdInput)
+    if (thresholdInput && n > 0) setPageThreshold(n)
+    else setThresholdInput(String(pageThreshold))
+  }, [thresholdInput, pageThreshold, setPageThreshold])
 
   async function handleTogglePolling(enabled: boolean) {
     if (!activeUrl || !token) return
@@ -587,6 +613,48 @@ export default function SettingsScreen() {
         ) : (
           renderLangEditor()
         )}
+      </View>
+
+      {/* Reading mode (document viewer) — the SAME preference the reader's 3-way
+          Flow/Auto/Page control writes, never a second flag. */}
+      <View style={s.card}>
+        <View style={s.cardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.cardTitle}>Auto Page Mode</Text>
+            <Text style={s.cardSubtitle}>
+              {readingMode === 'auto'
+                ? `On — documents longer than ${pageThreshold} pages open paginated`
+                : readingMode === 'page'
+                  ? 'Off — page mode is forced on for every document (set in the reader)'
+                  : 'Off — every document opens in continuous scroll'}
+            </Text>
+          </View>
+          <Switch
+            value={readingMode === 'auto'}
+            onValueChange={(on) => setReadingMode(on ? 'auto' : 'flow')}
+            accessibilityLabel="Auto page mode"
+            trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+            thumbColor={theme.colors.background}
+          />
+        </View>
+        <View style={s.thresholdRow}>
+          <Text style={s.infoLabel}>Paginate documents longer than</Text>
+          <TextInput
+            style={s.thresholdInput}
+            value={thresholdInput}
+            onChangeText={handleThresholdChange}
+            onBlur={handleThresholdCommit}
+            onSubmitEditing={handleThresholdCommit}
+            returnKeyType="done"
+            keyboardType="number-pad"
+            inputMode="numeric"
+            maxLength={3}
+            // No selectTextOnFocus: RNW re-runs the select on every re-render of a
+            // controlled field, so each keystroke replaced the previous one.
+            accessibilityLabel="Page threshold"
+          />
+          <Text style={s.infoLabel}>pages</Text>
+        </View>
       </View>
 
       {/* Debug log streaming */}
@@ -974,6 +1042,14 @@ function buildStyles(t: Theme) {
     langChipText: { color: t.colors.text, fontSize: 12, fontWeight: '700' },
     langEmpty: { color: t.colors.muted, fontSize: 12, fontStyle: 'italic' },
     langAddRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm, marginTop: t.spacing.xs },
+    // Auto-page-mode threshold field
+    thresholdRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm, flexWrap: 'wrap' },
+    thresholdInput: {
+      width: 56, textAlign: 'center',
+      color: t.colors.text, fontSize: 13, fontWeight: '700',
+      paddingHorizontal: t.spacing.xs, paddingVertical: t.spacing.xs,
+      borderRadius: t.radius.sm, borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.background,
+    },
     langInput: {
       flex: 1, color: t.colors.text, fontSize: 13,
       paddingHorizontal: t.spacing.sm, paddingVertical: t.spacing.xs,

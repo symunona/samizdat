@@ -30,6 +30,21 @@ spec all            run all four
 - Shows proposed CLAUDE.md diff, asks Y/n before writing
 - Non-destructive: never writes without confirmation
 
+### It rewrites the WHOLE file — two guards keep that from destroying it
+The prompt asks for the full updated CLAUDE.md and the result is `os.WriteFile`d over
+the original, with a Y/n prompt that **defaults to yes**. Anything short of a complete
+reply is therefore silent data loss. It already happened once: `max_tokens` was 4096
+while `server/CLAUDE.md` alone is ~4k tokens, so the reply was cut mid-file and **67
+lines of PDF and video notes were deleted**. Both guards must stay:
+1. `claude.ErrTruncated` — the client now reads `stop_reason`; `max_tokens` is returned
+   as an error and diff-review refuses to touch the file. Do not discard this error.
+2. `shrinksTooMuch` — refuses a rewrite that drops more than `maxShrinkPct` (15%) of the
+   file, independent of what the API reports. Unit-tested in `diff_review_test.go`.
+
+`MaxTokens` is 16384 (`internal/claude/client.go`) because a full CLAUDE.md rewrite is
+the largest response any tool here asks for. If a CLAUDE.md outgrows that, raise it —
+but the guards, not the limit, are what make the tool safe.
+
 ## Parity behavior
 - No-op on main branch (diffs `main...HEAD`, so it gates committed changes pre-merge — not the working tree)
 - Concrete pairs only, declared in `parity.go` — NO generic registry. One pair today: the Highlight card (`app/src/HighlightCard.tsx` RN ↔ `app/src/webview/document-viewer.ts` WebView DOM). A new paired-renderer file group gets its own `parityPair` + check, not an abstraction.

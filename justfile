@@ -57,6 +57,127 @@ setup-clipper:
 setup-tooling:
     cd tooling && go mod download 2>/dev/null || echo "tooling/ not initialized yet"
 
+[group('setup')]
+[doc('Register + provision a remote Android build node (dest = ssh alias|ip|user@host): JDK17, SDK cmdline-tools, isolated gradle home, deps. Saves config/build-node.env → build-android then builds there')]
+setup-build-node dest ws="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    DEST="{{dest}}"
+    ssh -o BatchMode=yes -o ConnectTimeout=8 "$DEST" true 2>/dev/null || {
+      echo "✗ cannot ssh to ${DEST} — needs a reachable host and a key that logs in without a password"; exit 1; }
+    WS="{{ws}}"
+    [ -n "$WS" ] || WS=$(ssh "$DEST" 'echo $HOME/build/sam')
+    GRADLE_HOME="$(dirname "$WS")/gradle-sam"
+    # Pin the node's JDK to taskbot's so both hosts compile with one toolchain.
+    JDK_VER="jdk-17.0.19+10"
+    echo "── provisioning ${DEST} (workspace ${WS}) ──"
+    ssh "$DEST" bash -s -- "$WS" "$GRADLE_HOME" "$JDK_VER" <<'REMOTE'
+    set -euo pipefail
+    WS=$1; GRADLE_HOME=$2; JDK_VER=$3
+    export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"   # non-login ssh shell
+    missing=""
+    for t in git node pnpm just unzip rsync curl; do command -v "$t" >/dev/null || missing="$missing $t"; done
+    [ -z "$missing" ] || { echo "✗ build node is missing:$missing"; exit 1; }
+
+    # JDK 17 — RN 0.85's gradle plugin needs 17, and auto-provisioning stays OFF
+    # because RN pins foojay-resolver 0.5.0, which crashes on Gradle 9.
+    JDK="$HOME/.jdks/$JDK_VER"
+    if [ ! -x "$JDK/bin/javac" ]; then
+      echo "→ installing $JDK_VER"
+      mkdir -p "$HOME/.jdks"
+      curl -fsSL "https://api.adoptium.net/v3/binary/version/${JDK_VER/+/%2B}/linux/x64/jdk/hotspot/normal/eclipse" \
+        | tar xz -C "$HOME/.jdks"
+      [ -x "$JDK/bin/javac" ] || { echo "✗ $JDK_VER did not unpack to $JDK"; exit 1; }
+    fi
+
+    # Android SDK — reuse an existing one (Android Studio's), else start a fresh one.
+    SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
+    mkdir -p "$SDK"
+    if [ ! -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+      echo "→ installing SDK command-line tools into $SDK"
+      tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+      curl -fsSL -o "$tmp/clt.zip" https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+      unzip -q "$tmp/clt.zip" -d "$tmp"
+      mkdir -p "$SDK/cmdline-tools/latest"
+      mv "$tmp"/cmdline-tools/* "$SDK/cmdline-tools/latest/"
+    fi
+    export ANDROID_HOME="$SDK" ANDROID_SDK_ROOT="$SDK" JAVA_HOME="$JDK"
+    export PATH="$SDK/cmdline-tools/latest/bin:$SDK/platform-tools:$PATH"
+    # Accepted licenses are what let AGP auto-download whatever the build asks for, so
+    # the explicit installs below are only a warm-up — a version drift in app/android
+    # resolves itself on the first build instead of failing setup.
+    yes | sdkmanager --licenses >/dev/null 2>&1 || true
+    sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null 2>&1 || \
+      echo "  ⚠ SDK warm-up install failed — AGP will fetch what it needs on the first build"
+
+    # Gradle home: cache AND memory tuning, isolated from the node's own ~/.gradle
+    # (which may belong to other toolchains). Sized from the node's real hardware —
+    # the inverse of taskbot's one-small-JVM survival config.
+    mkdir -p "$GRADLE_HOME"
+    cores=$(nproc); memgb=$(awk '/MemTotal/{printf "%d", $2/1048576}' /proc/meminfo)
+    workers=$(( cores - 2 )); [ "$workers" -ge 1 ] || workers=1; [ "$workers" -le 8 ] || workers=8
+    heap=$(( memgb / 4 )); [ "$heap" -ge 2 ] || heap=2; [ "$heap" -le 8 ] || heap=8
+    cat > "$GRADLE_HOME/gradle.properties" <<EOF
+    # Written by 'just setup-build-node' — sized for ${cores} cores / ${memgb}GB.
+    org.gradle.java.installations.auto-download=false
+    org.gradle.java.installations.paths=$JDK
+    org.gradle.daemon=true
+    org.gradle.parallel=true
+    org.gradle.workers.max=$workers
+    org.gradle.caching=true
+    org.gradle.jvmargs=-Xmx${heap}g -XX:MaxMetaspaceSize=2g
+    kotlin.compiler.execution.strategy=daemon
+    kotlin.incremental=true
+    # The node is somebody's desktop — don't sit on ${heap}GB for gradle's default 3h.
+    org.gradle.daemon.idletimeout=1800000
+    EOF
+
+    # Receiving repo. HEAD stays on 'main' while builds push to 'build', so the pushed
+    # ref is never the checked-out branch → no receive.denyCurrentBranch refusal, and no
+    # dependence on updateInstead (which balks whenever the node's tree is dirty).
+    mkdir -p "$WS/secrets"
+    [ -d "$WS/.git" ] || git -C "$WS" init -q -b main
+    echo "  jdk    : $JDK"
+    echo "  sdk    : $SDK"
+    echo "  gradle : $GRADLE_HOME (${workers} workers, -Xmx${heap}g)"
+    echo "  space  : $(df -h --output=avail "$WS" | tail -1 | tr -d ' ') free at $WS"
+    REMOTE
+    # The keystore is gitignored, so it can only get there out-of-band. Without it the
+    # node mints its own and the APK silently won't install over an existing one.
+    just _apk-keystore >/dev/null
+    rsync -q secrets/debug.keystore "${DEST}:${WS}/secrets/debug.keystore"
+    git remote remove build-node 2>/dev/null || true
+    git remote add build-node "${DEST}:${WS}"
+    echo "── seeding the workspace ──"
+    git push -q --force build-node HEAD:refs/heads/build
+    LOCK=$(sha256sum app/pnpm-lock.yaml | cut -d' ' -f1)
+    ssh "$DEST" bash -s -- "$WS" "$GRADLE_HOME" "$LOCK" <<'REMOTE'
+    set -euo pipefail
+    WS=$1; GRADLE_HOME=$2; LOCK=$3
+    export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+    cd "$WS"
+    git reset -q --hard build
+    echo "→ pnpm install (app, ~4GB — one time)"
+    (cd app && pnpm install --frozen-lockfile)
+    printf '%s' "$LOCK" > "$GRADLE_HOME/.pnpm-lock.stamp"
+    # icongen carries its own node_modules (sharp) — the Expo tree can't install it.
+    echo "→ npm install (tools/icongen)"
+    (cd tools/icongen && npm install --no-audit --no-fund >/dev/null)
+    REMOTE
+    mkdir -p config
+    cat > config/build-node.env <<EOF
+    # Written by 'just setup-build-node ${DEST}'. Gitignored (machine-local).
+    BUILD_NODE_DEST=${DEST}
+    BUILD_NODE_WS=${WS}
+    BUILD_NODE_GRADLE_HOME=${GRADLE_HOME}
+    BUILD_NODE_ANDROID_HOME=$(ssh "$DEST" 'echo ${ANDROID_HOME:-$HOME/Android/Sdk}')
+    BUILD_NODE_JDK=$(ssh "$DEST" "echo \$HOME/.jdks/${JDK_VER}")
+    EOF
+    echo ""
+    echo "✓ build node ${DEST} ready — 'just build-android' now builds there."
+    echo "  config: config/build-node.env   fallback: just build-android-local"
+
 _check-go:
     @command -v go >/dev/null 2>&1 || (echo "error: Go not installed — https://go.dev/dl/"; exit 1)
     @go version | grep -qE "go1\.(2[2-9]|[3-9][0-9])\." || (echo "error: Go 1.22+ required ($(go version))"; exit 1)
@@ -166,6 +287,13 @@ status:
       echo "  started    : ${started:-?}"
     fi
     echo "  binary     : server/bin/samizdat (built $(stat -c '%y' server/bin/samizdat 2>/dev/null | cut -d. -f1 || echo '?'))"
+    if [ -f config/build-node.env ]; then
+      source config/build-node.env
+      if ssh -o BatchMode=yes -o ConnectTimeout=3 "$BUILD_NODE_DEST" true 2>/dev/null; then bn="reachable"; else bn="UNREACHABLE — 'just build-android-local'"; fi
+      echo "  build node : ${BUILD_NODE_DEST} (${bn}) $(node tools/build-times.mjs estimate build-android-remote | sed 's/^⏱ //')"
+    else
+      echo "  build node : none — 'just setup-build-node <ssh-dest>' (APKs build here, ~35 min)"
+    fi
     head=$(git rev-parse --short HEAD 2>/dev/null || echo '?')
     [ -z "$(git status --porcelain 2>/dev/null)" ] || head="${head}-dirty"
     echo "  git HEAD   : ${head}"
@@ -230,7 +358,10 @@ build-server:
     [ -z "$(git status --porcelain 2>/dev/null)" ] || commit="${commit}-dirty"
     built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     pkg=github.com/symunona/samizdat/server/internal/api
-    CGO_ENABLED=0 go build -ldflags "-X ${pkg}.version=${ver} -X ${pkg}.commit=${commit} -X ${pkg}.buildTime=${built}" -o bin/samizdat .
+    # cgo is REQUIRED: worker/pdfrender.go links MuPDF for PDF figure extraction.
+    # CGO_ENABLED=0 still compiles — go-fitz silently swaps in a purego path that
+    # dlopens a libmupdf.so this box does not have — and then panics at scrape time.
+    CGO_ENABLED=1 go build -ldflags "-X ${pkg}.version=${ver} -X ${pkg}.commit=${commit} -X ${pkg}.buildTime=${built}" -o bin/samizdat .
 
 [group('build')]
 [doc('Build the sam CLI')]
@@ -271,29 +402,154 @@ bump level="patch":
     node "{{justfile_directory()}}/tools/bump-version.mjs" {{level}}
 
 [group('build')]
-[doc('Build a standalone debug-signed Android APK locally, minimal RAM (JS bundled separately) → dist/samizdat.apk (+ .json). Auto-bumps version (level=patch|minor|major)')]
+[doc('Build the Android APK — on the configured build node (~4 min) if one is set, else says so (level=patch|minor|major)')]
 build-android level="patch":
     #!/usr/bin/env bash
     set -euo pipefail
+    cd "{{justfile_directory()}}"
+    # Remote by DEFAULT: this box has 4GB, so the local build runs throttled to one
+    # small JVM and takes ~35 min. Never silently fall back to it — a 35-minute
+    # "why is this slow" is worse than an error naming the recipe you actually want.
+    [ -f config/build-node.env ] || {
+      echo "✗ no build node configured."
+      echo "  set one up:  just setup-build-node <ssh-dest> [workspace]"
+      echo "  or build here (throttled, ~35 min):  just build-android-local"
+      exit 1
+    }
+    just build-android-remote {{level}}
+
+[group('build')]
+[doc('Build the APK on the configured build node, fetch it back, verify + deploy (level=patch|minor|major)')]
+build-android-remote level="patch":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    [ -f config/build-node.env ] || { echo "✗ no build node — run 'just setup-build-node <ssh-dest>'"; exit 1; }
+    source config/build-node.env
+    ssh -o BatchMode=yes -o ConnectTimeout=5 "$BUILD_NODE_DEST" true 2>/dev/null || {
+      echo "✗ build node ${BUILD_NODE_DEST} unreachable — wake it, or 'just build-android-local' (~35 min)"; exit 1; }
+    # Source travels as a git push over the ssh path that already works (diff-only, no
+    # GitHub key needed on the node) — so the node builds HEAD, and an uncommitted change
+    # would silently not be in the APK.
+    git diff --quiet HEAD -- || {
+      echo "✗ uncommitted tracked changes — the node builds HEAD, so commit first:"; git status --short -uno; exit 1; }
+    # taskbot stays the ONLY version bumper: versionCode is wall-clock monotonic and
+    # extra.buildEpoch is stamped here. The bump is committed because the node can only
+    # see committed work — and because an uncommitted bump regresses versionCode on the
+    # next read (see CLAUDE.md § Versioning).
+    node tools/bump-version.mjs {{level}}
+    VER=$(node -e 'const a=require("./app/app.json").expo;process.stdout.write(a.version)')
+    CODE=$(node -e 'const a=require("./app/app.json").expo;process.stdout.write(String(a.android.versionCode))')
+    git commit -q -m "chore(app): bump version to ${VER}" -- app/app.json
+    node tools/build-times.mjs estimate build-android-remote
+    echo "→ ${VER} (code ${CODE}) on ${BUILD_NODE_DEST}:${BUILD_NODE_WS}"
+    t0=$SECONDS
+    git push -q --force build-node HEAD:refs/heads/build
+    # secrets/ is gitignored → the keystore never travels with the source. Re-sync it
+    # every build: a node that mints its own signs an APK the phone refuses to install
+    # over (verify-apk.sh catches it, but not before the build is spent).
+    ssh "$BUILD_NODE_DEST" "mkdir -p ${BUILD_NODE_WS}/secrets"
+    rsync -q secrets/debug.keystore "${BUILD_NODE_DEST}:${BUILD_NODE_WS}/secrets/debug.keystore"
+    LOCK=$(sha256sum app/pnpm-lock.yaml | cut -d' ' -f1)
+    ssh "$BUILD_NODE_DEST" bash -s -- "$BUILD_NODE_WS" "$BUILD_NODE_GRADLE_HOME" "$BUILD_NODE_ANDROID_HOME" "$BUILD_NODE_JDK" "$LOCK" <<'REMOTE'
+    set -euo pipefail
+    WS=$1; GRADLE_HOME=$2; SDK=$3; JDK=$4; LOCK=$5
+    export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"   # non-login ssh shell
+    cd "$WS"
+    git reset -q --hard build
+    # -fd, NEVER -fdx: ignored paths (node_modules, android/, secrets/) must survive,
+    # else every build pays a 4GB reinstall and a cold gradle cache.
+    git clean -qfd
+    # The lock stamp lives in GRADLE_USER_HOME, outside the repo — inside it, the very
+    # `git clean` above would delete it every build.
+    if [ "$(cat "$GRADLE_HOME/.pnpm-lock.stamp" 2>/dev/null || true)" != "$LOCK" ]; then
+      echo "→ pnpm install (lockfile changed)"
+      (cd app && pnpm install --frozen-lockfile)
+      printf '%s' "$LOCK" > "$GRADLE_HOME/.pnpm-lock.stamp"
+    fi
+    export GRADLE_USER_HOME="$GRADLE_HOME" ANDROID_HOME="$SDK" JAVA_HOME="$JDK"
+    export NODE_OPTIONS=--max-old-space-size=6144   # the node has RAM; let Metro use it
+    just _apk-gradle
+    REMOTE
+    mkdir -p dist
+    # Keep the outgoing APK as the signature/versionCode baseline for verify-apk.sh.
+    if [ -f dist/samizdat.apk ]; then
+      cp dist/samizdat.apk dist/samizdat.apk.prev
+      [ -f dist/samizdat.apk.json ] && cp dist/samizdat.apk.json dist/samizdat.apk.prev.json || true
+    fi
+    rsync -q "${BUILD_NODE_DEST}:${BUILD_NODE_WS}/app/android/app/build/outputs/apk/release/app-release.apk" dist/samizdat.apk
+    # Sidecar is written HERE from the local app.json — nothing about the version comes
+    # back from the node, so the served metadata can't drift from the repo.
+    node tools/write-apk-sidecar.mjs
+    node tools/build-times.mjs log build-android-remote "$((SECONDS-t0))" "$BUILD_NODE_DEST"
+    echo "APK → dist/samizdat.apk ($(du -h dist/samizdat.apk | cut -f1)) in $((SECONDS-t0))s"
+    tools/verify-apk.sh dist/samizdat.apk --against dist/samizdat.apk.prev
+    just deploy-android
+    # A daemon holding ~8GB on someone's desktop is worth naming out loud.
+    daemons=$(ssh "$BUILD_NODE_DEST" 'pgrep -c -f GradleDaemon || true')
+    [ "${daemons:-0}" = "0" ] || echo "ℹ ${daemons} gradle daemon(s) resident on ${BUILD_NODE_DEST} (idle-timeout will reap them)"
+
+[group('build')]
+[doc('Build the APK on THIS box — throttled for 4GB, ~35 min (+ NDK re-download). Offline fallback for build-android (level=patch|minor|major)')]
+build-android-local level="patch":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    # The NDK was reclaimed from this 4GB/75G box once xayah became the build node
+    # (it is ~2GB and only a local build needs it). AGP re-fetches it — the accepted
+    # licenses in Sdk/licenses are what allow that — but say so before the wait starts.
+    [ -d "${ANDROID_HOME:-$HOME/Android/Sdk}/ndk" ] || \
+      echo "ℹ no local NDK — AGP will download ~2GB first (kept off this box; see CLAUDE.md)"
     # Auto-bump the version FIRST so prebuild stamps the new version/versionCode
-    # into the native manifest. Default patch; `just build-android minor|major`
+    # into the native manifest. Default patch; `just build-android-local minor|major`
     # for the bigger bumps. See tools/bump-version.mjs + CLAUDE.md.
-    node "{{justfile_directory()}}/tools/bump-version.mjs" {{level}}
+    node tools/bump-version.mjs {{level}}
+    node tools/build-times.mjs estimate build-android-local
+    t0=$SECONDS
+    # Memory caps live in ~/.gradle/gradle.properties (one JVM, in-process Kotlin,
+    # small heap) — this VPS has 4GB RAM and also serves live sites.
+    NODE_OPTIONS="--max-old-space-size=1536" just _apk-gradle
+    mkdir -p dist
+    if [ -f dist/samizdat.apk ]; then
+      cp dist/samizdat.apk dist/samizdat.apk.prev
+      [ -f dist/samizdat.apk.json ] && cp dist/samizdat.apk.json dist/samizdat.apk.prev.json || true
+    fi
+    cp app/android/app/build/outputs/apk/release/app-release.apk dist/samizdat.apk
+    node tools/write-apk-sidecar.mjs
+    node tools/build-times.mjs log build-android-local "$((SECONDS-t0))" local
+    echo "APK → dist/samizdat.apk ($(du -h dist/samizdat.apk | cut -f1)) in $((SECONDS-t0))s"
+    tools/verify-apk.sh dist/samizdat.apk --against dist/samizdat.apk.prev
+    # Auto-deploy so the fresh build is what the live server (and in-app updater) sees.
+    just deploy-android
+
+# Shared APK build steps, so the local and remote paths cannot drift. Everything
+# host-specific comes from the environment: ANDROID_HOME, JAVA_HOME, GRADLE_USER_HOME
+# (which is also where each host's memory tuning lives), NODE_OPTIONS.
+_apk-gradle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
     export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
     export ANDROID_SDK_ROOT="$ANDROID_HOME"
     export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-    export NODE_OPTIONS="--max-old-space-size=1536"   # cap Metro's node heap
+    export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=1536}"   # cap Metro's node heap
     # Pre-accept SDK licenses so gradle can auto-download compileSdk/build-tools.
     yes | sdkmanager --licenses >/dev/null 2>&1 || true
+    # src/webview/document-viewer-bundle.ts is GENERATED and gitignored: a build host
+    # that never ran `just dev` has none at all, and this box would otherwise bundle
+    # whatever stale copy is on disk — shipping an APK whose document viewer predates
+    # the source. Regenerate every APK build.
+    just webview-build
     # Rasterize the logo SVG → app/assets/*.png before prebuild reads them, so a
     # fresh assets/samizdat.svg always flows into the launcher icon.
     just gen-icons
     # Generate the native android/ project from managed config (idempotent).
-    cd "{{justfile_directory()}}/app"
+    cd app
     npx expo prebuild --platform android --no-install
+    # Install the canonical debug keystore AFTER prebuild, overwriting anything it
+    # minted: that key is the APK's install-over identity (see _apk-keystore).
+    just _apk-keystore
     cd android
-    # Memory caps live in ~/.gradle/gradle.properties (one JVM, in-process Kotlin,
-    # small heap) — this VPS has 4GB RAM and also serves live sites.
     # Phase 1 — JS bundle + Hermes bytecode ONLY. Runs Metro (node) while the
     # gradle JVM is idle, so node never coexists with the Kotlin/dex compile.
     # --rerun-tasks + a metro cache wipe force a FRESH bundle every build: gradle's
@@ -301,8 +557,8 @@ build-android level="patch":
     # change it misses) would otherwise ship a stale Hermes bundle — leaving the
     # in-app APP_VERSION_CODE behind the native manifest and the served sidecar,
     # which makes the updater offer an "update" to the version already installed.
-    rm -rf "${TMPDIR:-/tmp}"/metro-* "${TMPDIR:-/tmp}"/haste-map-* app/node_modules/.cache 2>/dev/null || true
-    ./gradlew :app:createBundleReleaseJsAndAssets --rerun-tasks
+    rm -rf "${TMPDIR:-/tmp}"/metro-* "${TMPDIR:-/tmp}"/haste-map-* ../node_modules/.cache 2>/dev/null || true
+    nice -n 10 ./gradlew :app:createBundleReleaseJsAndAssets --rerun-tasks
     # Phase 2 — compile + dex + package. The bundle above is up-to-date and gets
     # skipped, so no node here. Release is debug-signed + not minified (see
     # android/app/build.gradle) → a standalone, installable test APK. Skip
@@ -310,21 +566,42 @@ build-android level="patch":
     # local test build. reactNativeArchitectures=arm64-v8a ships ONE ABI (real
     # phones) instead of the default four (armeabi-v7a/arm64/x86/x86_64) — the
     # x86* pair is emulator-only and ~55MB of dead weight. Cuts the APK ~123M→~49M.
-    ./gradlew assembleRelease -x lintVitalRelease -PreactNativeArchitectures=arm64-v8a
+    nice -n 10 ./gradlew assembleRelease -x lintVitalRelease -PreactNativeArchitectures=arm64-v8a
+
+# Install secrets/debug.keystore into the generated android/ tree. The keystore is the
+# app's INSTALL-OVER IDENTITY: an APK signed by a different one cannot update an
+# installed build (Android refuses; the phone just shows nothing). app/android is
+# gitignored, so the keystore lives outside it — and outside git entirely.
+_apk-keystore:
+    #!/usr/bin/env bash
+    set -euo pipefail
     cd "{{justfile_directory()}}"
-    mkdir -p dist
-    cp app/android/app/build/outputs/apk/release/app-release.apk dist/samizdat.apk
-    # Sidecar manifest (version + versionCode from app.json), written atomically
-    # with the copy so the served version never drifts from the served artifact.
-    # built_at MUST derive from extra.buildEpoch (the value baked into the bundle as
-    # APP_BUILD_EPOCH), NOT `new Date()`: the equal-versionCode fallback in
-    # isUpdateAvailable compares built_at > APP_BUILD_EPOCH, and a fresh `new Date()`
-    # (captured minutes after buildEpoch was stamped at build start) is ALWAYS later
-    # than buildEpoch → the app would perpetually report an update against its own build.
-    node -e 'const a=require("./app/app.json").expo,fs=require("fs");const st=fs.statSync("dist/samizdat.apk");const be=(a.extra&&a.extra.buildEpoch)||Date.now();fs.writeFileSync("dist/samizdat.apk.json",JSON.stringify({version:a.version,version_code:a.android.versionCode,size:st.size,built_at:new Date(be).toISOString()})+"\n")'
-    echo "APK → dist/samizdat.apk ($(du -h dist/samizdat.apk | cut -f1))"
-    # Auto-deploy so the fresh build is what the live server (and in-app updater) sees.
-    just deploy-android
+    KS=secrets/debug.keystore
+    if [ ! -f "$KS" ]; then
+      mkdir -p secrets
+      if [ -f app/android/app/debug.keystore ]; then
+        install -m 600 app/android/app/debug.keystore "$KS"
+        echo "→ adopted app/android/app/debug.keystore as ${KS} (canonical from now on)"
+      else
+        kt=$(command -v keytool || ls "$HOME"/.jdks/*/bin/keytool 2>/dev/null | head -1 || true)
+        [ -n "$kt" ] || { echo "✗ no keytool — install a JDK, or restore ${KS} from backup"; exit 1; }
+        "$kt" -genkeypair -keystore "$KS" -storepass android -keypass android \
+          -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10950 \
+          -dname "CN=Android Debug,O=Android,C=US" >/dev/null
+        chmod 600 "$KS"
+        echo "⚠ minted a NEW ${KS} — a NEW install-over identity."
+        echo "  Phones running an APK signed by the previous key must uninstall before updating."
+        echo "  Back this file up outside the repo (it is gitignored)."
+      fi
+    fi
+    # No generated tree yet (fresh clone / setup-build-node): ensuring the canonical
+    # keystore exists is the whole job — _apk-gradle installs it right after prebuild.
+    [ -d app/android/app ] && install -m 600 "$KS" app/android/app/debug.keystore || true
+
+[group('build')]
+[doc('Show recorded build durations (local vs build node) — see build-android')]
+build-times:
+    @node "{{justfile_directory()}}/tools/build-times.mjs" show
 
 [group('build')]
 [doc('Deploy dist/samizdat.apk to the live server so the in-app updater sees it (auto-run by build-android)')]
@@ -349,8 +626,15 @@ deploy-android:
       echo "ℹ no server running on :{{_dev_port}} — start one with 'just dev' (dev) or 'just restart' (service)."
     fi
     # Verify: the live server should now advertise app.json's version to the updater.
+    # Poll — a just-restarted service needs a moment to bind, and checking once made this
+    # report "server isn't serving an apk" (with a bogus fix-your-config hint) on a
+    # deploy that was in fact fine.
     want=$(node -e 'const a=require("./app/app.json").expo;process.stdout.write(a.version+" / code "+a.android.versionCode)')
-    resp=$(curl -fsS "http://localhost:{{_dev_port}}/api/v1/app/android/version" 2>/dev/null || true)
+    for _ in $(seq 15); do
+      resp=$(curl -fsS "http://localhost:{{_dev_port}}/api/v1/app/android/version" 2>/dev/null || true)
+      [ -z "$resp" ] || break
+      sleep 1
+    done
     if [ -n "$resp" ]; then
       got=$(node -e "const d=JSON.parse(process.argv[1]);process.stdout.write(d.version+' / code '+d.version_code)" "$resp" 2>/dev/null || echo "(unparseable /api/v1/app/android/version)")
     else
