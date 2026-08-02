@@ -687,6 +687,56 @@ func (q *Queries) GetLLMUsageTotalsByModel(ctx context.Context) ([]GetLLMUsageTo
 	return items, nil
 }
 
+const getLLMUsageTotalsByProviderModel = `-- name: GetLLMUsageTotalsByProviderModel :many
+SELECT provider,
+       model,
+       COUNT(*)                         AS calls,
+       COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+       COALESCE(SUM(output_tokens), 0) AS output_tokens,
+       MAX(created_at)                  AS last_call_at
+FROM llm_usages
+GROUP BY provider, model
+`
+
+type GetLLMUsageTotalsByProviderModelRow struct {
+	Provider     string      `json:"provider"`
+	Model        string      `json:"model"`
+	Calls        int64       `json:"calls"`
+	InputTokens  interface{} `json:"input_tokens"`
+	OutputTokens interface{} `json:"output_tokens"`
+	LastCallAt   interface{} `json:"last_call_at"`
+}
+
+func (q *Queries) GetLLMUsageTotalsByProviderModel(ctx context.Context) ([]GetLLMUsageTotalsByProviderModelRow, error) {
+	rows, err := q.db.QueryContext(ctx, getLLMUsageTotalsByProviderModel)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetLLMUsageTotalsByProviderModelRow
+	for rows.Next() {
+		var i GetLLMUsageTotalsByProviderModelRow
+		if err := rows.Scan(
+			&i.Provider,
+			&i.Model,
+			&i.Calls,
+			&i.InputTokens,
+			&i.OutputTokens,
+			&i.LastCallAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getLatestDoneRunForDoc = `-- name: GetLatestDoneRunForDoc :one
 SELECT id, pipeline_id, document_id, job_id, document_content_hash, status, step_index, state, superseded_at, created_at, updated_at, rev, deleted_at FROM pipeline_runs
 WHERE pipeline_id = ? AND document_id = ? AND status = 'done' AND deleted_at IS NULL

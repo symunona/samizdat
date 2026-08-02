@@ -55,6 +55,7 @@ server/
       media.go              # GET  /api/v1/media/{id}      (asset serving)
                             # GET  /api/v1/documents/{id}/audio (audio streaming)
       ytdlp_status.go       # GET  /api/v1/ytdlp/status    (bearer-authed, proxy health)
+      llm_status.go         # GET  /api/v1/llm/status      (bearer-authed, provider health + spend)
       middleware.go         # bearerAuth, localhostOnly guards
       sync.go               # GET  /api/v1/sync            (bearer-authed, incremental pull)
       sync_test.go          # unit tests for cursor correctness
@@ -94,6 +95,7 @@ CREATE TABLE IF NOT EXISTS server_settings (
   value       TEXT NOT NULL
   -- keys: "passphrase_hash" (Argon2id $argon2id$... string)
   --       "ytdlp_proxy_last_ok_at" (RFC3339, persisted across restarts)
+  --       "llm_provider_health" (JSON []llm.ProviderHealth, see LLM provider health)
 );
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -261,6 +263,31 @@ Additive changes (new table / new column with default) go in the `additiveMigrat
   - `media_metadata`: JSON `{provider, external_id, duration_ms, transcript_status, orig_lang, transcript_langs}` where `transcript_status` ∈ `"subs" | "auto" | "none"` (of the original track), `orig_lang` is the original language code, and `transcript_langs` lists all languages present.
   - `transcript`: JSON **lang-keyed map** `{lang: [{start_ms, end_ms, text}]}` (empty object `{}` when none). Legacy rows may still hold a bare array `[...]`; the app parsers accept both.
   - `markdown`: flattened transcript text (one segment per line); falls back to video description when no transcript.
+
+## LLM provider health (`internal/llm/health.go`)
+
+**There is no probe.** A health check would be a real completion — tokens and money
+on every Settings render — so status is the outcome of the LAST real call. Both
+clients (`anthropic.go`, `openai_compat.go`) `defer Record(provider, baseURL, err)`
+on every return path, into a package-level registry. That placement is deliberate:
+pipeline steps mint their own clients (`llm.New` per step), so wiring health through
+`New` would miss them.
+
+- **Identity is provider+base URL** (`ProviderKey`) — two openai_compat boxes are two
+  rows; usage in `llm_usages` only records the provider NAME, so per-endpoint cost is
+  not derivable and the API reports spend per provider name instead.
+- **`classify(err)` → `quota | auth | transport | api`.** Anthropic answers a spent
+  balance with a plain **400**, so only the message distinguishes "out of credits"
+  from "bad request" — that's what `quotaRe` is for. This classification is the whole
+  point of the feature: before it, a dead pipeline was the only symptom.
+- **Persisted** to `server_settings.llm_provider_health` after every Record, and
+  re-read on every `GET /api/v1/llm/status` (in-memory always wins) — so an overnight
+  failure survives a restart and a seeded row lands without one (used by `just e2e-int`).
+- A provider dropped from config still gets a row with `role: "retired"`: its spend
+  and its error are history worth keeping, but it must never raise the app's alert dot.
+- `llm.HasKey(cfg)` mirrors `newSingle`'s env fallback (`ANTHROPIC_API_KEY`) — keep the
+  two in step, or a working provider reads as "No API key configured". The API never
+  returns the key itself, only `has_key`.
 
 ## Scraper paywall auth (per-domain login)
 Paywalled domains reuse the owner's subscription via a persisted browser session,

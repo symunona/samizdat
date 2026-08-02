@@ -41,6 +41,7 @@ const PAGES = [
   ['/jobs', 'jobs'],
   ['/subscriptions', 'subscriptions'],
   ['/pipelines', 'pipelines'],
+  ['/settings', 'settings'],
   [`/document/${VIDEO_DOC_ID}`, 'video document'],
 ]
 

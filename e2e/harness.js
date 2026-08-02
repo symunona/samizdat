@@ -154,6 +154,20 @@ VALUES ('${q(id)}','${q(canonicalUrl)}','${q(title)}','${q(markdown)}','${now}',
   console.log('  seeded text document', id)
 }
 
+// Seed the persisted LLM provider-health snapshot — the shape llm.Record leaves
+// behind after a real call. The server re-reads this setting on every
+// GET /api/v1/llm/status, so a seed lands without a restart. Use it to stage a
+// failure (e.g. Anthropic out of credits) the UI must surface.
+export function seedLLMHealth(rows) {
+  const q = s => s.replace(/'/g, "''")
+  const sql = `INSERT OR REPLACE INTO server_settings (key,value)
+VALUES ('llm_provider_health','${q(JSON.stringify(rows))}');`
+  const f = '/tmp/samizdat-test/seed-llm-health.sql'
+  fs.writeFileSync(f, sql)
+  execSync(`sqlite3 ${TEST_DB} < ${f}`)
+  console.log('  seeded llm health', rows.map(r => `${r.key}:${r.last_error_kind || 'ok'}`).join(', '))
+}
+
 // Seed a Tag row (offline-test fixture — an existing tag the app can apply offline).
 export function seedTag({ id, name, color = 'default' }) {
   const now = new Date().toISOString()

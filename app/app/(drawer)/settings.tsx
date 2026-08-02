@@ -8,10 +8,9 @@ import type { DeviceInfo, AppSettings, LanguagePrefs } from '../../src/api'
 import { displayLang, parseLangInput } from '../../src/langNames'
 import { APP_VERSION, APP_VERSION_CODE, isUpdateAvailable } from '../../src/appVersion'
 import { useLatestBuild } from '../../src/useUpdate'
-import { fetchYtdlpProxyStatus } from '../../src/proxyStatus'
-import type { YtdlpProxyStatus } from '../../src/proxyStatus'
-import { fetchExportStats } from '../../src/exportStats'
-import type { ExportStats } from '../../src/exportStats'
+import { useProxyStatus, useExportStats, useLLMStatus } from '../../src/useServices'
+import { llmErrorLabel, llmProviderLabel } from '../../src/llmStatus'
+import type { LLMProvider } from '../../src/llmStatus'
 import { clearConnection, removeServerUrl, loadUrlLastUsedMap } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
 import { useConfirm } from '../../src/ConfirmContext'
@@ -101,11 +100,16 @@ export default function SettingsScreen() {
   const [langInput, setLangInput] = useState('')
   const langSeededRef = useRef(false)
   const [urlLastUsed, setUrlLastUsed] = useState<Record<string, string>>({})
-  const [proxyStatus, setProxyStatus] = useState<YtdlpProxyStatus | null>(null)
-  const [proxyChecking, setProxyChecking] = useState(false)
-  // Latest known status, read inside the polling callback without re-creating it.
-  const proxyStatusRef = useRef<YtdlpProxyStatus | null>(null)
-  const [exportStats, setExportStats] = useState<ExportStats | null>(null)
+  // Service health (proxy / export / LLM) is one shared React Query cache — the
+  // drawer's degraded dot reads the same data (src/useServices.ts).
+  const { data: proxyStatus, refetch: refetchProxy, isFetching: proxyFetching } = useProxyStatus()
+  const { data: exportStats, refetch: refetchExport, isFetching: exportFetching } = useExportStats()
+  const { data: llmStatus } = useLLMStatus()
+  const [proxyRechecking, setProxyRechecking] = useState(false)
+  // Only flash "Checking…" on first load, on an explicit recheck, or while the
+  // last known status was broken. A healthy background poll stays green instead
+  // of blinking the dot to grey every interval.
+  const proxyChecking = !proxyStatus || proxyRechecking || (proxyFetching && !proxyStatus.ok)
   const [deviceNameInput, setDeviceNameInput] = useState('')
   const [deviceNameSaving, setDeviceNameSaving] = useState(false)
   const [deviceNameSaved, setDeviceNameSaved] = useState(false)
@@ -155,20 +159,10 @@ export default function SettingsScreen() {
     } catch { /* best-effort */ }
   }, [activeUrl, token])
 
-  const loadProxyStatus = useCallback(async (silent = false) => {
-    if (!activeUrl || !token) return
-    // Only flash the grey "Checking…" state on an explicit recheck / first load,
-    // or while the last known status was broken. Healthy 20s background polls
-    // stay green instead of blinking the dot to grey every interval.
-    if (!silent || !proxyStatusRef.current?.ok) setProxyChecking(true)
-    try {
-      const st = await fetchYtdlpProxyStatus(activeUrl, token)
-      proxyStatusRef.current = st
-      setProxyStatus(st)
-    } catch { /* best-effort; keep prior status */ } finally {
-      setProxyChecking(false)
-    }
-  }, [activeUrl, token])
+  const handleRecheckProxy = useCallback(async () => {
+    setProxyRechecking(true)
+    try { await refetchProxy() } finally { setProxyRechecking(false) }
+  }, [refetchProxy])
 
   useEffect(() => {
     loadUrlLastUsedMap().then(setUrlLastUsed)
@@ -178,22 +172,6 @@ export default function SettingsScreen() {
   // Follow the store (hydration, or the reader's own control) — not the keystrokes,
   // which only land here once they parse (see handleThresholdChange).
   useEffect(() => { setThresholdInput(String(pageThreshold)) }, [pageThreshold])
-
-  // Auto-recheck the proxy on connect + poll every 20s so it flips to green
-  // automatically when the proxy host (e.g. fiona) comes back online.
-  useEffect(() => {
-    if (status !== 'connected') return
-    loadProxyStatus()
-    const id = setInterval(() => loadProxyStatus(true), 20000)
-    return () => clearInterval(id)
-  }, [status, loadProxyStatus])
-
-  const loadExportStats = useCallback(async () => {
-    if (!activeUrl || !token) return
-    try {
-      setExportStats(await fetchExportStats(activeUrl, token))
-    } catch { /* best-effort; keep prior stats */ }
-  }, [activeUrl, token])
 
   // Tap the installed-version row to check for a newer hosted build on demand.
   const handleCheckVersion = useCallback(async () => {
@@ -212,10 +190,9 @@ export default function SettingsScreen() {
     if (status === 'connected') {
       loadDevices()
       loadSettings()
-      loadExportStats()
       loadUrlLastUsedMap().then(setUrlLastUsed)
     }
-  }, [status, loadDevices, loadSettings, loadExportStats])
+  }, [status, loadDevices, loadSettings])
 
   // Extension install/pair status comes from a data-attr the content script
   // injects on this page (web only). Poll it and react to the pair ack.
@@ -446,6 +423,80 @@ export default function SettingsScreen() {
     )
   }
 
+  // One row per configured LLM endpoint: what it is, whether the LAST real call
+  // worked, and what went wrong if it didn't (there is no active probe — a
+  // health-check completion would cost money on every render).
+  const renderLLMProvider = (p: LLMProvider, last: boolean) => {
+    const color = p.status === 'ok' ? theme.colors.online : p.status === 'error' ? theme.colors.error : theme.colors.placeholder
+    const usage = llmStatus?.usage.find((u) => u.provider === p.provider)
+    return (
+      <View key={p.key} style={[s.providerRow, !last && s.providerRowBorder]}>
+        <View style={s.providerHeadRow}>
+          <View style={[s.dot, { backgroundColor: color }]} />
+          <Text style={s.providerName} numberOfLines={1}>{llmProviderLabel(p)}</Text>
+          <Text style={s.providerRole}>{p.role}</Text>
+          {p.model ? <Text style={s.providerModel} numberOfLines={1}>{p.model}</Text> : null}
+        </View>
+        <Text style={[s.providerStatus, { color }]}>
+          {p.status === 'error'
+            ? llmErrorLabel(p)
+            : p.status === 'ok'
+              ? `Working${p.last_ok_at ? ` — last call ${formatRelative(p.last_ok_at)}` : ''}`
+              : !p.has_key
+                ? 'No API key configured'
+                // Health tracking started later than the usage log, so a provider
+                // with spend but no recorded outcome is "unknown", not "unused".
+                : usage?.last_call_at
+                  ? `No status yet — last call ${formatRelative(usage.last_call_at)}`
+                  : 'No calls yet'}
+        </Text>
+        {p.status === 'error' && p.last_error ? (
+          <Text style={s.providerError} numberOfLines={3}>{p.last_error}</Text>
+        ) : null}
+        {usage ? (
+          <Text style={s.providerUsage}>
+            {usage.calls.toLocaleString()} calls · ${usage.cost_usd.toFixed(4)}
+          </Text>
+        ) : null}
+      </View>
+    )
+  }
+
+  const renderLLMCard = () => (
+    <View style={s.card}>
+      <Text style={s.cardTitle}>LLM Services</Text>
+      <Text style={s.cardSubtitle}>Status of the last call to each provider — pipelines route through these</Text>
+      {!llmStatus ? (
+        <ActivityIndicator size="small" color={theme.colors.accent} style={{ alignSelf: 'flex-start' }} />
+      ) : llmStatus.providers.length === 0 ? (
+        <Text style={s.emptyText}>No LLM configured — set [llm] in config.toml</Text>
+      ) : (
+        llmStatus.providers.map((p, i) => renderLLMProvider(p, i === llmStatus.providers.length - 1))
+      )}
+      {llmStatus && llmStatus.totals.total_calls > 0 ? (
+        <>
+          <Text style={s.subHeading}>Cumulative usage — never reset</Text>
+          <View style={s.infoRow}>
+            <Text style={s.infoLabel}>Total calls</Text>
+            <Text style={s.infoValue}>{llmStatus.totals.total_calls.toLocaleString()}</Text>
+          </View>
+          <View style={s.infoRow}>
+            <Text style={s.infoLabel}>Input tokens</Text>
+            <Text style={s.infoValue}>{llmStatus.totals.total_input_tokens.toLocaleString()}</Text>
+          </View>
+          <View style={s.infoRow}>
+            <Text style={s.infoLabel}>Output tokens</Text>
+            <Text style={s.infoValue}>{llmStatus.totals.total_output_tokens.toLocaleString()}</Text>
+          </View>
+          <View style={s.infoRow}>
+            <Text style={s.infoLabel}>Est. cost</Text>
+            <Text style={[s.infoValue, s.llmCostValue]}>${llmStatus.totals.total_cost_usd.toFixed(4)}</Text>
+          </View>
+        </>
+      ) : null}
+    </View>
+  )
+
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.content}>
 
@@ -531,49 +582,148 @@ export default function SettingsScreen() {
         </View>
       )}
 
-      {/* App version + Android APK */}
+      <Text style={s.sectionTitle}>Services</Text>
+
+      {/* YouTube proxy */}
       <View style={s.card}>
-        <Text style={s.cardTitle}>App Version</Text>
-        <Pressable
-          onPress={handleCheckVersion}
-          style={({ pressed }) => [s.infoRow, pressed && { opacity: 0.6 }]}
-          hitSlop={6}
-        >
-          <Text style={s.infoLabel}>Installed{'  '}<Text style={{ color: theme.colors.muted, fontSize: 12 }}>(tap to check)</Text></Text>
-          {checkingVersion
+        <View style={s.cardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.cardTitle}>YouTube Proxy</Text>
+            <Text style={s.cardSubtitle}>yt-dlp routes through this for video ingestion</Text>
+          </View>
+          {proxyChecking
             ? <ActivityIndicator size="small" color={theme.colors.accent} />
-            : <Text style={s.infoValue}>v{APP_VERSION} <Text style={{ color: theme.colors.muted, fontSize: 12 }}>(build {APP_VERSION_CODE})</Text></Text>}
-        </Pressable>
-        {latestBuild && !isWeb && isUpdateAvailable(latestBuild) ? (
+            : <Pressable onPress={handleRecheckProxy} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
+                <Text style={s.refreshBtnText}>Recheck</Text>
+              </Pressable>
+          }
+        </View>
+
+        {!proxyStatus ? (
+          <View style={s.statusRow}>
+            <View style={[s.dot, { backgroundColor: theme.colors.placeholder }]} />
+            <Text style={[s.statusText, { color: theme.colors.placeholder }]}>Checking…</Text>
+          </View>
+        ) : !proxyStatus.configured ? (
+          <Text style={s.connectionDetail}>
+            No proxy configured — yt-dlp connects directly (datacenter IPs are usually blocked). See docs/youtube-ingest.md
+          </Text>
+        ) : (
           <>
             <View style={s.statusRow}>
-              <View style={[s.dot, { backgroundColor: theme.colors.accent }]} />
-              <Text style={[s.statusText, { fontSize: 14, color: theme.colors.accent }]}>
-                Update available — v{latestBuild.version} <Text style={{ color: theme.colors.muted, fontSize: 12 }}>(build {latestBuild.version_code})</Text>
+              <View style={[s.dot, { backgroundColor: proxyChecking ? theme.colors.placeholder : proxyStatus.ok ? theme.colors.online : theme.colors.error }]} />
+              <Text style={[s.statusText, { color: proxyChecking ? theme.colors.placeholder : proxyStatus.ok ? theme.colors.online : theme.colors.error }]}>
+                {proxyChecking ? 'Checking…' : proxyStatus.ok ? `Online — exit IP ${proxyStatus.exit_ip}` : 'Offline'}
               </Text>
             </View>
-            <Pressable
-              onPress={handleDownloadApk}
-              style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
-            >
-              <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download update (.apk)</Text>
-            </Pressable>
+            <Text style={s.connectionDetail} numberOfLines={2}>
+              <Text style={s.connectionUrl}>{proxyStatus.proxy}</Text>
+              {proxyStatus.last_ok_at ? ` — last online ${formatRelative(proxyStatus.last_ok_at)}` : ' — never online'}
+            </Text>
+            {!proxyStatus.ok && proxyStatus.error ? (
+              <Text style={s.errorText} numberOfLines={3}>{proxyStatus.error}</Text>
+            ) : null}
           </>
-        ) : isWeb && latestBuild ? (
-          // Desktop web: no update to force, but offer the APK for sideloading to a phone.
-          <Pressable
-            onPress={handleDownloadApk}
-            style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
-          >
-            <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download Android app (v{latestBuild.version})</Text>
-          </Pressable>
-        ) : latestBuild ? (
-          <View style={s.statusRow}>
-            <View style={[s.dot, { backgroundColor: theme.colors.online }]} />
-            <Text style={[s.statusText, { fontSize: 14, color: theme.colors.online }]}>Up to date</Text>
-          </View>
-        ) : null}
+        )}
       </View>
+
+      {/* Auto-export vault */}
+      {exportStats && (
+        <View style={s.card}>
+          <View style={s.cardHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={s.cardTitle}>Export Vault</Text>
+              <Text style={s.cardSubtitle}>
+                {exportStats.enabled
+                  ? 'One-way mirror → Obsidian markdown'
+                  : 'Off — set [export] in config.toml'}
+              </Text>
+            </View>
+            {exportStats.enabled && (
+              exportFetching
+                ? <ActivityIndicator size="small" color={theme.colors.accent} />
+                : <Pressable onPress={() => refetchExport()} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
+                    <Text style={s.refreshBtnText}>Refresh</Text>
+                  </Pressable>
+            )}
+          </View>
+          {exportStats.enabled && (
+            <>
+              <View style={s.statusRow}>
+                <View style={[s.dot, { backgroundColor: exportStats.last_error ? theme.colors.error : theme.colors.online }]} />
+                <Text style={[s.statusText, { fontSize: 14, color: exportStats.last_error ? theme.colors.error : theme.colors.online }]}>
+                  {exportStats.last_error ? 'Error' : 'Active'}
+                </Text>
+              </View>
+              <View style={s.infoRow}>
+                <Text style={s.infoLabel}>Documents</Text>
+                <Text style={s.infoValue}>{exportStats.doc_count.toLocaleString()}</Text>
+              </View>
+              <View style={s.infoRow}>
+                <Text style={s.infoLabel}>Annotations</Text>
+                <Text style={s.infoValue}>{exportStats.annotation_count.toLocaleString()}</Text>
+              </View>
+              <View style={s.infoRow}>
+                <Text style={s.infoLabel}>Last export</Text>
+                <Text style={s.infoValue}>{exportStats.last_export_at ? formatRelative(exportStats.last_export_at) : '—'}</Text>
+              </View>
+              <Text style={s.connectionDetail} numberOfLines={1}>
+                <Text style={s.connectionUrl}>{exportStats.dir}</Text>
+              </Text>
+              {exportStats.last_error ? (
+                <Text style={s.errorText} numberOfLines={3}>{exportStats.last_error}</Text>
+              ) : null}
+            </>
+          )}
+        </View>
+      )}
+
+      {/* Browser Extension (web only) */}
+      {isWeb && (
+        <View style={s.card}>
+          <Text style={s.cardTitle}>Browser Extension</Text>
+          <Text style={s.cardSubtitle}>“Save to Sam” — save the current page from your Chrome toolbar</Text>
+          <View style={s.statusRow}>
+            <View style={[s.dot, { backgroundColor: extDotColor }]} />
+            <Text style={[s.statusText, { fontSize: 14, color: extDotColor }]}>
+              {extStatus === 'connected' ? 'Installed & connected' : extStatus === 'unpaired' ? 'Installed — not connected' : 'Not installed'}
+            </Text>
+          </View>
+
+          {extStatus === 'unpaired' && (
+            <Pressable
+              onPress={handleConnectExtension}
+              disabled={extConnecting}
+              style={({ pressed }) => [s.refreshBtn, { alignSelf: 'flex-start' }, pressed && s.refreshBtnPressed, extConnecting && s.refreshBtnDisabled]}
+            >
+              {extConnecting
+                ? <ActivityIndicator size="small" color={theme.colors.accent} />
+                : <Text style={s.refreshBtnText}>Connect extension</Text>}
+            </Pressable>
+          )}
+
+          {extStatus !== 'connected' && (
+            <>
+              <Pressable
+                onPress={handleInstallExtension}
+                style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
+              >
+                <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download extension (.zip)</Text>
+              </Pressable>
+              <Text style={s.extSteps}>
+                1. Unzip the download.{'\n'}
+                2. Open chrome://extensions and turn on Developer mode.{'\n'}
+                3. “Load unpacked” → select the unzipped folder.{'\n'}
+                4. Come back here and click “Connect extension”.
+              </Text>
+            </>
+          )}
+        </View>
+      )}
+
+      {renderLLMCard()}
+
+      <Text style={s.sectionTitle}>Preferences</Text>
 
       {/* Polling */}
       <View style={s.card}>
@@ -677,97 +827,51 @@ export default function SettingsScreen() {
         </View>
       </View>
 
-      {/* YouTube proxy */}
-      <View style={s.card}>
-        <View style={s.cardHeader}>
-          <View style={{ flex: 1 }}>
-            <Text style={s.cardTitle}>YouTube Proxy</Text>
-            <Text style={s.cardSubtitle}>yt-dlp routes through this for video ingestion</Text>
-          </View>
-          {proxyChecking
-            ? <ActivityIndicator size="small" color={theme.colors.accent} />
-            : <Pressable onPress={() => loadProxyStatus()} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
-                <Text style={s.refreshBtnText}>Recheck</Text>
-              </Pressable>
-          }
-        </View>
+      <Text style={s.sectionTitle}>Device</Text>
 
-        {proxyStatus === null ? (
-          <View style={s.statusRow}>
-            <View style={[s.dot, { backgroundColor: theme.colors.placeholder }]} />
-            <Text style={[s.statusText, { color: theme.colors.placeholder }]}>Checking…</Text>
-          </View>
-        ) : !proxyStatus.configured ? (
-          <Text style={s.connectionDetail}>
-            No proxy configured — yt-dlp connects directly (datacenter IPs are usually blocked). See docs/youtube-ingest.md
-          </Text>
-        ) : (
+      {/* App version + Android APK */}
+      <View style={s.card}>
+        <Text style={s.cardTitle}>App Version</Text>
+        <Pressable
+          onPress={handleCheckVersion}
+          style={({ pressed }) => [s.infoRow, pressed && { opacity: 0.6 }]}
+          hitSlop={6}
+        >
+          <Text style={s.infoLabel}>Installed{'  '}<Text style={{ color: theme.colors.muted, fontSize: 12 }}>(tap to check)</Text></Text>
+          {checkingVersion
+            ? <ActivityIndicator size="small" color={theme.colors.accent} />
+            : <Text style={s.infoValue}>v{APP_VERSION} <Text style={{ color: theme.colors.muted, fontSize: 12 }}>(build {APP_VERSION_CODE})</Text></Text>}
+        </Pressable>
+        {latestBuild && !isWeb && isUpdateAvailable(latestBuild) ? (
           <>
             <View style={s.statusRow}>
-              <View style={[s.dot, { backgroundColor: proxyChecking ? theme.colors.placeholder : proxyStatus.ok ? theme.colors.online : theme.colors.error }]} />
-              <Text style={[s.statusText, { color: proxyChecking ? theme.colors.placeholder : proxyStatus.ok ? theme.colors.online : theme.colors.error }]}>
-                {proxyChecking ? 'Checking…' : proxyStatus.ok ? `Online — exit IP ${proxyStatus.exit_ip}` : 'Offline'}
+              <View style={[s.dot, { backgroundColor: theme.colors.accent }]} />
+              <Text style={[s.statusText, { fontSize: 14, color: theme.colors.accent }]}>
+                Update available — v{latestBuild.version} <Text style={{ color: theme.colors.muted, fontSize: 12 }}>(build {latestBuild.version_code})</Text>
               </Text>
             </View>
-            <Text style={s.connectionDetail} numberOfLines={2}>
-              <Text style={s.connectionUrl}>{proxyStatus.proxy}</Text>
-              {proxyStatus.last_ok_at ? ` — last online ${formatRelative(proxyStatus.last_ok_at)}` : ' — never online'}
-            </Text>
-            {!proxyStatus.ok && proxyStatus.error ? (
-              <Text style={s.errorText} numberOfLines={3}>{proxyStatus.error}</Text>
-            ) : null}
+            <Pressable
+              onPress={handleDownloadApk}
+              style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
+            >
+              <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download update (.apk)</Text>
+            </Pressable>
           </>
-        )}
-      </View>
-
-      {/* Auto-export vault */}
-      {exportStats && (
-        <View style={s.card}>
-          <View style={s.cardHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={s.cardTitle}>Export Vault</Text>
-              <Text style={s.cardSubtitle}>
-                {exportStats.enabled
-                  ? 'One-way mirror → Obsidian markdown'
-                  : 'Off — set [export] in config.toml'}
-              </Text>
-            </View>
-            {exportStats.enabled && (
-              <Pressable onPress={loadExportStats} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
-                <Text style={s.refreshBtnText}>Refresh</Text>
-              </Pressable>
-            )}
+        ) : isWeb && latestBuild ? (
+          // Desktop web: no update to force, but offer the APK for sideloading to a phone.
+          <Pressable
+            onPress={handleDownloadApk}
+            style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
+          >
+            <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download Android app (v{latestBuild.version})</Text>
+          </Pressable>
+        ) : latestBuild ? (
+          <View style={s.statusRow}>
+            <View style={[s.dot, { backgroundColor: theme.colors.online }]} />
+            <Text style={[s.statusText, { fontSize: 14, color: theme.colors.online }]}>Up to date</Text>
           </View>
-          {exportStats.enabled && (
-            <>
-              <View style={s.statusRow}>
-                <View style={[s.dot, { backgroundColor: exportStats.last_error ? theme.colors.error : theme.colors.online }]} />
-                <Text style={[s.statusText, { fontSize: 14, color: exportStats.last_error ? theme.colors.error : theme.colors.online }]}>
-                  {exportStats.last_error ? 'Error' : 'Active'}
-                </Text>
-              </View>
-              <View style={s.infoRow}>
-                <Text style={s.infoLabel}>Documents</Text>
-                <Text style={s.infoValue}>{exportStats.doc_count.toLocaleString()}</Text>
-              </View>
-              <View style={s.infoRow}>
-                <Text style={s.infoLabel}>Annotations</Text>
-                <Text style={s.infoValue}>{exportStats.annotation_count.toLocaleString()}</Text>
-              </View>
-              <View style={s.infoRow}>
-                <Text style={s.infoLabel}>Last export</Text>
-                <Text style={s.infoValue}>{exportStats.last_export_at ? formatRelative(exportStats.last_export_at) : '—'}</Text>
-              </View>
-              <Text style={s.connectionDetail} numberOfLines={1}>
-                <Text style={s.connectionUrl}>{exportStats.dir}</Text>
-              </Text>
-              {exportStats.last_error ? (
-                <Text style={s.errorText} numberOfLines={3}>{exportStats.last_error}</Text>
-              ) : null}
-            </>
-          )}
-        </View>
-      )}
+        ) : null}
+      </View>
 
       {/* Devices */}
       <View style={s.card}>
@@ -824,49 +928,6 @@ export default function SettingsScreen() {
         )}
       </View>
 
-      {/* Browser Extension (web only) */}
-      {isWeb && (
-        <View style={s.card}>
-          <Text style={s.cardTitle}>Browser Extension</Text>
-          <Text style={s.cardSubtitle}>“Save to Sam” — save the current page from your Chrome toolbar</Text>
-          <View style={s.statusRow}>
-            <View style={[s.dot, { backgroundColor: extDotColor }]} />
-            <Text style={[s.statusText, { fontSize: 14, color: extDotColor }]}>
-              {extStatus === 'connected' ? 'Installed & connected' : extStatus === 'unpaired' ? 'Installed — not connected' : 'Not installed'}
-            </Text>
-          </View>
-
-          {extStatus === 'unpaired' && (
-            <Pressable
-              onPress={handleConnectExtension}
-              disabled={extConnecting}
-              style={({ pressed }) => [s.refreshBtn, { alignSelf: 'flex-start' }, pressed && s.refreshBtnPressed, extConnecting && s.refreshBtnDisabled]}
-            >
-              {extConnecting
-                ? <ActivityIndicator size="small" color={theme.colors.accent} />
-                : <Text style={s.refreshBtnText}>Connect extension</Text>}
-            </Pressable>
-          )}
-
-          {extStatus !== 'connected' && (
-            <>
-              <Pressable
-                onPress={handleInstallExtension}
-                style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
-              >
-                <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download extension (.zip)</Text>
-              </Pressable>
-              <Text style={s.extSteps}>
-                1. Unzip the download.{'\n'}
-                2. Open chrome://extensions and turn on Developer mode.{'\n'}
-                3. “Load unpacked” → select the unzipped folder.{'\n'}
-                4. Come back here and click “Connect extension”.
-              </Text>
-            </>
-          )}
-        </View>
-      )}
-
       {/* This Device */}
       <View style={s.card}>
         <Text style={s.cardTitle}>This Device</Text>
@@ -899,32 +960,6 @@ export default function SettingsScreen() {
           <Text style={s.disconnectText}>Disconnect this device</Text>
         </Pressable>
       </View>
-
-      {/* LLM Usage */}
-      {settings?.llm_usage && (
-        <View style={s.card}>
-          <Text style={s.cardTitle}>LLM API Usage</Text>
-          <Text style={s.cardSubtitle}>Cumulative — never reset</Text>
-          <View style={s.infoRow}>
-            <Text style={s.infoLabel}>Total calls</Text>
-            <Text style={s.infoValue}>{settings.llm_usage.total_calls.toLocaleString()}</Text>
-          </View>
-          <View style={s.infoRow}>
-            <Text style={s.infoLabel}>Input tokens</Text>
-            <Text style={s.infoValue}>{settings.llm_usage.total_input_tokens.toLocaleString()}</Text>
-          </View>
-          <View style={s.infoRow}>
-            <Text style={s.infoLabel}>Output tokens</Text>
-            <Text style={s.infoValue}>{settings.llm_usage.total_output_tokens.toLocaleString()}</Text>
-          </View>
-          <View style={s.infoRow}>
-            <Text style={s.infoLabel}>Est. cost</Text>
-            <Text style={[s.infoValue, s.llmCostValue]}>
-              ${settings.llm_usage.total_cost_usd.toFixed(4)}
-            </Text>
-          </View>
-        </View>
-      )}
 
       {/* Local data */}
       <View style={s.card}>
@@ -963,6 +998,12 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.border,
       padding: t.spacing.md,
       gap: t.spacing.sm,
+    },
+    // Group label above a run of cards (Services / Preferences / Device).
+    sectionTitle: {
+      color: t.colors.placeholder, fontSize: 11, fontWeight: '700',
+      textTransform: 'uppercase', letterSpacing: 0.5,
+      marginTop: t.spacing.sm, marginLeft: t.spacing.xs,
     },
     cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     cardTitle: { color: t.colors.text, fontSize: 15, fontWeight: '700' },
@@ -1082,6 +1123,17 @@ function buildStyles(t: Theme) {
     deviceNameIndicator: { marginLeft: 4 },
     deviceNameSaved: { color: t.colors.online, fontSize: 14, fontWeight: '700', marginLeft: 4 },
     llmCostValue: { color: t.colors.accent, fontWeight: '700' },
+    // LLM provider rows
+    providerRow: { paddingVertical: t.spacing.sm, gap: 3 },
+    providerRowBorder: { borderBottomWidth: 1, borderBottomColor: t.colors.border },
+    providerHeadRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
+    providerName: { color: t.colors.text, fontSize: 14, fontWeight: '700', flexShrink: 1 },
+    providerRole: { color: t.colors.muted, fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+    providerModel: { color: t.colors.placeholder, fontSize: 11, fontFamily: 'monospace', flexShrink: 1 },
+    providerStatus: { fontSize: 13, fontWeight: '600' },
+    providerError: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace', lineHeight: 15 },
+    providerUsage: { color: t.colors.muted, fontSize: 11 },
+    subHeading: { color: t.colors.muted, fontSize: 12, fontWeight: '700', marginTop: t.spacing.sm },
     extSteps: { color: t.colors.muted, fontSize: 12, lineHeight: 18, marginTop: t.spacing.xs },
     navRow: {
       flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,

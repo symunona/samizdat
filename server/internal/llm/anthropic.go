@@ -13,7 +13,11 @@ type anthropicClient struct {
 	apiKey string
 }
 
-func (c *anthropicClient) Complete(ctx context.Context, model string, messages []Message) (string, Usage, error) {
+func (c *anthropicClient) Complete(ctx context.Context, model string, messages []Message) (reply string, u Usage, err error) {
+	// Every return path feeds the provider-health registry (see health.go) — that
+	// is the only place "Anthropic is out of credits" ever becomes visible.
+	defer func() { Record("anthropic", "", err) }()
+
 	if model == "" {
 		model = "claude-haiku-4-5-20251001"
 	}

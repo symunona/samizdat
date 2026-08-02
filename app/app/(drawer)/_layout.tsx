@@ -6,6 +6,7 @@ import { UnistylesRuntime, useUnistyles } from 'react-native-unistyles'
 import { saveTheme } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
 import { useUpdateAvailable } from '../../src/useUpdate'
+import { useServiceAlert } from '../../src/useServices'
 
 type NavRow =
   | { kind: 'header'; label: string }
@@ -40,6 +41,7 @@ function DrawerContent(_props: any) {
   const { status, activeUrl } = useConnection()
   const { theme, rt } = useUnistyles()
   const { available: updateAvailable } = useUpdateAvailable()
+  const serviceAlert = useServiceAlert()
 
   async function handleThemeToggle() {
     const next = rt.themeName === 'dark' ? 'light' : 'dark'
@@ -109,6 +111,14 @@ function DrawerContent(_props: any) {
           <Pressable style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, backgroundColor: pathname === '/settings' ? theme.colors.background : 'transparent' }}>
             <Ionicons name="settings-outline" size={18} color={pathname === '/settings' ? theme.colors.accent : theme.colors.muted} />
             <Text style={{ color: pathname === '/settings' ? theme.colors.accent : theme.colors.muted, fontSize: 15, fontWeight: pathname === '/settings' ? '700' : '500' }}>Settings</Text>
+            {serviceAlert && (
+              // Same affordance as the update dot — a service (proxy / export /
+              // LLM provider) is down and the detail lives in Settings.
+              <View
+                testID="service-alert-dot"
+                style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.error }}
+              />
+            )}
           </Pressable>
         </Link>
         <Pressable onPress={handleThemeToggle} style={{ paddingVertical: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -125,6 +135,9 @@ function DrawerToggleIcon() {
   const navigation = useNavigation() as any
   const { theme } = useUnistyles()
   const { available: updateAvailable } = useUpdateAvailable()
+  const serviceAlert = useServiceAlert()
+  // A broken service outranks an available update: one needs a fix, the other waits.
+  const dot = serviceAlert ? theme.colors.error : updateAvailable ? theme.colors.accent : null
   return (
     <Pressable
       onPress={() => navigation.openDrawer?.()}
@@ -132,8 +145,8 @@ function DrawerToggleIcon() {
       hitSlop={8}
     >
       <Text style={{ color: theme.colors.text, fontSize: 20, lineHeight: 24 }}>☰</Text>
-      {updateAvailable && (
-        <View style={{ position: 'absolute', top: 6, right: 12, width: 9, height: 9, borderRadius: 5, backgroundColor: theme.colors.accent, borderWidth: 1, borderColor: theme.colors.surface }} />
+      {dot && (
+        <View testID="drawer-alert-dot" style={{ position: 'absolute', top: 6, right: 12, width: 9, height: 9, borderRadius: 5, backgroundColor: dot, borderWidth: 1, borderColor: theme.colors.surface }} />
       )}
     </Pressable>
   )

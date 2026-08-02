@@ -14,3 +14,10 @@ web_dir = "/home/symunona/dev/sam/app/dist"
 [export]
 enabled = true
 dir     = "/tmp/samizdat-test/export-vault"
+
+# One provider so Settings → LLM Services has a row to assert on. Points at a
+# dead local port: the e2e run never completes an LLM call (and must not).
+[llm]
+provider      = "openai_compat"
+base_url      = "http://127.0.0.1:9/v1"
+default_model = "test-model"

@@ -1,0 +1,65 @@
+// One React Query cache for the three server-side services that can be BROKEN
+// (yt-dlp proxy, export mirror, LLM providers). Settings renders them in full;
+// the drawer only needs "is anything degraded?" — sharing these hooks keeps the
+// two from double-fetching or disagreeing.
+import { useQuery } from '@tanstack/react-query'
+import { useConnection } from './ConnectionContext'
+import { fetchYtdlpProxyStatus } from './proxyStatus'
+import { fetchExportStats } from './exportStats'
+import { fetchLLMStatus } from './llmStatus'
+
+function useConnected() {
+  const { activeUrl, token, status } = useConnection()
+  return { activeUrl, token, enabled: status === 'connected' && !!activeUrl && !!token }
+}
+
+export function useProxyStatus() {
+  const { activeUrl, token, enabled } = useConnected()
+  return useQuery({
+    queryKey: ['ytdlpStatus', activeUrl],
+    queryFn: () => fetchYtdlpProxyStatus(activeUrl!, token!),
+    enabled,
+    // 20s: the proxy host (a home node over Tailscale) comes and goes, and the
+    // card must flip back to green on its own.
+    refetchInterval: 20_000,
+    staleTime: 10_000,
+    retry: 1,
+  })
+}
+
+export function useExportStats() {
+  const { activeUrl, token, enabled } = useConnected()
+  return useQuery({
+    queryKey: ['exportStats', activeUrl],
+    queryFn: () => fetchExportStats(activeUrl!, token!),
+    enabled,
+    // The GET also triggers a server-side re-export — poll slowly, refetch on demand.
+    staleTime: 60_000,
+    retry: 1,
+  })
+}
+
+export function useLLMStatus() {
+  const { activeUrl, token, enabled } = useConnected()
+  return useQuery({
+    queryKey: ['llmStatus', activeUrl],
+    queryFn: () => fetchLLMStatus(activeUrl!, token!),
+    enabled,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+    retry: 1,
+  })
+}
+
+// useServiceAlert is true when a service the user relies on is degraded — the
+// signal behind the drawer dot. A provider dropped from config ("retired") is
+// history, not an alert.
+export function useServiceAlert(): boolean {
+  const { data: proxy } = useProxyStatus()
+  const { data: exp } = useExportStats()
+  const { data: llm } = useLLMStatus()
+  const proxyDown = !!proxy?.configured && !proxy.ok
+  const exportBroken = !!exp?.enabled && !!exp.last_error
+  const llmBroken = !!llm?.providers.some((p) => p.role !== 'retired' && p.status === 'error')
+  return proxyDown || exportBroken || llmBroken
+}

@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
-  newConnectedPage, seedTextDoc, seedVideoDoc, seedHighlight, makeCleanup,
+  newConnectedPage, seedTextDoc, seedVideoDoc, seedHighlight, seedLLMHealth, makeCleanup,
 } from './harness.js'
 
 const VIDEO_DOC_ID = 'eeeeeeee-0000-4000-8000-000000000001'
@@ -954,6 +954,114 @@ async function runPageMode(token, deviceId) {
   await page.close()
 }
 
+// ── Settings: the Services group + LLM provider health ────────────────────────
+// The failure this guards is silent: a provider that ran out of credits only ever
+// showed up as a dead Job. So the checks assert the VISIBLE row text, and that a
+// staged failure paints the drawer dot.
+const ANTHROPIC_CREDIT_ERR =
+  'anthropic 400: {"type":"error","error":{"type":"invalid_request_error",' +
+  '"message":"Your credit balance is too low to access the Anthropic API."}}'
+
+async function settingsText(page) {
+  await page.goto(`${BASE_URL}/settings`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await sleep(1800) // service queries (proxy / export / llm) settle
+  return page.evaluate(() => document.body.innerText)
+}
+
+async function runSettingsServices(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  let txt = await settingsText(page)
+
+  await check('settings: sections are grouped Services → Preferences → Device', async () => {
+    const idx = l => txt.toUpperCase().indexOf(l)
+    const [svc, prefs, dev] = ['SERVICES', 'PREFERENCES', 'DEVICE'].map(idx)
+    if (svc < 0 || prefs < 0 || dev < 0) return `missing section header(s): services=${svc} prefs=${prefs} device=${dev}`
+    if (!(svc < prefs && prefs < dev)) return `sections out of order: services=${svc} prefs=${prefs} device=${dev}`
+    return null
+  })
+
+  await check('settings: every service card sits inside the Services group', async () => {
+    const up = txt.toUpperCase()
+    const svc = up.indexOf('SERVICES'), prefs = up.indexOf('PREFERENCES')
+    for (const card of ['YouTube Proxy', 'Export Vault', 'Browser Extension', 'LLM Services']) {
+      const at = txt.indexOf(card)
+      if (at < 0) return `no "${card}" card on Settings`
+      if (at < svc || at > prefs) return `"${card}" is outside the Services group (at ${at}, group ${svc}..${prefs})`
+    }
+    return null
+  })
+
+  await check('settings: the configured LLM provider is listed with no calls yet', async () => {
+    if (!/127\.0\.0\.1:9/.test(txt)) return 'the configured openai_compat endpoint is not named'
+    if (!/test-model/.test(txt)) return 'the provider row does not show its model'
+    if (!/No calls yet/.test(txt)) return `expected an idle provider, got: ${txt.slice(txt.indexOf('LLM Services'), txt.indexOf('LLM Services') + 240)}`
+    return null
+  })
+
+  await check('settings: no degraded dot while every service is healthy', async () => {
+    const dots = await page.$$('[data-testid="drawer-alert-dot"]')
+    return dots.length ? 'the drawer shows an alert dot with nothing broken' : null
+  })
+
+  // A provider that is no longer in config keeps its row (the spend and the error
+  // are still history) but must NOT raise an alarm — nothing routes through it.
+  const RETIRED_ANTHROPIC = {
+    key: 'anthropic',
+    provider: 'anthropic',
+    calls: 12,
+    errors: 1,
+    last_ok_at: '2026-08-01T10:00:00Z',
+    last_error_at: '2026-08-02T09:00:00Z',
+    last_error: ANTHROPIC_CREDIT_ERR,
+    last_error_kind: 'quota',
+  }
+  seedLLMHealth([RETIRED_ANTHROPIC])
+  txt = await settingsText(page)
+
+  await check('settings: a provider out of credits reads as out of credits', async () => {
+    if (!/Out of credits \/ rate limited/.test(txt)) return `no quota status in: ${txt.slice(txt.indexOf('LLM Services'), txt.indexOf('LLM Services') + 400)}`
+    if (!/credit balance is too low/.test(txt)) return 'the provider error body is not shown'
+    if (!/anthropic/.test(txt)) return 'the failing provider is not named'
+    return null
+  })
+
+  await check('settings: a retired provider keeps its history without raising an alarm', async () => {
+    if (!/retired/i.test(txt)) return 'the dropped provider is not marked retired'
+    const dots = await page.$$('[data-testid="drawer-alert-dot"]')
+    return dots.length ? 'a provider nothing routes through raised the drawer dot' : null
+  })
+
+  // Now the CONFIGURED endpoint fails — this is the case that must be shouted about.
+  seedLLMHealth([RETIRED_ANTHROPIC, {
+    key: 'openai_compat@http://127.0.0.1:9/v1',
+    provider: 'openai_compat',
+    base_url: 'http://127.0.0.1:9/v1',
+    calls: 3,
+    errors: 3,
+    last_error_at: '2026-08-02T09:30:00Z',
+    last_error: 'llm: transport failure: openai_compat request: dial tcp 127.0.0.1:9: connect: connection refused',
+    last_error_kind: 'transport',
+  }])
+  txt = await settingsText(page)
+
+  await check('settings: the live provider reports it is unreachable', async () => {
+    if (!/Unreachable/.test(txt)) return `no transport status in: ${txt.slice(txt.indexOf('LLM Services'), txt.indexOf('LLM Services') + 400)}`
+    if (!/connection refused/.test(txt)) return 'the provider error body is not shown'
+    return null
+  })
+
+  await check('settings: the failure paints the drawer alert dot', async () => {
+    const dots = await page.$$('[data-testid="drawer-alert-dot"]')
+    return dots.length ? null : 'no drawer alert dot after a configured provider failed'
+  })
+
+  await sleep(300)
+  if (errors.length) fail('settings services: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('settings services: no console/HTTP errors')
+
+  await page.close()
+}
+
 // ── Reading mode: flow / auto / page + the page threshold ─────────────────────
 // `auto` is the default: paginate only past the threshold. The decision is made
 // inside the frame (only it can measure), so every check here reads the frame's
@@ -1126,6 +1234,7 @@ async function main() {
     await runFigureRendering(token, deviceId)
     await runSelectionLifecycle(token, deviceId)
     await runHighlightSelectionLifecycle(token, deviceId)
+    await runSettingsServices(token, deviceId)
     // Last: the reading mode persists globally (AsyncStorage → shared localStorage),
     // so leaving it on Page would silently paginate every earlier check's viewer.
     await runPageMode(token, deviceId)

@@ -144,6 +144,13 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	ytStatusH := newYtdlpStatusHandler(ctx, q, ytdlp.Proxy)
 	mux.HandleFunc("GET /api/v1/ytdlp/status", bearerAuth(q, ytStatusH.get))
 
+	var llmSection config.LLMSection
+	if len(llmCfg) > 0 {
+		llmSection = llmCfg[0]
+	}
+	llmStatusH := newLLMStatusHandler(ctx, q, llmSection)
+	mux.HandleFunc("GET /api/v1/llm/status", bearerAuth(q, llmStatusH.get))
+
 	exportH := &exportHandler{exp: exp}
 	mux.HandleFunc("GET /api/v1/export/stats", bearerAuth(q, exportH.stats))
 

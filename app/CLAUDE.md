@@ -467,10 +467,31 @@ video is just a view switch, not a separate player; the handoff in `useMediaTime
 only one of the two sounds at a time (audio pauses while the video plays, and vice-versa).
 
 ### `proxyStatus.ts` — yt-dlp proxy health
-`src/proxyStatus.ts` exposes `fetchYtdlpProxyStatus` and `YtdlpProxyStatus`. Kept separate from `api.ts` to avoid merge conflicts. The Settings screen polls this every 20s when connected and displays online/offline status with exit IP and last-ok timestamp.
+`src/proxyStatus.ts` exposes `fetchYtdlpProxyStatus` and `YtdlpProxyStatus`. Kept separate from `api.ts` to avoid merge conflicts. Polled every 20s via `useProxyStatus()` (below) so the card flips back to green on its own when the proxy host returns.
 
 ### `exportStats.ts` — auto-export vault status
 `src/exportStats.ts` exposes `fetchExportStats` and `ExportStats`, hitting `GET /api/v1/export/stats` (which also triggers a server-side re-export). Kept separate from `api.ts` like `proxyStatus.ts`. The Settings "Export Vault" card shows doc/annotation counts, last-export time, dir, and any error; its Refresh button re-fetches (forcing a fresh mirror). The card renders only when the endpoint returns (i.e. when export is configured).
+
+### `useServices.ts` — the Services group and the drawer's degraded dot
+Settings is grouped **Connection → Services → Preferences → Device**. The Services
+group holds the four things that can be *broken*: YouTube Proxy, Export Vault, Browser
+Extension, **LLM Services**. All three server-side checks go through ONE React Query
+cache (`useProxyStatus` / `useExportStats` / `useLLMStatus` in `src/useServices.ts`) —
+never a screen-local `useState` + `setInterval`, because the drawer reads the same data:
+`useServiceAlert()` (proxy configured-but-down · export errored · a non-retired LLM
+provider whose last call failed) paints the red dot on the hamburger + the drawer's
+Settings row, the same affordance as "update available" (a broken service outranks it).
+
+`src/llmStatus.ts` hits `GET /api/v1/llm/status` and owns the two label helpers:
+`llmErrorLabel` (kind → "Out of credits / rate limited", "Bad or missing API key",
+"Unreachable") and `llmProviderLabel` (host for a self-hosted openai_compat box). The
+server never probes — a row's status is the last real call's outcome (see
+`server/CLAUDE.md` → LLM provider health), so a provider with lifetime spend but no
+recorded outcome reads "No status yet — last call …", not "No calls yet".
+
+Covered by `just e2e-int` (`runSettingsServices`): group order, a staged quota failure
+rendering as *out of credits*, a retired provider keeping its history without alarming,
+and the drawer dot appearing only for a **configured** provider's failure.
 
 ## Android share-sheet URL ingest (`ShareIntentBridge`)
 

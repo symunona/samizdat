@@ -20,7 +20,10 @@ type openAICompatClient struct {
 	apiKey  string
 }
 
-func (c *openAICompatClient) Complete(ctx context.Context, model string, messages []Message) (string, Usage, error) {
+func (c *openAICompatClient) Complete(ctx context.Context, model string, messages []Message) (reply string, u Usage, err error) {
+	// See anthropic.go: every return path feeds the provider-health registry.
+	defer func() { Record("openai_compat", c.baseURL, err) }()
+
 	type oaiMsg struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`

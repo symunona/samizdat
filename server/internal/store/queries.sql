@@ -700,3 +700,13 @@ SELECT model,
        COALESCE(SUM(output_tokens), 0) AS output_tokens
 FROM llm_usages
 GROUP BY model;
+
+-- name: GetLLMUsageTotalsByProviderModel :many
+SELECT provider,
+       model,
+       COUNT(*)                         AS calls,
+       COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+       COALESCE(SUM(output_tokens), 0) AS output_tokens,
+       MAX(created_at)                  AS last_call_at
+FROM llm_usages
+GROUP BY provider, model;

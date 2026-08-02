@@ -69,6 +69,22 @@ func New(cfg config.LLMSection) Client {
 	return &fallbackClient{entries: entries}
 }
 
+// HasKey reports whether this section resolves to credentials — including the
+// env fallback newSingle applies. A local openai_compat box needs none.
+// Keep in step with newSingle: a config that builds a client must read as keyed.
+func HasKey(cfg config.LLMSection) bool {
+	if cfg.APIKey != "" {
+		return true
+	}
+	switch cfg.Provider {
+	case "anthropic", "":
+		return os.Getenv("ANTHROPIC_API_KEY") != ""
+	case "openai_compat":
+		return true
+	}
+	return false
+}
+
 // newSingle constructs a single (non-chaining) provider client, or nil if none.
 func newSingle(cfg config.LLMSection) Client {
 	switch cfg.Provider {
