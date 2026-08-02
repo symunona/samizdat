@@ -1055,6 +1055,15 @@ async function runSettingsServices(token, deviceId) {
     return dots.length ? null : 'no drawer alert dot after a configured provider failed'
   })
 
+  // The whole point of a local primary: how much is it actually serving? The split
+  // is per ENDPOINT (12 anthropic + 3 local = 15 → 80% / 20%), not per provider name.
+  await check('settings: each endpoint shows its share of all routed calls', async () => {
+    for (const want of ['12 calls', '80% routed here', '3 calls', '20% routed here']) {
+      if (!txt.includes(want)) return `missing "${want}" in: ${txt.slice(txt.indexOf('LLM Services'), txt.indexOf('LLM Services') + 400)}`
+    }
+    return null
+  })
+
   await sleep(300)
   if (errors.length) fail('settings services: no console/HTTP errors', errors.slice(0, 4).join(' | '))
   else pass('settings services: no console/HTTP errors')

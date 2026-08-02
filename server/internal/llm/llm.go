@@ -27,9 +27,13 @@ type Message struct {
 	Content string
 }
 
-// Usage holds token counts returned by the provider.
+// Usage holds token counts returned by the provider, plus the model that
+// actually served the call — the caller may have asked for none (the provider's
+// default) or been re-routed to a fallback, and the audit log must record what
+// ran, not what was requested.
 type Usage struct {
 	Provider     string
+	Model        string
 	InputTokens  int
 	OutputTokens int
 }
@@ -86,6 +90,8 @@ func HasKey(cfg config.LLMSection) bool {
 }
 
 // newSingle constructs a single (non-chaining) provider client, or nil if none.
+// Each client carries its section's DefaultModel: model names are provider-specific,
+// so a caller that names no model must get THIS provider's model, never another's.
 func newSingle(cfg config.LLMSection) Client {
 	switch cfg.Provider {
 	case "anthropic":
@@ -93,7 +99,7 @@ func newSingle(cfg config.LLMSection) Client {
 		if key == "" {
 			key = os.Getenv("ANTHROPIC_API_KEY")
 		}
-		return &anthropicClient{apiKey: key}
+		return &anthropicClient{apiKey: key, defaultModel: cfg.DefaultModel}
 	case "openai_compat":
 		key := cfg.APIKey
 		if key == "" {
@@ -103,11 +109,11 @@ func newSingle(cfg config.LLMSection) Client {
 		if base == "" {
 			base = "http://localhost:11434/v1"
 		}
-		return &openAICompatClient{baseURL: base, apiKey: key}
+		return &openAICompatClient{baseURL: base, apiKey: key, defaultModel: cfg.DefaultModel}
 	case "":
 		// Auto-detect: try ANTHROPIC_API_KEY env
 		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-			return &anthropicClient{apiKey: key}
+			return &anthropicClient{apiKey: key, defaultModel: cfg.DefaultModel}
 		}
 		return nil
 	default:

@@ -16,13 +16,22 @@ const llmRequestTimeout = 90 * time.Second
 var llmHTTPClient = &http.Client{Timeout: llmRequestTimeout}
 
 type openAICompatClient struct {
-	baseURL string
-	apiKey  string
+	baseURL      string
+	apiKey       string
+	defaultModel string
 }
 
 func (c *openAICompatClient) Complete(ctx context.Context, model string, messages []Message) (reply string, u Usage, err error) {
 	// See anthropic.go: every return path feeds the provider-health registry.
 	defer func() { Record("openai_compat", c.baseURL, err) }()
+
+	if model == "" {
+		model = c.defaultModel
+	}
+	if model == "" {
+		// No sane default exists here — the box serves whatever was pulled onto it.
+		return "", Usage{}, fmt.Errorf("openai_compat: no model (set llm.default_model for %s)", c.baseURL)
+	}
 
 	type oaiMsg struct {
 		Role    string `json:"role"`
@@ -82,6 +91,7 @@ func (c *openAICompatClient) Complete(ctx context.Context, model string, message
 	}
 	usage := Usage{
 		Provider:     "openai_compat",
+		Model:        model,
 		InputTokens:  out.Usage.PromptTokens,
 		OutputTokens: out.Usage.CompletionTokens,
 	}

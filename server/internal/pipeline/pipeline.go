@@ -142,6 +142,18 @@ func MatchesDocument(pipeline store.Pipeline, doc store.Document, feedURL string
 	return true
 }
 
+// servedModel names the model that ACTUALLY ran, for the usage log and the
+// highlight's metadata. A step config with no model means "this provider's
+// default_model" — which only the client knows — and a transport fallback may
+// have served the call with a different provider's model entirely. Falls back to
+// the requested name when a provider reports none.
+func servedModel(u llm.Usage, requested string) string {
+	if u.Model != "" {
+		return u.Model
+	}
+	return requested
+}
+
 // ParseStepConfig unmarshals a step's config JSON into dst.
 func ParseStepConfig(raw json.RawMessage, dst any) error {
 	if len(raw) == 0 {

@@ -50,9 +50,7 @@ Return [] if no highlights found.`
 func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, globalClient llm.Client) (StepResult, error) {
 	var c nl321Config
 	_ = ParseStepConfig(cfg, &c)
-	if c.Model == "" {
-		c.Model = "claude-haiku-4-5-20251001"
-	}
+	// Unset model = the configured provider's default_model (see step_llm_summarize).
 
 	client := globalClient
 	if c.Provider != "" {
@@ -85,12 +83,14 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 		return StepResult{}, fmt.Errorf("llm_321_newsletter: llm call: %w", err)
 	}
 
+	model := servedModel(usage, c.Model)
+
 	_ = q.InsertLLMUsage(ctx, store.InsertLLMUsageParams{
 		ID:            uuid.NewString(),
 		JobID:         ParentJobIDFromCtx(ctx),
 		PipelineRunID: &run.ID,
 		Provider:      usage.Provider,
-		Model:         c.Model,
+		Model:         model,
 		InputTokens:   int64(usage.InputTokens),
 		OutputTokens:  int64(usage.OutputTokens),
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
@@ -112,7 +112,7 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	meta, _ := json.Marshal(map[string]string{"model": c.Model})
+	meta, _ := json.Marshal(map[string]string{"model": model})
 
 	if err := InsertTx(ctx, q, func(q *store.Queries) error {
 		for _, h := range parsed.Highlights {

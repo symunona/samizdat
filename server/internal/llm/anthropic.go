@@ -10,7 +10,8 @@ import (
 )
 
 type anthropicClient struct {
-	apiKey string
+	apiKey       string
+	defaultModel string
 }
 
 func (c *anthropicClient) Complete(ctx context.Context, model string, messages []Message) (reply string, u Usage, err error) {
@@ -18,6 +19,9 @@ func (c *anthropicClient) Complete(ctx context.Context, model string, messages [
 	// is the only place "Anthropic is out of credits" ever becomes visible.
 	defer func() { Record("anthropic", "", err) }()
 
+	if model == "" {
+		model = c.defaultModel
+	}
 	if model == "" {
 		model = "claude-haiku-4-5-20251001"
 	}
@@ -76,6 +80,7 @@ func (c *anthropicClient) Complete(ctx context.Context, model string, messages [
 	}
 	usage := Usage{
 		Provider:     "anthropic",
+		Model:        model,
 		InputTokens:  out.Usage.InputTokens,
 		OutputTokens: out.Usage.OutputTokens,
 	}

@@ -19,19 +19,24 @@ const llmHealthKey = "llm_provider_health"
 // llmProvider is one configured (or previously used) LLM endpoint. It never
 // carries the API key — only whether one is present.
 type llmProvider struct {
-	Key           string `json:"key"`
-	Provider      string `json:"provider"`
-	BaseURL       string `json:"base_url,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Role          string `json:"role"`   // primary | fallback | retired
-	Status        string `json:"status"` // ok | error | unknown
-	HasKey        bool   `json:"has_key"`
-	Calls         int64  `json:"calls"`
-	Errors        int64  `json:"errors"`
-	LastOKAt      string `json:"last_ok_at,omitempty"`
-	LastErrorAt   string `json:"last_error_at,omitempty"`
-	LastError     string `json:"last_error,omitempty"`
-	LastErrorKind string `json:"last_error_kind,omitempty"`
+	Key      string `json:"key"`
+	Provider string `json:"provider"`
+	BaseURL  string `json:"base_url,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Role     string `json:"role"`   // primary | fallback | retired
+	Status   string `json:"status"` // ok | error | unknown
+	HasKey   bool   `json:"has_key"`
+	Calls    int64  `json:"calls"`
+	Errors   int64  `json:"errors"`
+	// RoutedShare is this endpoint's fraction (0..1) of all calls across every
+	// endpoint. Keyed per ENDPOINT, unlike the usage log below — "how much went to
+	// the local box instead of the cloud" is the whole point of a local primary,
+	// and two openai_compat boxes must not answer it as one row.
+	RoutedShare   float64 `json:"routed_share"`
+	LastOKAt      string  `json:"last_ok_at,omitempty"`
+	LastErrorAt   string  `json:"last_error_at,omitempty"`
+	LastError     string  `json:"last_error,omitempty"`
+	LastErrorKind string  `json:"last_error_kind,omitempty"`
 }
 
 // llmProviderUsage is lifetime spend from the llm_usages audit log. It is keyed
@@ -121,6 +126,16 @@ func (h *llmStatusHandler) get(w http.ResponseWriter, r *http.Request) {
 		providers = append(providers, mergeHealth(llmProvider{
 			Key: ph.Key, Provider: ph.Provider, BaseURL: ph.BaseURL, Role: "retired",
 		}, ph))
+	}
+
+	var totalRouted int64
+	for _, p := range providers {
+		totalRouted += p.Calls
+	}
+	if totalRouted > 0 {
+		for i := range providers {
+			providers[i].RoutedShare = float64(providers[i].Calls) / float64(totalRouted)
+		}
 	}
 
 	usage, totals := h.usage(r.Context())

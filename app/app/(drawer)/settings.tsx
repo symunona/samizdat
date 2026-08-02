@@ -453,9 +453,18 @@ export default function SettingsScreen() {
         {p.status === 'error' && p.last_error ? (
           <Text style={s.providerError} numberOfLines={3}>{p.last_error}</Text>
         ) : null}
-        {usage ? (
+        {p.calls > 0 || usage ? (
           <Text style={s.providerUsage}>
-            {usage.calls.toLocaleString()} calls · ${usage.cost_usd.toFixed(4)}
+            {/* Routing is per ENDPOINT (health registry); spend is per provider name
+                (all the usage log records), so a local box shows its share and no cost. */}
+            {p.calls > 0 ? (
+              <>
+                {p.calls.toLocaleString()} calls · <Text style={s.providerShare}>{Math.round(p.routed_share * 100)}% routed here</Text>
+                {usage && usage.cost_usd > 0 ? ` · $${usage.cost_usd.toFixed(4)} spent on ${p.provider}` : ''}
+              </>
+            ) : (
+              `${usage!.calls.toLocaleString()} calls before health tracking · $${usage!.cost_usd.toFixed(4)}`
+            )}
           </Text>
         ) : null}
       </View>
@@ -464,8 +473,10 @@ export default function SettingsScreen() {
 
   const renderLLMCard = () => (
     <View style={s.card}>
-      <Text style={s.cardTitle}>LLM Services</Text>
-      <Text style={s.cardSubtitle}>Status of the last call to each provider — pipelines route through these</Text>
+      <View style={s.titleGroup}>
+        <Text style={s.cardTitle}>LLM Services</Text>
+        <Text style={s.cardSubtitle}>Status of the last call to each provider — pipelines route through these</Text>
+      </View>
       {!llmStatus ? (
         <ActivityIndicator size="small" color={theme.colors.accent} style={{ alignSelf: 'flex-start' }} />
       ) : llmStatus.providers.length === 0 ? (
@@ -540,8 +551,10 @@ export default function SettingsScreen() {
       {/* Server URLs */}
       {serverUrls.length > 0 && (
         <View style={s.card}>
-          <Text style={s.cardTitle}>Server URLs</Text>
-          <Text style={s.cardSubtitle}>Tried in order until one responds</Text>
+          <View style={s.titleGroup}>
+            <Text style={s.cardTitle}>Server URLs</Text>
+            <Text style={s.cardSubtitle}>Tried in order until one responds</Text>
+          </View>
           {serverUrls.map((url, i) => {
             const isActive = url === activeUrl
             return (
@@ -587,7 +600,7 @@ export default function SettingsScreen() {
       {/* YouTube proxy */}
       <View style={s.card}>
         <View style={s.cardHeader}>
-          <View style={{ flex: 1 }}>
+          <View style={s.titleGroup}>
             <Text style={s.cardTitle}>YouTube Proxy</Text>
             <Text style={s.cardSubtitle}>yt-dlp routes through this for video ingestion</Text>
           </View>
@@ -631,7 +644,7 @@ export default function SettingsScreen() {
       {exportStats && (
         <View style={s.card}>
           <View style={s.cardHeader}>
-            <View style={{ flex: 1 }}>
+            <View style={s.titleGroup}>
               <Text style={s.cardTitle}>Export Vault</Text>
               <Text style={s.cardSubtitle}>
                 {exportStats.enabled
@@ -681,8 +694,10 @@ export default function SettingsScreen() {
       {/* Browser Extension (web only) */}
       {isWeb && (
         <View style={s.card}>
-          <Text style={s.cardTitle}>Browser Extension</Text>
-          <Text style={s.cardSubtitle}>“Save to Sam” — save the current page from your Chrome toolbar</Text>
+          <View style={s.titleGroup}>
+            <Text style={s.cardTitle}>Browser Extension</Text>
+            <Text style={s.cardSubtitle}>“Save to Sam” — save the current page from your Chrome toolbar</Text>
+          </View>
           <View style={s.statusRow}>
             <View style={[s.dot, { backgroundColor: extDotColor }]} />
             <Text style={[s.statusText, { fontSize: 14, color: extDotColor }]}>
@@ -728,7 +743,7 @@ export default function SettingsScreen() {
       {/* Polling */}
       <View style={s.card}>
         <View style={s.cardHeader}>
-          <View style={{ flex: 1 }}>
+          <View style={s.titleGroup}>
             <Text style={s.cardTitle}>Background Polling</Text>
             <Text style={s.cardSubtitle}>
               {settings?.polling_enabled === false
@@ -752,7 +767,7 @@ export default function SettingsScreen() {
       {/* Transcript languages */}
       <View style={s.card}>
         <View style={s.cardHeader}>
-          <View style={{ flex: 1 }}>
+          <View style={s.titleGroup}>
             <Text style={s.cardTitle}>Transcript Languages</Text>
             <Text style={s.cardSubtitle}>Keep videos in these languages in their original language. Everything else is translated to English.</Text>
           </View>
@@ -769,7 +784,7 @@ export default function SettingsScreen() {
           Flow/Auto/Page control writes, never a second flag. */}
       <View style={s.card}>
         <View style={s.cardHeader}>
-          <View style={{ flex: 1 }}>
+          <View style={s.titleGroup}>
             <Text style={s.cardTitle}>Auto Page Mode</Text>
             <Text style={s.cardSubtitle}>
               {readingMode === 'auto'
@@ -810,7 +825,7 @@ export default function SettingsScreen() {
       {/* Debug log streaming */}
       <View style={s.card}>
         <View style={s.cardHeader}>
-          <View style={{ flex: 1 }}>
+          <View style={s.titleGroup}>
             <Text style={s.cardTitle}>Debug Log Streaming</Text>
             <Text style={s.cardSubtitle}>
               {debugLogEnabled
@@ -963,8 +978,10 @@ export default function SettingsScreen() {
 
       {/* Local data */}
       <View style={s.card}>
-        <Text style={s.cardTitle}>Local Data</Text>
-        <Text style={s.cardSubtitle}>Cached on this device — server copy untouched</Text>
+        <View style={s.titleGroup}>
+          <Text style={s.cardTitle}>Local Data</Text>
+          <Text style={s.cardSubtitle}>Cached on this device — server copy untouched</Text>
+        </View>
         <Pressable
           onPress={() => router.push('/offline-cache')}
           style={({ pressed }) => [s.navRow, pressed && s.navRowPressed]}
@@ -1005,13 +1022,17 @@ function buildStyles(t: Theme) {
       textTransform: 'uppercase', letterSpacing: 0.5,
       marginTop: t.spacing.sm, marginLeft: t.spacing.xs,
     },
-    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    cardTitle: { color: t.colors.text, fontSize: 15, fontWeight: '700' },
-    cardSubtitle: { color: t.colors.muted, fontSize: 12, marginTop: -t.spacing.xs },
+    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: t.spacing.sm },
+    // Title + subtitle always live in this group, never as bare siblings: the card's
+    // own `gap` is too wide between them, and cancelling it with a negative margin
+    // collapsed them ONTO each other wherever the pair sat inside a header column.
+    titleGroup: { flex: 1, gap: 2 },
+    cardTitle: { color: t.colors.text, fontSize: 15, fontWeight: '700', lineHeight: 20 },
+    cardSubtitle: { color: t.colors.muted, fontSize: 12, lineHeight: 17 },
     statusRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
     dot: { width: 10, height: 10, borderRadius: 5 },
     statusText: { fontSize: 15, fontWeight: '600' },
-    infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: t.spacing.sm },
+    infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: t.spacing.sm, paddingVertical: 2 },
     infoLabel: { color: t.colors.muted, fontSize: 13, flexShrink: 0 },
     infoValue: { color: t.colors.text, fontSize: 13, flexShrink: 1, textAlign: 'right' },
     mono: { fontFamily: 'monospace', fontSize: 11 },
@@ -1124,15 +1145,18 @@ function buildStyles(t: Theme) {
     deviceNameSaved: { color: t.colors.online, fontSize: 14, fontWeight: '700', marginLeft: 4 },
     llmCostValue: { color: t.colors.accent, fontWeight: '700' },
     // LLM provider rows
-    providerRow: { paddingVertical: t.spacing.sm, gap: 3 },
+    providerRow: { paddingVertical: t.spacing.sm, gap: 5 },
     providerRowBorder: { borderBottomWidth: 1, borderBottomColor: t.colors.border },
-    providerHeadRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
-    providerName: { color: t.colors.text, fontSize: 14, fontWeight: '700', flexShrink: 1 },
+    // Wraps: a self-hosted endpoint's host + model are long, and a second line
+    // beats three labels squeezed onto one.
+    providerHeadRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', columnGap: t.spacing.sm, rowGap: 3 },
+    providerName: { color: t.colors.text, fontSize: 14, fontWeight: '700', lineHeight: 19, flexShrink: 1 },
     providerRole: { color: t.colors.muted, fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
     providerModel: { color: t.colors.placeholder, fontSize: 11, fontFamily: 'monospace', flexShrink: 1 },
-    providerStatus: { fontSize: 13, fontWeight: '600' },
+    providerStatus: { fontSize: 13, fontWeight: '600', lineHeight: 18 },
     providerError: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace', lineHeight: 15 },
-    providerUsage: { color: t.colors.muted, fontSize: 11 },
+    providerUsage: { color: t.colors.muted, fontSize: 11, lineHeight: 16 },
+    providerShare: { color: t.colors.accent, fontWeight: '700' },
     subHeading: { color: t.colors.muted, fontSize: 12, fontWeight: '700', marginTop: t.spacing.sm },
     extSteps: { color: t.colors.muted, fontSize: 12, lineHeight: 18, marginTop: t.spacing.xs },
     navRow: {

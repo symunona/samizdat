@@ -134,9 +134,7 @@ CAVEMAN COMMUNICATION GUIDELINES (apply to all output):
 func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, globalClient llm.Client) (StepResult, error) {
 	var c aiNewsletterConfig
 	_ = ParseStepConfig(cfg, &c)
-	if c.Model == "" {
-		c.Model = "claude-haiku-4-5-20251001"
-	}
+	// Unset model = the configured provider's default_model (see step_llm_summarize).
 
 	client := globalClient
 	if c.Provider != "" {
@@ -170,13 +168,15 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 		return StepResult{}, fmt.Errorf("llm_ai_newsletter: llm call: %w", err)
 	}
 
+	model := servedModel(usage, c.Model)
+
 	// Record LLM usage.
 	_ = q.InsertLLMUsage(ctx, store.InsertLLMUsageParams{
 		ID:            uuid.NewString(),
 		JobID:         ParentJobIDFromCtx(ctx),
 		PipelineRunID: &run.ID,
 		Provider:      usage.Provider,
-		Model:         c.Model,
+		Model:         model,
 		InputTokens:   int64(usage.InputTokens),
 		OutputTokens:  int64(usage.OutputTokens),
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
@@ -199,7 +199,7 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	meta, _ := json.Marshal(map[string]string{"model": c.Model})
+	meta, _ := json.Marshal(map[string]string{"model": model})
 
 	// Build summary highlight body: bullet list + optional hero image. Strip a
 	// leading title echo so the card doesn't double the title.

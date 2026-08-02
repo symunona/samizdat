@@ -45,6 +45,9 @@ server/
       token.go              # crypto/rand token, SHA-256 hash
     pair/
       codes.go              # DB-backed pair codes: mint, claim, expire
+    llm/
+      health.go             # package-level provider-health registry: Record, Snapshot, Restore, SetPersist
+      health_test.go        # unit tests for classify, Record, Restore
     api/
       router.go             # http.NewServeMux() — wire all routes
       health.go             # GET  /api/v1/health          (public)
@@ -217,7 +220,7 @@ Additive changes (new table / new column with default) go in the `additiveMigrat
       Boxes within 12pt merge; < 60×40pt is furniture; a box repeating at the
       same spot on >half the pages is a running header. **Do not** try to get
       these boxes from go-fitz — MuPDF exposes whole-page output only
-      (`Image`/`ImageDPI`/`SVG`/`Text`/`HTML`), no page-object enumeration.
+      (`Image`/`ImageDPI`/`SVG`/`Text`/`HTML`/`HTML`), no page-object enumeration.
     - **Rendering** is MuPDF at 150dpi, one render per page, cropped per figure
       (`pixelRect` maps points→pixels off the MediaBox and the bitmap's own
       size, never the nominal DPI). PNG, not JPEG — figures are line art.
@@ -264,6 +267,27 @@ Additive changes (new table / new column with default) go in the `additiveMigrat
   - `transcript`: JSON **lang-keyed map** `{lang: [{start_ms, end_ms, text}]}` (empty object `{}` when none). Legacy rows may still hold a bare array `[...]`; the app parsers accept both.
   - `markdown`: flattened transcript text (one segment per line); falls back to video description when no transcript.
 
+## LLM model resolution — a model name belongs to ONE provider
+
+A pipeline step that names no model must NOT get a hardcoded Claude id: point the
+primary at a local Ollama box and that id is a **404 → a 4xx → not `ErrTransport` →
+no fallback → the pipeline dies hard**. So the resolution lives in the client:
+
+- `newSingle` hands each client its section's `default_model`; the client fills in an
+  empty model (anthropic still ends at `claude-haiku-4-5-20251001`, `openai_compat`
+  errors naming `llm.default_model` — a local box serves only what was pulled onto it).
+- `Usage.Model` reports the model that actually **ran**. Steps write that (via
+  `pipeline.servedModel`) to `llm_usages` and to the highlight's `metadata.model`,
+  so a call served by a fallback is not logged under the primary's model.
+- Steps therefore pass `c.Model` straight through, empty and all. Never re-introduce a
+  provider-specific default in a step.
+- **Ollama's context defaults to 4096 tokens and truncates silently**; the summarize step
+  feeds up to 12k chars. The OpenAI-compatible endpoint has no `num_ctx`, so bake it into
+  a model variant (`FROM qwen3:4b-instruct` + `PARAMETER num_ctx 7168` → `ollama create`)
+  rather than setting `OLLAMA_CONTEXT_LENGTH` on a box other people share. Size the context
+  to what stays on the GPU (`ollama ps` prints the split) — the first byte that spills to
+  CPU roughly halves throughput.
+
 ## LLM provider health (`internal/llm/health.go`)
 
 **There is no probe.** A health check would be a real completion — tokens and money
@@ -275,7 +299,10 @@ pipeline steps mint their own clients (`llm.New` per step), so wiring health thr
 
 - **Identity is provider+base URL** (`ProviderKey`) — two openai_compat boxes are two
   rows; usage in `llm_usages` only records the provider NAME, so per-endpoint cost is
-  not derivable and the API reports spend per provider name instead.
+  not derivable and the API reports spend per provider name instead. The registry's
+  per-endpoint `calls` is therefore the ONLY per-box number, and `routed_share`
+  (calls ÷ all calls, computed in `llm_status.go`) is what answers "how much is the
+  local box actually serving?" on the Settings card.
 - **`classify(err)` → `quota | auth | transport | api`.** Anthropic answers a spent
   balance with a plain **400**, so only the message distinguishes "out of credits"
   from "bad request" — that's what `quotaRe` is for. This classification is the whole
@@ -288,6 +315,14 @@ pipeline steps mint their own clients (`llm.New` per step), so wiring health thr
 - `llm.HasKey(cfg)` mirrors `newSingle`'s env fallback (`ANTHROPIC_API_KEY`) — keep the
   two in step, or a working provider reads as "No API key configured". The API never
   returns the key itself, only `has_key`.
+- **`defer Record(…, err)` uses named return values** — both `anthropic.go` and
+  `openai_compat.go` declare `Complete` with named returns (`reply string, u Usage, err error`)
+  so the deferred closure captures the final `err` value, not the zero value at defer
+  registration. Any future LLM client must follow this same pattern.
+- **`restore` is called on every `GET /api/v1/llm/status` request** (not just at startup),
+  so a row seeded by another process (or an integration test) becomes visible without a
+  restart. In-memory rows always win over persisted ones — `Restore` skips any key already
+  present in the registry.
 
 ## Scraper paywall auth (per-domain login)
 Paywalled domains reuse the owner's subscription via a persisted browser session,

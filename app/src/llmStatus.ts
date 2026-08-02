@@ -15,6 +15,9 @@ export interface LLMProvider {
   has_key: boolean
   calls: number
   errors: number
+  // Fraction (0..1) of all calls that went to THIS endpoint — the answer to
+  // "how much is the local box actually serving?".
+  routed_share: number
   last_ok_at?: string
   last_error_at?: string
   last_error?: string

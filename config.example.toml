@@ -31,16 +31,25 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 # Fallback chain: when the primary fails at the TRANSPORT level (connection refused,
 # timeout, DNS, or 5xx) the next provider is tried in order. Real API errors (4xx) do
 # NOT fall through. Use it to run a local Ollama as primary and fall back to Haiku when
-# the box is down. Set the primary's step/default model to an Ollama model name; each
-# fallback serves with its own `default_model`.
+# the box is down. Model names are provider-specific, so a pipeline step that names no
+# model gets whichever provider serves it its own `default_model` — never the other's.
 # [llm]
 # provider      = "openai_compat"
-# base_url      = "http://localhost:11434/v1"
-# default_model = "llama3.1"
+# base_url      = "http://100.x.y.z:11434/v1"  # a tailnet box works the same as localhost
+# default_model = "qwen3:4b-instruct-ctx7k"
 #
 # [[llm.fallback]]
 # provider      = "anthropic"                  # api_key from ANTHROPIC_API_KEY env
 # default_model = "claude-haiku-4-5-20251001"
+#
+# Ollama's default context is 4096 tokens and it TRUNCATES silently — a summarize step
+# feeds up to 12k chars, so a stock model never sees the end of a long article. The
+# OpenAI-compatible endpoint takes no num_ctx, so bake it into a model variant:
+#   printf 'FROM qwen3:4b-instruct\nPARAMETER num_ctx 7168\n' > ctx.Modelfile
+#   ollama create qwen3:4b-instruct-ctx7k -f ctx.Modelfile
+# Size the context to what stays on the GPU — `ollama ps` prints the split, and the
+# first byte that spills to CPU roughly halves throughput. Prefer a non-thinking
+# ("instruct") build: a reasoning model spends most of its tokens on hidden thinking.
 
 # YouTube / podcast ingestion via yt-dlp. A datacenter VPS IP is bot-blocked by
 # YouTube, so set `proxy` to a residential proxy (e.g. a home node over Tailscale

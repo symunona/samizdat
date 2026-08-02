@@ -33,9 +33,9 @@ type llmSummarizeConfig struct {
 func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, globalClient llm.Client) (StepResult, error) {
 	var c llmSummarizeConfig
 	_ = ParseStepConfig(cfg, &c)
-	if c.Model == "" {
-		c.Model = "claude-haiku-4-5-20251001"
-	}
+	// No model default here: model names are provider-specific, so an unset model
+	// resolves to the configured provider's default_model inside the client (a
+	// Claude id sent to a local Ollama box is a 404, and a 404 never falls back).
 	if c.Prompt == "" {
 		c.Prompt = "Summarize as caveman. Rules: drop all articles (a/an/the), drop filler words (just/really/basically/actually/simply/notably), drop hedges (seems/appears/might), no pleasantries, no intro, no outro. Fragments OK. Short synonyms (big not extensive, fix not implement a solution). Max 3 bullets. Pattern: [thing] [action] [why it matters]. Bold the key topic/name of each bullet: **keyword** where it naturally lands — one bold per bullet. Boring or thin = one line. Never start with 'This article'. NO heading and NO title line — do not repeat or restate the article title; start straight with the first bullet (the title is shown separately). IMPORTANT: if content is empty, image-only, or has no meaningful text to summarize, return exactly empty string — nothing else. If the input is NOT a real article — a bot check ('checking your browser', 'verify you are human'), a login or paywall wall, a CAPTCHA, or an error/teaser stub with no article body — respond with EXACTLY " + notParseableToken + " on a single line and nothing else."
 	}
@@ -72,13 +72,15 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 		return StepResult{}, fmt.Errorf("llm_summarize: llm call: %w", err)
 	}
 
+	model := servedModel(usage, c.Model)
+
 	// Record LLM usage regardless of whether we use the reply.
 	_ = q.InsertLLMUsage(ctx, store.InsertLLMUsageParams{
 		ID:            uuid.NewString(),
 		JobID:         ParentJobIDFromCtx(ctx),
 		PipelineRunID: &run.ID,
 		Provider:      usage.Provider,
-		Model:         c.Model,
+		Model:         model,
 		InputTokens:   int64(usage.InputTokens),
 		OutputTokens:  int64(usage.OutputTokens),
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
@@ -109,7 +111,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	meta, _ := json.Marshal(map[string]string{"model": c.Model})
+	meta, _ := json.Marshal(map[string]string{"model": model})
 
 	// Prepend hero image if one has been cached for this document.
 	body := reply
