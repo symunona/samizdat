@@ -825,6 +825,7 @@ export type HighlightWithDoc = Highlight & {
   document_title: string
   document_url: string
   document_published_at?: string | null
+  source_feed_title?: string
   linked_documents?: Record<string, string>
   tags?: Tag[]
 }

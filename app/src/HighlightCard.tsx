@@ -10,6 +10,7 @@ import NoteEditButton from './NoteEditButton'
 import IconButton from './IconButton'
 import { isTouchDevice } from './touch'
 import { tagColor } from './tagColor'
+import { hashColor } from './hashColor'
 
 const MAX_BODY_HEIGHT = 400
 
@@ -33,11 +34,6 @@ export default function HighlightCard({
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const touch = isTouchDevice()
-  const kindColor = useMemo(() => ({
-    summary: theme.colors.accent,
-    link: '#6b8cff',
-    note: '#b8a0ff',
-  } as Record<string, string>), [theme])
 
   const [modalOpen, setModalOpen] = useState(false)
   // Popout navigates to the document at the right place (highlight deep-link); only ✕ closes.
@@ -57,9 +53,14 @@ export default function HighlightCard({
   return (
     <View style={[s.card, pinned && s.cardPinned]}>
       <View style={s.cardHeader}>
-        <View style={[s.kindBadge, { backgroundColor: kindColor[item.kind] ?? '#888' }]}>
+        <View style={[s.kindBadge, { backgroundColor: hashColor(item.kind) }]}>
           <Text style={s.kindText}>{item.kind}</Text>
         </View>
+        {item.source_feed_title ? (
+          <View style={[s.kindBadge, { backgroundColor: hashColor(item.source_feed_title) }]}>
+            <Text style={s.kindText}>{item.source_feed_title}</Text>
+          </View>
+        ) : null}
         <Pressable style={s.titlePress} onPress={onPress}>
           <Text style={s.hlTitle} numberOfLines={1}>{item.title}</Text>
         </Pressable>

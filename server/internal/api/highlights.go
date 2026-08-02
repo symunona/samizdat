@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"time"
@@ -13,8 +14,19 @@ import (
 )
 
 var urlRe = regexp.MustCompile(`https?://[^\s)\]"<>]+`)
-
 var mdRenderer = goldmark.New()
+
+// feedDisplayTitle prefers the feed's title, falling back to its URL when the
+// title was never set (common for scraped/discovered feeds).
+func feedDisplayTitle(f store.Feed) string {
+	if f.Title != "" {
+		return f.Title
+	}
+	if u, err := url.Parse(f.Url); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return f.Url
+}
 
 func renderMarkdown(src string) string {
 	var buf bytes.Buffer
@@ -33,6 +45,7 @@ type highlightWithDoc struct {
 	DocumentTitle       string            `json:"document_title"`
 	DocumentURL         string            `json:"document_url"`
 	DocumentPublishedAt *string           `json:"document_published_at,omitempty"`
+	SourceFeedTitle     string            `json:"source_feed_title,omitempty"`
 	BodyHTML            string            `json:"body_html"`
 	LinkedDocuments     map[string]string `json:"linked_documents,omitempty"`
 	Tags                []store.Tag       `json:"tags,omitempty"`
@@ -61,6 +74,7 @@ func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]highlightWithDoc, 0, len(rows))
 	docCache := map[string]store.Document{}
+	feedCache := map[string]string{} // feed id → title
 	urlCache := map[string]string{} // canonical_url → document id ("" = not found)
 	for _, hl := range rows {
 		doc, ok := docCache[hl.DocumentID]
@@ -91,9 +105,19 @@ func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
 				urlCache[u] = ""
 			}
 		}
+		feedTitle := ""
+		if doc.SourceFeedID != nil {
+			if t, ok := feedCache[*doc.SourceFeedID]; ok {
+				feedTitle = t
+			} else if f, err := h.q.GetFeed(r.Context(), *doc.SourceFeedID); err == nil {
+				feedTitle = feedDisplayTitle(f)
+				feedCache[*doc.SourceFeedID] = feedTitle
+			}
+		}
 		tags, _ := h.q.ListTagsByHighlight(r.Context(), hl.ID)
 		out = append(out, highlightWithDoc{
 			Highlight:           hl,
+			SourceFeedTitle:     feedTitle,
 			DocumentTitle:       doc.Title,
 			DocumentURL:         doc.CanonicalUrl,
 			DocumentPublishedAt: doc.PublishedAt,
@@ -112,11 +136,19 @@ func (h *highlightsHandler) listByDocument(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, "list highlights failed")
 		return
 	}
+	feedTitle := ""
+	doc, derr := h.q.GetDocumentByID(r.Context(), docID)
+	if derr == nil && doc.SourceFeedID != nil {
+		if f, err := h.q.GetFeed(r.Context(), *doc.SourceFeedID); err == nil {
+			feedTitle = feedDisplayTitle(f)
+		}
+	}
 	out := make([]highlightWithDoc, 0, len(rows))
 	for _, hl := range rows {
 		tags, _ := h.q.ListTagsByHighlight(r.Context(), hl.ID)
 		out = append(out, highlightWithDoc{
-			Highlight: hl,
+			Highlight:       hl,
+			SourceFeedTitle: feedTitle,
 			BodyHTML:  renderMarkdown(hl.Body),
 			Tags:      tags,
 		})
