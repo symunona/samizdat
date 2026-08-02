@@ -25,8 +25,9 @@ type Config struct {
 // our frontmatter id are overwritten, foreign files are never touched. This is a
 // backup/observation view, distinct from the reserved (unused) VaultDir.
 type ExportSection struct {
-	Enabled bool   `toml:"enabled"` // run the exporter goroutine
-	Dir     string `toml:"dir"`     // output vault folder (created if missing)
+	Enabled  bool   `toml:"enabled"`  // run the exporter goroutine
+	Dir      string `toml:"dir"`      // output vault folder (created if missing)
+	Grouping string `toml:"grouping"` // date subfolders: none|daily|weekly|monthly (default weekly)
 }
 
 // YTDLPSection configures YouTube/podcast ingestion via yt-dlp. The VPS's
@@ -84,6 +85,7 @@ func Defaults() *Config {
 		CacheDir:      filepath.Join(data, "cache"),
 		ExtractorsDir: filepath.Join(home, "dev", "sam", "extractors"),
 		Server:        ServerSection{Port: 8765},
+		Export:        ExportSection{Grouping: "weekly"},
 		YTDLP:         YTDLPSection{Path: "yt-dlp"},
 	}
 }
@@ -95,6 +97,15 @@ func Load(path string) (*Config, error) {
 	}
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	switch cfg.Export.Grouping {
+	case "", "none", "daily", "weekly", "monthly":
+		// "" means: user set no value but also wrote [export] — keep default.
+		if cfg.Export.Grouping == "" {
+			cfg.Export.Grouping = "weekly"
+		}
+	default:
+		return nil, fmt.Errorf("export.grouping %q invalid: want none|daily|weekly|monthly", cfg.Export.Grouping)
 	}
 	return cfg, nil
 }

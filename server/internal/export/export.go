@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -60,18 +61,20 @@ type Exporter struct {
 	sweepMu  sync.Mutex // serializes sweeps (ticker vs on-demand Refresh)
 	mu       sync.Mutex
 	cursor   string            // last exported updated_at
-	docFiles map[string]string // doc id → filename under documents/
-	annFiles map[string]string // annotation id → filename under annotations/
+	docFiles map[string]string // doc id → path relative to dir (e.g. documents/2026-W31/x.md)
+	annFiles map[string]string // annotation id → path relative to dir
+	grouping string            // none|daily|weekly|monthly
 	lastRun  string
 	lastErr  string
 }
 
 // New builds an Exporter. Caller starts it with Run.
-func New(q *store.Queries, dir, cacheDir string) *Exporter {
+func New(q *store.Queries, dir, cacheDir, grouping string) *Exporter {
 	return &Exporter{
 		q:        q,
 		dir:      dir,
 		cacheDir: cacheDir,
+		grouping: grouping,
 		log:      logger.New("export"),
 		cursor:   epoch,
 		docFiles: map[string]string{},
@@ -125,23 +128,27 @@ func (e *Exporter) Snapshot() Stats {
 	}
 }
 
-// loadIndex scans documents/ and annotations/ for notes we own (by frontmatter
-// marker + id), so re-runs overwrite the same files and foreign files are
-// skipped. Runs once at startup.
+// loadIndex scans documents/ and annotations/ (recursively, for grouping
+// subfolders) for notes we own (by frontmatter marker + id), so re-runs
+// overwrite the same files and foreign files are skipped. Runs once at startup.
 func (e *Exporter) loadIndex() {
 	scan := func(sub, marker string, dst map[string]string) {
-		entries, err := os.ReadDir(filepath.Join(e.dir, sub))
-		if err != nil {
-			return
-		}
-		for _, ent := range entries {
-			if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".md") {
-				continue
+		root := filepath.Join(e.dir, sub)
+		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr // aborts the walk; caller ignores the result
 			}
-			if id := ourFileID(filepath.Join(e.dir, sub, ent.Name()), marker); id != "" {
-				dst[id] = ent.Name()
+			if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
+				return nil
 			}
-		}
+			if id := ourFileID(path, marker); id != "" {
+				rel, err := filepath.Rel(e.dir, path)
+				if err == nil {
+					dst[id] = filepath.ToSlash(rel)
+				}
+			}
+			return nil
+		})
 	}
 	scan(docsSub, docMark, e.docFiles)
 	scan(annsSub, annMark, e.annFiles)
@@ -254,8 +261,17 @@ func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 		return fmt.Errorf("list assets for %s: %w", id, err)
 	}
 
+	// Anchored annotation notes share the parent doc's grouping folder.
+	group := e.groupDir(docDate(doc))
+	docRel := e.docRelPath(doc, group)
+	annRels := make([]string, len(live))
+	for i, a := range live {
+		annRels[i] = e.annRelPath(a, group)
+	}
+
 	// Copy image assets into assets/ and map their source URL → vault-relative
-	// path (notes sit one folder deep, so reference ../assets/…).
+	// path (prefix depends on how deep the note sits under the export dir).
+	up := upPrefix(docRel)
 	urlRewrite := map[string]string{}
 	for _, a := range assets {
 		if a.DeletedAt != nil || a.Kind == "audio" || a.LocalPath == "" {
@@ -267,34 +283,100 @@ func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 			continue
 		}
 		if a.OriginalUrl != "" {
-			urlRewrite[a.OriginalUrl] = "../" + assetsSub + "/" + fname
+			urlRewrite[a.OriginalUrl] = up + assetsSub + "/" + fname
 		}
 	}
 
-	docName := e.docFilename(doc)
-	annNames := make([]string, len(live))
-	for i, a := range live {
-		annNames[i] = e.annFilename(a)
-	}
-
-	body := renderDoc(doc, live, annNames, tags, urlRewrite)
-	if err := os.WriteFile(filepath.Join(e.dir, docsSub, docName), body, 0o644); err != nil {
-		return fmt.Errorf("write doc note %s: %w", docName, err)
+	body := renderDoc(doc, live, relBaseNames(annRels), tags, urlRewrite)
+	if err := writeNote(e.dir, docRel, body); err != nil {
+		return fmt.Errorf("write doc note %s: %w", docRel, err)
 	}
 	e.mu.Lock()
-	e.docFiles[id] = docName
+	oldDocRel := e.docFiles[id]
+	e.docFiles[id] = docRel
 	e.mu.Unlock()
+	removeIfMoved(e.dir, oldDocRel, docRel)
 
 	for i, a := range live {
-		note := renderAnnotation(a, docName, urlRewrite)
-		if err := os.WriteFile(filepath.Join(e.dir, annsSub, annNames[i]), note, 0o644); err != nil {
-			return fmt.Errorf("write annotation note %s: %w", annNames[i], err)
+		note := renderAnnotation(a, relBase(docRel), urlRewrite)
+		if err := writeNote(e.dir, annRels[i], note); err != nil {
+			return fmt.Errorf("write annotation note %s: %w", annRels[i], err)
 		}
 		e.mu.Lock()
-		e.annFiles[a.ID] = annNames[i]
+		oldAnnRel := e.annFiles[a.ID]
+		e.annFiles[a.ID] = annRels[i]
 		e.mu.Unlock()
+		removeIfMoved(e.dir, oldAnnRel, annRels[i])
 	}
 	return nil
+}
+
+// writeNote writes body to dir/rel, creating grouping subfolders as needed.
+func writeNote(dir, rel string, body []byte) error {
+	path := filepath.Join(dir, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+// removeIfMoved deletes the note at its previous path when grouping (or a
+// filename change) relocated it.
+func removeIfMoved(dir, oldRel, newRel string) {
+	if oldRel != "" && oldRel != newRel {
+		_ = os.Remove(filepath.Join(dir, oldRel))
+	}
+}
+
+// relBase returns the basename of a slash-separated vault-relative path.
+func relBase(rel string) string {
+	return rel[strings.LastIndex(rel, "/")+1:]
+}
+
+func relBaseNames(rels []string) []string {
+	out := make([]string, len(rels))
+	for i, r := range rels {
+		out[i] = relBase(r)
+	}
+	return out
+}
+
+// upPrefix returns "../" per folder the note sits below the export dir, so
+// asset links resolve back to dir/assets/.
+func upPrefix(rel string) string {
+	return strings.Repeat("../", strings.Count(rel, "/"))
+}
+
+// groupDir maps a timestamp to the configured date subfolder ("" = flat).
+func (e *Exporter) groupDir(ts string) string {
+	if e.grouping == "" || e.grouping == "none" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return ""
+	}
+	switch e.grouping {
+	case "daily":
+		return t.Format("2006-01-02")
+	case "weekly":
+		y, w := t.ISOWeek()
+		return fmt.Sprintf("%04d-W%02d", y, w)
+	case "monthly":
+		return t.Format("2006-01")
+	}
+	return ""
+}
+
+// docDate picks the date a doc is grouped by: published when known, else created.
+func docDate(doc store.Document) string {
+	if doc.PublishedAt != nil && *doc.PublishedAt != "" {
+		return *doc.PublishedAt
+	}
+	return doc.CreatedAt
 }
 
 // copyAsset copies cacheDir/<localPath> → dir/assets/<fname> (skips if the dest
@@ -332,19 +414,19 @@ func (e *Exporter) copyAsset(localPath, fname string) error {
 // cascade-tombstoned and removed via the annotation path).
 func (e *Exporter) removeDoc(id string) error {
 	e.mu.Lock()
-	name := e.docFiles[id]
+	rel := e.docFiles[id]
 	delete(e.docFiles, id)
 	e.mu.Unlock()
-	return removeIfPresent(filepath.Join(e.dir, docsSub, name), name)
+	return removeIfPresent(filepath.Join(e.dir, rel), rel)
 }
 
 // removeAnnotation deletes our note for a tombstoned annotation.
 func (e *Exporter) removeAnnotation(id string) error {
 	e.mu.Lock()
-	name := e.annFiles[id]
+	rel := e.annFiles[id]
 	delete(e.annFiles, id)
 	e.mu.Unlock()
-	return removeIfPresent(filepath.Join(e.dir, annsSub, name), name)
+	return removeIfPresent(filepath.Join(e.dir, rel), rel)
 }
 
 func removeIfPresent(path, name string) error {
@@ -361,13 +443,18 @@ func removeIfPresent(path, name string) error {
 	return nil
 }
 
-// docFilename returns a stable filename for a doc note: reuse the existing one
-// if we own it, else a slug of the title, avoiding collisions.
-func (e *Exporter) docFilename(doc store.Document) string {
+// docRelPath returns a stable vault-relative path for a doc note: reuse the
+// existing one if still in the right grouping folder, else a slug of the title
+// under documents/<group>/, avoiding collisions.
+func (e *Exporter) docRelPath(doc store.Document, group string) string {
+	dir := docsSub
+	if group != "" {
+		dir += "/" + group
+	}
 	e.mu.Lock()
-	if n, ok := e.docFiles[doc.ID]; ok {
+	if rel, ok := e.docFiles[doc.ID]; ok && filepath.Dir(rel) == filepath.FromSlash(dir) {
 		e.mu.Unlock()
-		return n
+		return rel
 	}
 	e.mu.Unlock()
 
@@ -376,19 +463,24 @@ func (e *Exporter) docFilename(doc store.Document) string {
 		base = slug(doc.ID)
 	}
 	name := base + ".md"
-	if e.docNameFree(name, doc.ID) {
-		return name
+	if e.docNameFree(dir, name, doc.ID) {
+		return dir + "/" + name
 	}
-	return base + "-" + short(doc.ID) + ".md"
+	return dir + "/" + base + "-" + short(doc.ID) + ".md"
 }
 
-// annFilename returns a stable filename for an annotation note. Annotations have
-// no title, so the id suffix guarantees uniqueness without collision handling.
-func (e *Exporter) annFilename(a store.Annotation) string {
+// annRelPath returns a stable vault-relative path for an annotation note.
+// Annotations have no title, so the id suffix guarantees uniqueness without
+// collision handling.
+func (e *Exporter) annRelPath(a store.Annotation, group string) string {
+	dir := annsSub
+	if group != "" {
+		dir += "/" + group
+	}
 	e.mu.Lock()
-	if n, ok := e.annFiles[a.ID]; ok {
+	if rel, ok := e.annFiles[a.ID]; ok && filepath.Dir(rel) == filepath.FromSlash(dir) {
 		e.mu.Unlock()
-		return n
+		return rel
 	}
 	e.mu.Unlock()
 
@@ -399,39 +491,40 @@ func (e *Exporter) annFilename(a store.Annotation) string {
 	if base == "" {
 		base = "annotation"
 	}
-	return base + "-" + short(a.ID) + ".md"
+	return dir + "/" + base + "-" + short(a.ID) + ".md"
 }
 
 // docNameFree reports whether name is unclaimed by another doc and not a foreign
-// file already in documents/.
-func (e *Exporter) docNameFree(name, id string) bool {
+// file already in dir.
+func (e *Exporter) docNameFree(dir, name, id string) bool {
 	e.mu.Lock()
-	for oid, n := range e.docFiles {
-		if n == name && oid != id {
+	for oid, rel := range e.docFiles {
+		if rel == dir+"/"+name && oid != id {
 			e.mu.Unlock()
 			return false
 		}
 	}
 	e.mu.Unlock()
-	_, err := os.Stat(filepath.Join(e.dir, docsSub, name))
+	_, err := os.Stat(filepath.Join(e.dir, dir, name))
 	return os.IsNotExist(err)
 }
 
 // writeIndex regenerates the _index.md MOC linking every owned doc note.
 func (e *Exporter) writeIndex() {
 	e.mu.Lock()
-	names := make([]string, 0, len(e.docFiles))
-	for _, n := range e.docFiles {
-		names = append(names, n)
+	rels := make([]string, 0, len(e.docFiles))
+	for _, rel := range e.docFiles {
+		rels = append(rels, rel)
 	}
 	e.mu.Unlock()
-	sort.Strings(names)
+	sort.Strings(rels)
 
 	var b strings.Builder
 	b.WriteString("---\n" + indexMark + "\ntitle: Samizdat Export\n---\n\n# Samizdat Export\n\n")
-	fmt.Fprintf(&b, "%d documents.\n\n", len(names))
-	for _, n := range names {
-		fmt.Fprintf(&b, "- [[%s]]\n", strings.TrimSuffix(n, ".md"))
+	fmt.Fprintf(&b, "%d documents.\n\n", len(rels))
+	for _, rel := range rels {
+		// Obsidian wikilinks resolve by basename across folders.
+		fmt.Fprintf(&b, "- [[%s]]\n", strings.TrimSuffix(relBase(rel), ".md"))
 	}
 	_ = os.WriteFile(filepath.Join(e.dir, indexName), []byte(b.String()), 0o644)
 }
@@ -528,14 +621,16 @@ func renderAnnotation(a store.Annotation, docName string, rewrite map[string]str
 // exportStandaloneNote writes a document-less annotation (a standalone note) as
 // its own note file, with no parent-doc backlink.
 func (e *Exporter) exportStandaloneNote(a store.Annotation) error {
-	name := e.annFilename(a)
+	rel := e.annRelPath(a, e.groupDir(a.CreatedAt))
 	note := renderAnnotation(a, "", nil)
-	if err := os.WriteFile(filepath.Join(e.dir, annsSub, name), note, 0o644); err != nil {
-		return fmt.Errorf("write standalone note %s: %w", name, err)
+	if err := writeNote(e.dir, rel, note); err != nil {
+		return fmt.Errorf("write standalone note %s: %w", rel, err)
 	}
 	e.mu.Lock()
-	e.annFiles[a.ID] = name
+	old := e.annFiles[a.ID]
+	e.annFiles[a.ID] = rel
 	e.mu.Unlock()
+	removeIfMoved(e.dir, old, rel)
 	return nil
 }
 

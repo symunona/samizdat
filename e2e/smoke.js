@@ -198,9 +198,19 @@ async function runExportChecks(token) {
   // Structured layout: documents/ and annotations/ subfolders + _index.md.
   try {
     const readMd = (sub) => {
+      // Notes may sit in date-grouped subfolders (export.grouping) — recurse.
       const dir = join(stats.dir, sub)
       if (!fs.existsSync(dir)) return []
-      return fs.readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => fs.readFileSync(join(dir, f), 'utf8'))
+      const out = []
+      const walk = (d) => {
+        for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
+          const p = join(d, ent.name)
+          if (ent.isDirectory()) walk(p)
+          else if (ent.name.endsWith('.md')) out.push(fs.readFileSync(p, 'utf8'))
+        }
+      }
+      walk(dir)
+      return out
     }
 
     const docNote = readMd('documents').find((t) => t.includes('samizdat: export') && t.includes(VIDEO_DOC_ID))

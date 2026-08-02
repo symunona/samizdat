@@ -75,7 +75,7 @@ func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
 	out := make([]highlightWithDoc, 0, len(rows))
 	docCache := map[string]store.Document{}
 	feedCache := map[string]string{} // feed id → title
-	urlCache := map[string]string{} // canonical_url → document id ("" = not found)
+	urlCache := map[string]string{}  // canonical_url → document id ("" = not found)
 	for _, hl := range rows {
 		doc, ok := docCache[hl.DocumentID]
 		if !ok {
@@ -149,8 +149,8 @@ func (h *highlightsHandler) listByDocument(w http.ResponseWriter, r *http.Reques
 		out = append(out, highlightWithDoc{
 			Highlight:       hl,
 			SourceFeedTitle: feedTitle,
-			BodyHTML:  renderMarkdown(hl.Body),
-			Tags:      tags,
+			BodyHTML:        renderMarkdown(hl.Body),
+			Tags:            tags,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
