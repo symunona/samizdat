@@ -2,7 +2,7 @@
 created: 2026-08-02
 topic: Settings — Service Status group + LLM provider health
 excerpt: Regroup Settings into Connection / Services / Preferences / Device blocks, add a per-provider LLM health card (last call ok/error, quota vs auth vs transport), and surface a drawer dot when any service is degraded.
-status: planned
+status: done — shipped on feat/settings-service-status (63→65 integration checks green, smoke green); awaiting review before squash-merge
 ---
 
 # Settings: service status group
