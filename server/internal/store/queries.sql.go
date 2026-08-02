@@ -2308,6 +2308,41 @@ func (q *Queries) ListEnabledPipelines(ctx context.Context) ([]Pipeline, error) 
 	return items, nil
 }
 
+const listFeedDocumentCounts = `-- name: ListFeedDocumentCounts :many
+SELECT source_feed_id AS feed_id, COUNT(*) AS doc_count
+FROM documents
+WHERE deleted_at IS NULL AND source_feed_id IS NOT NULL AND source_feed_id != ''
+GROUP BY source_feed_id
+`
+
+type ListFeedDocumentCountsRow struct {
+	FeedID   *string `json:"feed_id"`
+	DocCount int64   `json:"doc_count"`
+}
+
+func (q *Queries) ListFeedDocumentCounts(ctx context.Context) ([]ListFeedDocumentCountsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listFeedDocumentCounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFeedDocumentCountsRow
+	for rows.Next() {
+		var i ListFeedDocumentCountsRow
+		if err := rows.Scan(&i.FeedID, &i.DocCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFeedItemsByFeed = `-- name: ListFeedItemsByFeed :many
 SELECT id, feed_id, url, status, seen_at, created_at, updated_at, rev, deleted_at FROM feed_items WHERE feed_id = ? AND deleted_at IS NULL ORDER BY seen_at DESC
 `

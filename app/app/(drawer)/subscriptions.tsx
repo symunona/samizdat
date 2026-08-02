@@ -12,8 +12,10 @@ import {
   View,
 } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
+import { useRouter } from 'expo-router'
 import {
   fetchFeeds,
+  fetchFeedDocumentCounts,
   fetchSubscriptions,
   createSubscription,
   createNewsletter,
@@ -61,8 +63,10 @@ export default function SubscriptionsScreen() {
   const s = useMemo(() => buildStyles(theme), [theme])
   const { status, activeUrl, token } = useConnection()
   const { toast } = useToast()
+  const router = useRouter()
 
   const [subs, setSubs] = useState<SubWithFeed[]>([])
+  const [docCounts, setDocCounts] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -85,10 +89,12 @@ export default function SubscriptionsScreen() {
     isRefresh ? setRefreshing(true) : setLoading(true)
     setError(null)
     try {
-      const [rawSubs, feeds] = await Promise.all([
+      const [rawSubs, feeds, counts] = await Promise.all([
         fetchSubscriptions(activeUrl, token),
         fetchFeeds(activeUrl, token),
+        fetchFeedDocumentCounts(activeUrl, token),
       ])
+      setDocCounts(counts ?? {})
       const feedMap: Record<string, Feed> = {}
       for (const f of (feeds ?? [])) feedMap[f.id] = f
       setSubs((rawSubs ?? []).map(sub => ({ ...sub, feed: feedMap[sub.feed_id] })))
@@ -275,6 +281,13 @@ export default function SubscriptionsScreen() {
           </View>
         </View>
         <View style={s.cardStats}>
+          <Pressable
+            onPress={() => router.push(`/documents?feed_id=${item.feed_id}`)}
+            hitSlop={4}
+            testID={`doc-count-${item.feed_id}`}
+          >
+            <Text style={s.statLink}>▸ {docCounts[item.feed_id] ?? 0} doc{(docCounts[item.feed_id] ?? 0) === 1 ? '' : 's'}</Text>
+          </Pressable>
           <Text style={s.statText}>
             Polled: <Text style={s.statValue}>{formatRelative(item.feed?.last_polled_at ?? null)}</Text>
           </Text>
@@ -437,6 +450,7 @@ function buildStyles(t: Theme) {
     nlHint: { color: t.colors.muted, fontSize: 12, marginBottom: t.spacing.md },
     cardStats: { flexDirection: 'row', gap: t.spacing.md, marginBottom: t.spacing.md },
     statText: { color: t.colors.muted, fontSize: 12 },
+    statLink: { color: t.colors.accent, fontSize: 12, fontWeight: '700' },
     statValue: { color: t.colors.text, fontWeight: '600' },
     cardActions: { flexDirection: 'row', gap: t.spacing.sm },
     actionBtn: { borderRadius: t.radius.sm, paddingHorizontal: t.spacing.md, paddingVertical: 6, alignItems: 'center', justifyContent: 'center', minWidth: 80, minHeight: 30 },

@@ -364,6 +364,13 @@ export async function fetchFeeds(serverUrl: string, token: string): Promise<Feed
   return json<Feed[]>(res, '/api/v1/feeds')
 }
 
+export async function fetchFeedDocumentCounts(serverUrl: string, token: string): Promise<Record<string, number>> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/feeds/document-counts`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<Record<string, number>>(res, '/api/v1/feeds/document-counts')
+}
+
 export async function fetchFeed(serverUrl: string, token: string, id: string): Promise<Feed> {
   const res = await fetch(`${base(serverUrl)}/api/v1/feeds/${encodeURIComponent(id)}`, {
     headers: { Authorization: `Bearer ${token}` },

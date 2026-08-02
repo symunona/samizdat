@@ -76,6 +76,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	mux.HandleFunc("DELETE /api/v1/subscriptions/{id}", bearerAuth(q, subsH.delete))
 	mux.HandleFunc("POST /api/v1/subscriptions/{id}/poll", bearerAuth(q, subsH.poll))
 	mux.HandleFunc("GET /api/v1/feeds", bearerAuth(q, subsH.listFeeds))
+	mux.HandleFunc("GET /api/v1/feeds/document-counts", bearerAuth(q, subsH.feedDocumentCounts))
 	mux.HandleFunc("GET /api/v1/feeds/{id}", bearerAuth(q, subsH.getFeed))
 	mux.HandleFunc("GET /api/v1/feeds/{id}/items", bearerAuth(q, subsH.listFeedItems))
 	mux.HandleFunc("POST /api/v1/feeds/{id}/queue-pipelines", bearerAuth(q, subsH.queuePipelines))

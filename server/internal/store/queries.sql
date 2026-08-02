@@ -210,6 +210,12 @@ SELECT * FROM feeds WHERE kind = 'newsletter' AND config LIKE '%"token":"' || ? 
 -- name: ListFeeds :many
 SELECT * FROM feeds WHERE deleted_at IS NULL ORDER BY created_at DESC;
 
+-- name: ListFeedDocumentCounts :many
+SELECT source_feed_id AS feed_id, COUNT(*) AS doc_count
+FROM documents
+WHERE deleted_at IS NULL AND source_feed_id IS NOT NULL AND source_feed_id != ''
+GROUP BY source_feed_id;
+
 -- name: MarkFeedPolled :exec
 UPDATE feeds SET last_polled_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 

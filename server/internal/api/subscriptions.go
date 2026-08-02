@@ -151,6 +151,23 @@ func (h *subscriptionsHandler) listFeeds(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, feeds)
 }
 
+// GET /api/v1/feeds/document-counts — live document count per feed.
+// Returns {feed_id: count} for every feed that has at least one document.
+func (h *subscriptionsHandler) feedDocumentCounts(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.q.ListFeedDocumentCounts(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	counts := map[string]int64{}
+	for _, row := range rows {
+		if row.FeedID != nil {
+			counts[*row.FeedID] = row.DocCount
+		}
+	}
+	writeJSON(w, http.StatusOK, counts)
+}
+
 // POST /api/v1/subscriptions/{id}/poll — enqueue immediate poll_feed job.
 // Query param ?hold=true creates child scrape_url jobs in paused state.
 func (h *subscriptionsHandler) poll(w http.ResponseWriter, r *http.Request) {

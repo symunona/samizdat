@@ -12,8 +12,8 @@ import {
 } from 'react-native'
 import { Link, useLocalSearchParams } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
-import { submitScrapeJob, deleteDocument, fetchPipelineDocuments, fetchJobs, retryJob, deleteJob } from '../../src/api'
-import type { Document, Job } from '../../src/api'
+import { submitScrapeJob, deleteDocument, fetchPipelineDocuments, fetchFeeds, fetchJobs, retryJob, deleteJob } from '../../src/api'
+import type { Document, Feed, Job } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
 import { useToast } from '../../src/ToastContext'
 import { useFailedJobs, documentErrorText, orphanScrapeFailures } from '../../src/failedJobs'
@@ -47,13 +47,32 @@ export default function DocumentsScreen() {
   const s = useMemo(() => buildStyles(theme), [theme])
   const { status, error: connError, activeUrl, token, probe } = useConnection()
   const { toast } = useToast()
-  const { feed_id: feedIdParam, pipeline_id: pipelineIdParam } = useLocalSearchParams<{ feed_id?: string; pipeline_id?: string }>()
+  const { feed_id: feedIdParam, pipeline_id: pipelineIdParam, q: qParam } = useLocalSearchParams<{ feed_id?: string; pipeline_id?: string; q?: string }>()
 
   const allDocuments = useDocuments()
   const { status: syncStatus } = useSyncStatus()
   const [refreshing, setRefreshing] = useState(false)
   const [pipelineDocs, setPipelineDocs] = useState<Document[] | null>(null)
   const [pipelineDocsLoading, setPipelineDocsLoading] = useState(false)
+
+  // Free keyword search + advanced source filter. Both seed from URL params
+  // (q / feed_id) so links from other screens land pre-filtered.
+  const [search, setSearch] = useState(qParam ?? '')
+  const [sourceFilter, setSourceFilter] = useState<string | null>(feedIdParam ?? null)
+  const [showAdvanced, setShowAdvanced] = useState(!!feedIdParam)
+  const [feeds, setFeeds] = useState<Feed[]>([])
+
+  useEffect(() => { setSearch(qParam ?? '') }, [qParam])
+  useEffect(() => {
+    setSourceFilter(feedIdParam ?? null)
+    if (feedIdParam) setShowAdvanced(true)
+  }, [feedIdParam])
+
+  // Feeds for the source dropdown — cheap, loaded once when connected.
+  useEffect(() => {
+    if (status !== 'connected' || !activeUrl || !token) return
+    fetchFeeds(activeUrl, token).then(f => setFeeds(f ?? [])).catch(() => {})
+  }, [status, activeUrl, token])
 
   // ids being deleted (optimistically hidden from list while waiting for server)
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set())
@@ -71,15 +90,25 @@ export default function DocumentsScreen() {
   }, [pipelineIdParam, activeUrl, token])
 
   const documents = useMemo(() => {
-    if (pipelineIdParam) {
-      return (pipelineDocs ?? []).filter(d => !pendingDeleteIds.has(d.id))
+    let docs = pipelineIdParam
+      ? (pipelineDocs ?? []).filter(d => !pendingDeleteIds.has(d.id))
+      : allDocuments.filter((d) => !pendingDeleteIds.has(d.id))
+    if (sourceFilter) {
+      docs = docs.filter(d => d.source_feed_id === sourceFilter)
     }
-    let docs = allDocuments.filter((d) => !pendingDeleteIds.has(d.id))
-    if (feedIdParam) {
-      docs = docs.filter(d => d.source_feed_id === feedIdParam)
+    const needle = search.trim().toLowerCase()
+    if (needle) {
+      docs = docs.filter(d =>
+        (d.title ?? '').toLowerCase().includes(needle) ||
+        (d.canonical_url ?? '').toLowerCase().includes(needle) ||
+        (d.author ?? '').toLowerCase().includes(needle) ||
+        (d.excerpt ?? '').toLowerCase().includes(needle)
+      )
     }
     return docs
-  }, [allDocuments, pendingDeleteIds, feedIdParam, pipelineIdParam, pipelineDocs])
+  }, [allDocuments, pendingDeleteIds, sourceFilter, search, pipelineIdParam, pipelineDocs])
+
+  const sourceFeed = useMemo(() => feeds.find(f => f.id === sourceFilter) ?? null, [feeds, sourceFilter])
 
   const startDelete = useCallback(
     (doc: Document) => {
@@ -151,7 +180,7 @@ export default function DocumentsScreen() {
 
   // Queued / running scrape jobs, shown as pinned rows above the document list.
   const [pendingJobs, setPendingJobs] = useState<Job[]>([])
-  const showPending = !pipelineIdParam && !feedIdParam
+  const showPending = !pipelineIdParam && !sourceFilter && !search.trim()
 
   const loadPendingJobs = useCallback(async () => {
     if (!activeUrl || !token) return
@@ -425,12 +454,70 @@ export default function DocumentsScreen() {
         </View>
       )}
 
+      {/* Search row */}
+      <View style={s.searchRow}>
+        <TextInput
+          style={s.searchInput}
+          placeholder="Search documents…"
+          placeholderTextColor={theme.colors.placeholder}
+          autoCapitalize="none"
+          autoCorrect={false}
+          value={search}
+          onChangeText={setSearch}
+          testID="doc-search"
+        />
+        <Pressable
+          style={({ pressed }) => [s.advBtn, showAdvanced && s.advBtnActive, pressed && s.addButtonPressed]}
+          onPress={() => setShowAdvanced(v => !v)}
+          testID="adv-toggle"
+        >
+          <Text style={[s.advBtnText, showAdvanced && s.advBtnTextActive]}>Advanced</Text>
+        </Pressable>
+      </View>
+
+      {/* Advanced filters */}
+      {showAdvanced && (
+        <View style={s.advPanel}>
+          <Text style={s.advLabel}>Source</Text>
+          <View style={s.sourceList}>
+            <Pressable
+              style={[s.sourceChip, !sourceFilter && s.sourceChipActive]}
+              onPress={() => setSourceFilter(null)}
+              testID="source-all"
+            >
+              <Text style={[s.sourceChipText, !sourceFilter && s.sourceChipTextActive]}>All sources</Text>
+            </Pressable>
+            {feeds.map(f => {
+              const active = sourceFilter === f.id
+              const label = f.title || (() => { try { return new URL(f.url).hostname } catch { return f.url } })()
+              return (
+                <Pressable
+                  key={f.id}
+                  style={[s.sourceChip, active && s.sourceChipActive]}
+                  onPress={() => setSourceFilter(active ? null : f.id)}
+                  testID={`source-${f.id}`}
+                >
+                  <Text style={[s.sourceChipText, active && s.sourceChipTextActive]} numberOfLines={1}>{label}</Text>
+                </Pressable>
+              )
+            })}
+          </View>
+        </View>
+      )}
+
       {/* Filter indicator */}
-      {(feedIdParam || pipelineIdParam) && (
+      {(sourceFilter || pipelineIdParam) && (
         <View style={s.filterBar}>
           <Text style={s.filterBarText}>
-            {pipelineIdParam ? `pipeline: ${pipelineIdParam.slice(0, 8)}…` : `feed: ${feedIdParam?.slice(0, 8)}…`}
+            {pipelineIdParam
+              ? `pipeline: ${pipelineIdParam.slice(0, 8)}…`
+              : `source: ${sourceFeed?.title || sourceFeed?.url || sourceFilter?.slice(0, 8) + '…'}`}
           </Text>
+          {!pipelineIdParam && (
+            <Pressable onPress={() => setSourceFilter(null)} hitSlop={6} testID="clear-source">
+              <Text style={s.filterBarClear}>✕ clear</Text>
+            </Pressable>
+          )}
         </View>
       )}
 
@@ -458,7 +545,9 @@ export default function DocumentsScreen() {
             />
           }
           ListEmptyComponent={
-            <Text style={s.emptyText}>No documents yet. Add a URL above.</Text>
+            <Text style={s.emptyText}>
+              {search.trim() || sourceFilter ? 'No documents match the filters.' : 'No documents yet. Add a URL above.'}
+            </Text>
           }
           ItemSeparatorComponent={() => <View style={s.separator} />}
         />
@@ -507,6 +596,9 @@ function buildStyles(t: Theme) {
     addButtonPressed: { opacity: 0.85 },
     addButtonText: { color: t.colors.background, fontSize: 14, fontWeight: '700' },
     filterBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
       paddingHorizontal: t.spacing.md,
       paddingVertical: t.spacing.xs,
       backgroundColor: t.colors.accent + '22',
@@ -514,6 +606,58 @@ function buildStyles(t: Theme) {
       borderBottomColor: t.colors.accent + '55',
     },
     filterBarText: { color: t.colors.accent, fontSize: 12, fontFamily: 'monospace', fontWeight: '600' },
+    filterBarClear: { color: t.colors.accent, fontSize: 12, fontWeight: '700' },
+    searchRow: {
+      flexDirection: 'row',
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.sm,
+      gap: t.spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.border,
+      backgroundColor: t.colors.surface,
+    },
+    searchInput: {
+      flex: 1,
+      backgroundColor: t.colors.background,
+      color: t.colors.text,
+      borderRadius: t.radius.sm,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.xs,
+      fontSize: 13,
+    },
+    advBtn: {
+      borderRadius: t.radius.sm,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      paddingHorizontal: t.spacing.md,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    advBtnActive: { borderColor: t.colors.accent, backgroundColor: t.colors.accent + '22' },
+    advBtnText: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
+    advBtnTextActive: { color: t.colors.accent },
+    advPanel: {
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: t.spacing.sm,
+      borderBottomWidth: 1,
+      borderBottomColor: t.colors.border,
+      backgroundColor: t.colors.surface,
+    },
+    advLabel: { color: t.colors.muted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginBottom: t.spacing.xs },
+    sourceList: { flexDirection: 'row', flexWrap: 'wrap', gap: t.spacing.xs },
+    sourceChip: {
+      borderRadius: t.radius.sm,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      paddingHorizontal: t.spacing.sm,
+      paddingVertical: t.spacing.xs,
+      maxWidth: 220,
+    },
+    sourceChipActive: { borderColor: t.colors.accent, backgroundColor: t.colors.accent + '22' },
+    sourceChipText: { color: t.colors.muted, fontSize: 12 },
+    sourceChipTextActive: { color: t.colors.accent, fontWeight: '700' },
     feedbackRow: {
       paddingHorizontal: t.spacing.md,
       paddingVertical: t.spacing.xs,
