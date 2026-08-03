@@ -58,6 +58,17 @@ function formatFuture(iso: string): string {
 
 type SubWithFeed = Subscription & { feed: Feed | undefined }
 
+type Styles = ReturnType<typeof buildStyles>
+
+// Doc-count link → Documents screen pre-filtered to this feed.
+function DocCountLink({ feedId, count, s, onPress }: { feedId: string; count: number; s: Styles; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} hitSlop={4} testID={`doc-count-${feedId}`}>
+      <Text style={s.statLink}>▸ {count} doc{count === 1 ? '' : 's'}</Text>
+    </Pressable>
+  )
+}
+
 export default function SubscriptionsScreen() {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
@@ -221,6 +232,7 @@ export default function SubscriptionsScreen() {
           </View>
         </View>
         <View style={s.cardStats}>
+          <DocCountLink feedId={item.feed_id} count={docCounts[item.feed_id] ?? 0} s={s} onPress={() => router.push(`/documents?feed_id=${item.feed_id}`)} />
           <Text style={s.statText}>
             Last received: <Text style={s.statValue}>{formatRelative(item.feed?.last_polled_at ?? null)}</Text>
           </Text>
@@ -281,13 +293,7 @@ export default function SubscriptionsScreen() {
           </View>
         </View>
         <View style={s.cardStats}>
-          <Pressable
-            onPress={() => router.push(`/documents?feed_id=${item.feed_id}`)}
-            hitSlop={4}
-            testID={`doc-count-${item.feed_id}`}
-          >
-            <Text style={s.statLink}>▸ {docCounts[item.feed_id] ?? 0} doc{(docCounts[item.feed_id] ?? 0) === 1 ? '' : 's'}</Text>
-          </Pressable>
+          <DocCountLink feedId={item.feed_id} count={docCounts[item.feed_id] ?? 0} s={s} onPress={() => router.push(`/documents?feed_id=${item.feed_id}`)} />
           <Text style={s.statText}>
             Polled: <Text style={s.statValue}>{formatRelative(item.feed?.last_polled_at ?? null)}</Text>
           </Text>
