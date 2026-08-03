@@ -28,7 +28,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 
 	var exp *export.Exporter
 	if exportCfg.Enabled && exportCfg.Dir != "" {
-		exp = export.New(q, exportCfg.Dir, cacheDir, exportCfg.Grouping)
+		exp = export.New(q, exportCfg.Dir, cacheDir, exportCfg.Grouping, exportCfg.ImageLinks)
 		go exp.Run(ctx)
 	}
 

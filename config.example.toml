@@ -58,3 +58,13 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 # path    = "yt-dlp"                       # binary on PATH, or an absolute path
 # proxy   = "socks5h://100.x.y.z:1080"     # fiona's tailnet IP (microsocks)
 # cookies = "/var/lib/samizdat/yt-cookies.txt"  # optional auth fallback
+
+# Auto-export: one-way mirror of Documents + Annotations to a plain-markdown
+# Obsidian vault. Files carrying our frontmatter id are overwritten; foreign
+# files are never touched.
+# [export]
+# enabled     = true
+# dir         = "/home/you/vault/samizdat"
+# grouping    = "weekly"     # date subfolders: none|daily|weekly|monthly
+# image_links = "wikilink"   # ![[<file>]], Obsidian resolves by name (default)
+#                            # "relative" → ![alt](../assets/<file>) for plain markdown

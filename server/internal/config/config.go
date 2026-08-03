@@ -28,6 +28,10 @@ type ExportSection struct {
 	Enabled  bool   `toml:"enabled"`  // run the exporter goroutine
 	Dir      string `toml:"dir"`      // output vault folder (created if missing)
 	Grouping string `toml:"grouping"` // date subfolders: none|daily|weekly|monthly (default weekly)
+	// ImageLinks picks how image embeds are written: "wikilink" (default,
+	// `![[<file>]]` — no path, Obsidian resolves by name, so notes survive being
+	// moved) or "relative" (`![alt](../assets/<file>)`, portable to plain markdown).
+	ImageLinks string `toml:"image_links"`
 }
 
 // YTDLPSection configures YouTube/podcast ingestion via yt-dlp. The VPS's
@@ -85,7 +89,7 @@ func Defaults() *Config {
 		CacheDir:      filepath.Join(data, "cache"),
 		ExtractorsDir: filepath.Join(home, "dev", "sam", "extractors"),
 		Server:        ServerSection{Port: 8765},
-		Export:        ExportSection{Grouping: "weekly"},
+		Export:        ExportSection{Grouping: "weekly", ImageLinks: "wikilink"},
 		YTDLP:         YTDLPSection{Path: "yt-dlp"},
 	}
 }
@@ -106,6 +110,13 @@ func Load(path string) (*Config, error) {
 		}
 	default:
 		return nil, fmt.Errorf("export.grouping %q invalid: want none|daily|weekly|monthly", cfg.Export.Grouping)
+	}
+	switch cfg.Export.ImageLinks {
+	case "wikilink", "relative":
+	case "":
+		cfg.Export.ImageLinks = "wikilink"
+	default:
+		return nil, fmt.Errorf("export.image_links %q invalid: want wikilink|relative", cfg.Export.ImageLinks)
 	}
 	return cfg, nil
 }

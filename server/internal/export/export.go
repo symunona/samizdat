@@ -7,7 +7,8 @@
 //
 //	documents/<slug>.md      one note per Document (marker `samizdat: export`)
 //	annotations/<slug>.md    one note per Annotation (marker `samizdat: export-annotation`)
-//	assets/<id>.<ext>        copied image assets, referenced ../assets/… from notes
+//	assets/<id>.<ext>        copied image assets, embedded as ![[<id>.<ext>]]
+//	                         (export.image_links = "relative" → ../assets/… instead)
 //	_index.md                MOC of all documents (marker `samizdat: export-index`)
 package export
 
@@ -20,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +41,9 @@ const (
 	annMark    = "samizdat: export-annotation" // frontmatter line on every annotation note
 	indexMark  = "samizdat: export-index"      // frontmatter line on the index note
 	overlapSec = 1                             // re-query window; RFC3339 is second-resolution
+
+	linkWikilink = "wikilink" // ![[<file>]] — Obsidian resolves by name, path-free
+	linkRelative = "relative" // ![alt](../assets/<file>) — plain-markdown portable
 )
 
 // Stats is the snapshot surfaced by GET /api/v1/export/stats.
@@ -53,10 +58,11 @@ type Stats struct {
 
 // Exporter runs a background loop that keeps the vault folder in sync with the DB.
 type Exporter struct {
-	q        *store.Queries
-	dir      string
-	cacheDir string // image assets live under cacheDir/<MediaAsset.LocalPath>
-	log      *logger.Logger
+	q          *store.Queries
+	dir        string
+	cacheDir   string // image assets live under cacheDir/<MediaAsset.LocalPath>
+	imageLinks string // wikilink|relative — see renderImage
+	log        *logger.Logger
 
 	sweepMu  sync.Mutex // serializes sweeps (ticker vs on-demand Refresh)
 	mu       sync.Mutex
@@ -69,16 +75,20 @@ type Exporter struct {
 }
 
 // New builds an Exporter. Caller starts it with Run.
-func New(q *store.Queries, dir, cacheDir, grouping string) *Exporter {
+func New(q *store.Queries, dir, cacheDir, grouping, imageLinks string) *Exporter {
+	if imageLinks != linkRelative {
+		imageLinks = linkWikilink // default; config.Load rejects anything else
+	}
 	return &Exporter{
-		q:        q,
-		dir:      dir,
-		cacheDir: cacheDir,
-		grouping: grouping,
-		log:      logger.New("export"),
-		cursor:   epoch,
-		docFiles: map[string]string{},
-		annFiles: map[string]string{},
+		q:          q,
+		dir:        dir,
+		cacheDir:   cacheDir,
+		grouping:   grouping,
+		imageLinks: imageLinks,
+		log:        logger.New("export"),
+		cursor:     epoch,
+		docFiles:   map[string]string{},
+		annFiles:   map[string]string{},
 	}
 }
 
@@ -269,25 +279,11 @@ func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 		annRels[i] = e.annRelPath(a, group)
 	}
 
-	// Copy image assets into assets/ and map their source URL → vault-relative
-	// path (prefix depends on how deep the note sits under the export dir).
-	up := upPrefix(docRel)
-	urlRewrite := map[string]string{}
-	for _, a := range assets {
-		if a.DeletedAt != nil || a.Kind == "audio" || a.LocalPath == "" {
-			continue
-		}
-		fname := filepath.Base(a.LocalPath)
-		if err := e.copyAsset(a.LocalPath, fname); err != nil {
-			e.log.Warnf("copy asset %s: %v", fname, err)
-			continue
-		}
-		if a.OriginalUrl != "" {
-			urlRewrite[a.OriginalUrl] = up + assetsSub + "/" + fname
-		}
-	}
+	// Copy image assets into assets/ and map every URL they appear under in the
+	// markdown → the copied file name.
+	links := e.assetLinks(assets, docRel)
 
-	body := renderDoc(doc, live, relBaseNames(annRels), tags, urlRewrite)
+	body := renderDoc(doc, live, relBaseNames(annRels), tags, links)
 	if err := writeNote(e.dir, docRel, body); err != nil {
 		return fmt.Errorf("write doc note %s: %w", docRel, err)
 	}
@@ -298,7 +294,7 @@ func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 	removeIfMoved(e.dir, oldDocRel, docRel)
 
 	for i, a := range live {
-		note := renderAnnotation(a, relBase(docRel), urlRewrite)
+		note := renderAnnotation(a, relBase(docRel), links)
 		if err := writeNote(e.dir, annRels[i], note); err != nil {
 			return fmt.Errorf("write annotation note %s: %w", annRels[i], err)
 		}
@@ -537,7 +533,7 @@ func (e *Exporter) setErr(err error) {
 
 // --- rendering ---
 
-func renderDoc(doc store.Document, annos []store.Annotation, annNames []string, tags []store.Tag, rewrite map[string]string) []byte {
+func renderDoc(doc store.Document, annos []store.Annotation, annNames []string, tags []store.Tag, links map[string]assetLink) []byte {
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "id: %s\n", doc.ID)
@@ -552,8 +548,9 @@ func renderDoc(doc store.Document, annos []store.Annotation, annNames []string, 
 	}
 	fmt.Fprintf(&b, "fetched: %s\n", yamlStr(doc.FetchedAt))
 	fmt.Fprintf(&b, "media_type: %s\n", yamlStr(doc.MediaType))
-	if hero := rewrite[doc.HeroImageUrl]; hero != "" {
-		fmt.Fprintf(&b, "hero: %s\n", yamlStr(hero))
+	hero, hasHero := links[doc.HeroImageUrl]
+	if hasHero {
+		fmt.Fprintf(&b, "hero: %s\n", yamlStr(hero.path()))
 	}
 	if len(tags) > 0 {
 		names := make([]string, len(tags))
@@ -565,10 +562,10 @@ func renderDoc(doc store.Document, annos []store.Annotation, annNames []string, 
 	b.WriteString("---\n\n")
 
 	fmt.Fprintf(&b, "# %s\n\n", firstLine(doc.Title))
-	if hero := rewrite[doc.HeroImageUrl]; hero != "" {
-		fmt.Fprintf(&b, "![hero](%s)\n\n", hero)
+	if hasHero {
+		fmt.Fprintf(&b, "%s\n\n", hero.embed(""))
 	}
-	b.WriteString(strings.TrimRight(rewriteURLs(doc.Markdown, rewrite), "\n"))
+	b.WriteString(strings.TrimRight(rewriteImages(doc.Markdown, links), "\n"))
 	b.WriteString("\n")
 
 	if len(annos) > 0 {
@@ -583,7 +580,7 @@ func renderDoc(doc store.Document, annos []store.Annotation, annNames []string, 
 // renderAnnotation renders an annotation note. When docName is empty the
 // annotation is a standalone note (no parent Document): the `document:` backlink
 // and the "From [[doc]]" quote header are omitted.
-func renderAnnotation(a store.Annotation, docName string, rewrite map[string]string) []byte {
+func renderAnnotation(a store.Annotation, docName string, links map[string]assetLink) []byte {
 	standalone := strings.TrimSuffix(docName, ".md") == ""
 	var b strings.Builder
 	b.WriteString("---\n")
@@ -608,12 +605,12 @@ func renderAnnotation(a store.Annotation, docName string, rewrite map[string]str
 		fmt.Fprintf(&b, "> [!quote] From [[%s]]\n", strings.TrimSuffix(docName, ".md"))
 	}
 	if strings.TrimSpace(a.Exact) != "" {
-		for _, ln := range strings.Split(rewriteURLs(a.Exact, rewrite), "\n") {
+		for _, ln := range strings.Split(rewriteImages(a.Exact, links), "\n") {
 			b.WriteString("> " + ln + "\n")
 		}
 	}
 	if strings.TrimSpace(a.Note) != "" {
-		b.WriteString("\n" + strings.TrimRight(rewriteURLs(a.Note, rewrite), "\n") + "\n")
+		b.WriteString("\n" + strings.TrimRight(rewriteImages(a.Note, links), "\n") + "\n")
 	}
 	return []byte(b.String())
 }
@@ -655,12 +652,93 @@ func short(id string) string {
 	return id
 }
 
-// rewriteURLs swaps source asset URLs for their vault-relative paths in body text.
-func rewriteURLs(s string, rewrite map[string]string) string {
-	for url, rel := range rewrite {
-		s = strings.ReplaceAll(s, url, rel)
+// assetLink is one copied image, as referenced from a note at a known depth.
+type assetLink struct {
+	file  string // basename under assets/, e.g. "<uuid>.jpg"
+	style string // wikilink|relative
+	up    string // "../" per folder the note sits below the export dir
+}
+
+// embed renders the markdown for this asset. Wikilink style drops the path
+// entirely — Obsidian resolves `![[<file>]]` by name, so the note keeps working
+// when it (or assets/) is moved inside the vault. Alt text rides along as the
+// wikilink alias (`|`), which Obsidian renders as the image's alt; a numeric-only
+// alias would be read as a width, and `|`/`]` would break the link, so those are
+// dropped.
+func (a assetLink) embed(alt string) string {
+	if a.style != linkWikilink {
+		return "![" + alt + "](" + a.path() + ")"
 	}
-	return s
+	if alt = wikiAlias(alt); alt != "" {
+		return "![[" + a.file + "|" + alt + "]]"
+	}
+	return "![[" + a.file + "]]"
+}
+
+// wikiAlias sanitizes alt text for use as a wikilink alias, returning "" when
+// nothing usable is left.
+func wikiAlias(alt string) string {
+	alt = strings.NewReplacer("|", " ", "[", " ", "]", " ", "\n", " ").Replace(alt)
+	alt = strings.Join(strings.Fields(alt), " ")
+	if _, err := strconv.Atoi(alt); err == nil {
+		return "" // a bare number is a width directive, not a caption
+	}
+	return alt
+}
+
+// path is the vault-relative path to the copied file (used for frontmatter,
+// which cannot carry an embed).
+func (a assetLink) path() string {
+	return a.up + assetsSub + "/" + a.file
+}
+
+// assetLinks copies a document's images into assets/ and maps every URL they can
+// appear under in the markdown → the copied file. Two keys per asset: the source
+// URL (web scrapes keep the original http URL) and `/api/v1/media/<id>` (PDF
+// figures and pipeline-injected hero images are written as server media routes,
+// whose original_url is a synthetic `pdf://…` that appears nowhere in the body).
+func (e *Exporter) assetLinks(assets []store.MediaAsset, docRel string) map[string]assetLink {
+	up := upPrefix(docRel)
+	links := map[string]assetLink{}
+	for _, a := range assets {
+		if a.DeletedAt != nil || a.Kind == "audio" || a.LocalPath == "" {
+			continue
+		}
+		fname := filepath.Base(a.LocalPath)
+		if err := e.copyAsset(a.LocalPath, fname); err != nil {
+			e.log.Warnf("copy asset %s: %v", fname, err)
+			continue
+		}
+		l := assetLink{file: fname, style: e.imageLinks, up: up}
+		if a.OriginalUrl != "" {
+			links[a.OriginalUrl] = l
+		}
+		links[mediaRoute+a.ID] = l
+	}
+	return links
+}
+
+// mediaRoute is the server route images are rewritten to in stored markdown.
+const mediaRoute = "/api/v1/media/"
+
+// mdImageRe matches a markdown image embed, capturing alt and target.
+var mdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
+
+// rewriteImages swaps every markdown image whose target is a known asset for the
+// configured embed style. Images with no copied asset (download skipped or
+// failed) are left as they were — a broken link beats a dangling embed.
+func rewriteImages(s string, links map[string]assetLink) string {
+	if len(links) == 0 {
+		return s
+	}
+	return mdImageRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := mdImageRe.FindStringSubmatch(m)
+		l, ok := links[g[2]]
+		if !ok {
+			return m
+		}
+		return l.embed(g[1])
+	})
 }
 
 // yamlStr double-quotes and escapes a value for a frontmatter scalar.

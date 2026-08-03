@@ -14,10 +14,11 @@ func TestUnwrapFigureImages(t *testing.T) {
 <p>Second paragraph between the two images.</p>
 <figure><img data-src="https://cdn.example.com/b.jpeg"></figure>
 <p>Third and final paragraph.</p>
+<figure><img src="/images/rel.jpeg" alt="Relative"></figure>
 <aside><figure><img src="https://cdn.example.com/promo.jpeg"></figure></aside>
 </article></body></html>`
 
-	out := string(unwrapFigureImages([]byte(in)))
+	out := string(unwrapFigureImages([]byte(in), mustParseURL("https://example.com/posts/one")))
 
 	// Figures became <p><img>; <figure> tags are gone in the article body.
 	if strings.Count(out, "<figure") != 1 { // only the <aside> figure survives untouched
@@ -39,6 +40,11 @@ func TestUnwrapFigureImages(t *testing.T) {
 	if !strings.Contains(out, `alt="Alpha"`) {
 		t.Errorf("alt not preserved:\n%s", out)
 	}
+	// Site-relative src absolutized against the canonical URL (else the figure is
+	// dropped by the http-only filter and the image never reaches the asset fetcher).
+	if !strings.Contains(out, `src="https://example.com/images/rel.jpeg"`) {
+		t.Errorf("relative figure src not absolutized:\n%s", out)
+	}
 	// Boilerplate figure inside <aside> left untouched (trafilatura drops the region).
 	if !strings.Contains(out, "promo.jpeg") {
 		t.Errorf("aside image should be left in place:\n%s", out)
@@ -48,7 +54,27 @@ func TestUnwrapFigureImages(t *testing.T) {
 // TestUnwrapFigureImagesNoFigures returns input unchanged when nothing to rewrite.
 func TestUnwrapFigureImagesNoFigures(t *testing.T) {
 	in := []byte(`<html><body><p>plain text, no figures here</p></body></html>`)
-	if got := unwrapFigureImages(in); string(got) != string(in) {
+	if got := unwrapFigureImages(in, mustParseURL("https://example.com/x")); string(got) != string(in) {
 		t.Errorf("expected unchanged input, got:\n%s", got)
+	}
+}
+
+// TestAbsolutizeImageURLs covers the markdown-level pass that makes site-relative
+// image targets fetchable (and therefore exportable).
+func TestAbsolutizeImageURLs(t *testing.T) {
+	base := mustParseURL("https://ossama.is/writing/randommachines")
+	cases := []struct{ in, want string }{
+		{`![Lucky](/images/gg.png)`, `![Lucky](https://ossama.is/images/gg.png)`},
+		{`![a](sibling.png)`, `![a](https://ossama.is/writing/sibling.png)`},
+		{`![a](//cdn.example.com/x.png)`, `![a](https://cdn.example.com/x.png)`},
+		{`![a](/x.png "title")`, `![a](https://ossama.is/x.png "title")`},
+		{`![a](https://cdn.example.com/x.png)`, `![a](https://cdn.example.com/x.png)`},
+		{`![a](data:image/png;base64,AAA)`, `![a](data:image/png;base64,AAA)`},
+		{`[not an image](/page)`, `[not an image](/page)`},
+	}
+	for _, c := range cases {
+		if got := absolutizeImageURLs(c.in, base); got != c.want {
+			t.Errorf("absolutizeImageURLs(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

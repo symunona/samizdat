@@ -178,10 +178,11 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 
 	// Lift <figure>-wrapped images into plain <p><img> so trafilatura keeps them
 	// inline at their real position (it discards <figure> but keeps <img> in <p>).
-	extractHTML := unwrapFigureImages(bodyBytes)
+	docBase := mustParseURL(canonical)
+	extractHTML := unwrapFigureImages(bodyBytes, docBase)
 
 	extracted, err := trafilatura.Extract(bytes.NewReader(extractHTML), trafilatura.Options{
-		OriginalURL:     mustParseURL(canonical),
+		OriginalURL:     docBase,
 		ExcludeComments: true,
 		EnableFallback:  true,
 		IncludeImages:   true,
@@ -208,6 +209,9 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	if strings.TrimSpace(md) == "" {
 		md = extracted.ContentText
 	}
+	// trafilatura's OriginalURL does not rewrite image srcs — do it here, before the
+	// markdown is stored and the asset fetcher reads it (see absolutizeImageURLs).
+	md = absolutizeImageURLs(md, docBase)
 
 	// Trafilatura keeps the article's own <h1> headline at the top of the content.
 	// The title lives once in doc.Title (rendered as the injected #doc-title in the
@@ -374,6 +378,41 @@ func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document,
 func mustParseURL(raw string) *url.URL {
 	u, _ := url.Parse(raw)
 	return u
+}
+
+// mdImageRe matches a markdown image, capturing alt and the raw target (which may
+// carry a title: `![a](/x.png "t")`).
+var mdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)`)
+
+// absolutizeImageURLs resolves site-relative markdown image targets against base.
+// Without this the src survives the scrape verbatim, so the asset fetcher (which
+// only matches http(s) targets) never downloads it, no MediaAsset row exists, and
+// the vault export has nothing to rewrite — the image is dead everywhere.
+func absolutizeImageURLs(md string, base *url.URL) string {
+	if base == nil {
+		return md
+	}
+	return mdImageRe.ReplaceAllStringFunc(md, func(m string) string {
+		g := mdImageRe.FindStringSubmatch(m)
+		abs := absolutizeURL(g[2], base)
+		if abs == g[2] {
+			return m
+		}
+		return "![" + g[1] + "](" + abs + g[3] + ")"
+	})
+}
+
+// absolutizeURL resolves a possibly-relative URL against base. Absolute, data: and
+// unparseable values are returned unchanged.
+func absolutizeURL(raw string, base *url.URL) string {
+	if base == nil || raw == "" || strings.HasPrefix(raw, "data:") {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.IsAbs() {
+		return raw
+	}
+	return base.ResolveReference(u).String()
 }
 
 func renderNode(w io.Writer, n *html.Node) error {
@@ -618,8 +657,8 @@ type figImg struct{ src, alt string }
 // content images survive extraction inline at their real position instead of being
 // recovered and appended at the document end. Figures in nav/header/footer/aside are
 // left untouched (trafilatura drops those regions anyway). Returns rawHTML unchanged
-// when there is nothing to rewrite.
-func unwrapFigureImages(rawHTML []byte) []byte {
+// when there is nothing to rewrite. base absolutizes site-relative srcs (may be nil).
+func unwrapFigureImages(rawHTML []byte, base *url.URL) []byte {
 	root, err := html.Parse(bytes.NewReader(rawHTML))
 	if err != nil {
 		return rawHTML
@@ -649,7 +688,7 @@ func unwrapFigureImages(rawHTML []byte) []byte {
 		if fig.Parent == nil {
 			continue
 		}
-		imgs := figureContentImages(fig)
+		imgs := figureContentImages(fig, base)
 		if len(imgs) == 0 {
 			continue // no usable image: leave figure for trafilatura to drop
 		}
@@ -678,8 +717,8 @@ func unwrapFigureImages(rawHTML []byte) []byte {
 }
 
 // figureContentImages returns deduped content images inside a figure that pass the
-// download heuristic, resolving lazy-loaded data-src.
-func figureContentImages(fig *html.Node) []figImg {
+// download heuristic, resolving lazy-loaded data-src and site-relative srcs.
+func figureContentImages(fig *html.Node, base *url.URL) []figImg {
 	seen := map[string]struct{}{}
 	var imgs []figImg
 	var walk func(*html.Node)
@@ -689,6 +728,7 @@ func figureContentImages(fig *html.Node) []figImg {
 			if src == "" {
 				src = attrVal(n, "data-src")
 			}
+			src = absolutizeURL(src, base)
 			if strings.HasPrefix(src, "http") && shouldDownload(src, attrVal(n, "alt")) {
 				if _, dup := seen[src]; !dup {
 					seen[src] = struct{}{}

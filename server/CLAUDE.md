@@ -191,6 +191,28 @@ Banned: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`
 ## Schema migrations (`store/open.go` `migrate()`)
 Additive changes (new table / new column with default) go in the `additiveMigrations` slice (`ALTER TABLE … ADD COLUMN`, idempotent — duplicate-column errors ignored). **Non-additive** changes (relax NOT NULL, change type) need a SQLite table rebuild: create `_new`, `INSERT … SELECT`, `DROP`, `RENAME`, re-create indexes — inside a txn, with `PRAGMA foreign_keys=OFF` toggled *outside* the txn (safe because `MaxOpenConns(1)`), and guarded by a `PRAGMA table_info` check so it's idempotent. Precedent: `relaxAnnotationDocumentID()` (document_id NOT NULL → nullable) — read it before writing another.
 
+## Image URLs: absolutize at ingest, embed as wikilinks on export
+
+**`trafilatura.Options.OriginalURL` does NOT rewrite `<img src>`** — a site-relative
+src (`/images/x.png`) survives into `documents.markdown` verbatim, and from there the
+whole image chain fails silently: `assets.go`'s `markdownImageRe` only matches
+`http(s)` targets → no download → no `media_assets` row → the vault exporter (which
+keys its rewrite on `media_assets.original_url`) has nothing to swap → a dead link in
+Obsidian, and a broken image in the app. `scraper.go` therefore absolutizes twice
+against the canonical URL: `unwrapFigureImages(raw, base)` (a relative src would
+otherwise be dropped outright by the http-only figure filter) and
+`absolutizeImageURLs(md, base)` after html→md. Anything that produces markdown for a
+Document must keep image targets absolute or a `/api/v1/media/<id>` route.
+
+Export (`internal/export`) rewrites **image syntax**, not raw URL substrings, and keys
+on BOTH `media_assets.original_url` and `/api/v1/media/<id>` — PDF figures and
+pipeline-injected heroes are written as the media route, whose `original_url` is a
+synthetic `pdf://…` that appears nowhere in the body. Default embed style is
+`![[<file>]]` (`[export] image_links`, `wikilink|relative`): no path, so Obsidian
+resolves by name and notes survive being moved. Alt text rides as the wikilink alias
+(`![[f.png|caption]]`) — `wikiAlias` strips `|`/brackets and drops a bare number,
+which Obsidian would read as a width.
+
 ## Document media types
 - **`media_type = 'article'`** — default. HTML scrape via Playwright + Trafilatura.
 - **`media_type = 'pdf'`** — PDF ingest via plain HTTP + pure-Go text extraction
