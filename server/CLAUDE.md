@@ -63,6 +63,9 @@ server/
       sync.go               # GET  /api/v1/sync            (bearer-authed, incremental pull)
       sync_test.go          # unit tests for cursor correctness
       jobs.go               # POST /api/v1/jobs            (bearer-authed, idempotent enqueue)
+    extractor/
+      substack_notes.go     # SubstackNotesAdapter: discovers Notes via Substack reader API
+                            # (no auth, no headless browser — profile page gates anon after 2 items)
     transcript/
       vtt.go                # WebVTT parser → []Segment{StartMs,EndMs,Text}
     worker/
@@ -198,11 +201,19 @@ src (`/images/x.png`) survives into `documents.markdown` verbatim, and from ther
 whole image chain fails silently: `assets.go`'s `markdownImageRe` only matches
 `http(s)` targets → no download → no `media_assets` row → the vault exporter (which
 keys its rewrite on `media_assets.original_url`) has nothing to swap → a dead link in
-Obsidian, and a broken image in the app. `scraper.go` therefore absolutizes twice
-against the canonical URL: `unwrapFigureImages(raw, base)` (a relative src would
-otherwise be dropped outright by the http-only figure filter) and
-`absolutizeImageURLs(md, base)` after html→md. Anything that produces markdown for a
-Document must keep image targets absolute or a `/api/v1/media/<id>` route.
+Obsidian, and a broken image in the app. Absolutization therefore happens at **two
+points** during scrape:
+
+1. **HTML level** (`unwrapFigureImages(rawHTML, base)`): site-relative `src` on
+   `<figure><img>` elements are resolved before trafilatura sees the HTML, because
+   the http-only filter in `figureContentImages` would otherwise drop them entirely.
+2. **Markdown level** (`absolutizeImageURLs(md, base)`): called after html→md
+   conversion, catches any remaining relative targets that trafilatura emitted
+   (non-figure images). Both passes use `absolutizeURL(raw, base)` which is a no-op
+   for absolute, `data:`, and unparseable values.
+
+Anything that produces markdown for a Document must keep image targets absolute or
+a `/api/v1/media/<id>` route.
 
 Export (`internal/export`) rewrites **image syntax**, not raw URL substrings, and keys
 on BOTH `media_assets.original_url` and `/api/v1/media/<id>` — PDF figures and
@@ -242,7 +253,7 @@ which Obsidian would read as a width.
       Boxes within 12pt merge; < 60×40pt is furniture; a box repeating at the
       same spot on >half the pages is a running header. **Do not** try to get
       these boxes from go-fitz — MuPDF exposes whole-page output only
-      (`Image`/`ImageDPI`/`SVG`/`Text`/`HTML`/`HTML`), no page-object enumeration.
+      (`Image`/`ImageDPI`/`SVG`/`Text`/`HTML`), no page-object enumeration.
     - **Rendering** is MuPDF at 150dpi, one render per page, cropped per figure
       (`pixelRect` maps points→pixels off the MediaBox and the bitmap's own
       size, never the nominal DPI). PNG, not JPEG — figures are line art.
@@ -346,42 +357,6 @@ pipeline steps mint their own clients (`llm.New` per step), so wiring health thr
   restart. In-memory rows always win over persisted ones — `Restore` skips any key already
   present in the registry.
 
-## Short-form feeds (`short_form: true`)
-
-Substack Notes are the first feed whose items are legitimately tweet-sized, and they
-broke two assumptions that "a Document is an article" had baked in. Both are opt-in
-per domain via `extractors/<domain>/feed.yaml`:
-
-- `DetectFalseParse`'s 200-char floor read **every** note as an empty stub → job dead,
-  Document flagged, no content ever. `short_form: true` routes the two gates (scraper
-  + `handleRunPipeline`) to `pipeline.DetectFalseParseShortForm`, which drops the
-  length floor and **keeps** the bot/login markers — those matter more on short
-  content, not less. `handleRunPipeline` takes the `extractor.Registry` for this.
-- Short-form items have no headline: Substack's `og:title` is the author's profile
-  name, so every note of one writer shared a title in the list. Short-form Documents
-  take their title from the first body line (`leadLineTitle`, 90 runes + ellipsis).
-
-Still open: pipelines fire on short-form Documents like any other, and an LLM handed
-24 characters invents a summary. Narrow the trigger, or teach pipelines to skip them.
-
-## `kind: substack_notes`
-
-Substack has RSS for posts (`<handle>.substack.com/feed`) but **not for Notes**, and
-the rendered profile page gates anonymous visitors after 2 items ("Log in for more" —
-scrolling adds nothing), so `html_links` + browser silently truncates an active
-writer to its two newest notes. The adapter uses the unauthenticated reader API
-instead: `/api/v1/user/<handle>/public_profile` → id, then
-`/api/v1/reader/feed/profile/<id>?types[]=note`. Two plain GETs, no browser.
-
-- The activity feed carries **restacks of other writers** — filter on
-  `comment.handle == <handle>`, not just `context.type == "note"`.
-- The API **ignores a limit param**; `max_urls` must be applied client-side.
-- Registry keys on exact host, so one `extractors/substack.com/feed.yaml` serves every
-  handle. Publication feeds live on `<handle>.substack.com` — a separate key.
-- The permalink page is ~95% product upsell around the note, and trafilatura picks the
-  upsell; `article_selector` prunes to the note unit. Substack's class suffix is a
-  build hash (`feedPermalinkUnit-JBJrHa`) → match by prefix, never in full.
-
 ## Scraper paywall auth (per-domain login)
 Paywalled domains reuse the owner's subscription via a persisted browser session,
 so gated articles render full-text. Config lives in the existing per-domain seam —
@@ -407,3 +382,58 @@ so gated articles render full-text. Config lives in the existing per-domain seam
   context (`BrowserPool.FetchHTML(url, statePath)`). If the fetched HTML still shows
   `paywall_text` (`isGated`), the session expired → `refreshSession` re-logins **once**
   from credentials.toml, rewrites the jar, and re-fetches.
+
+## Short-form feeds (Substack Notes, tweet-sized items)
+
+Some feeds publish items that are legitimately a few sentences long. The normal
+`DetectFalseParse` length floor reads these as empty stubs and kills the job
+permanently — so they need an opt-out.
+
+### `short_form: true` in `feed.yaml`
+Mark a feed's extractor config with `short_form: true`. This:
+- Exempts Documents from the **length floor** check in both `handleScrapeURL` and
+  `handleRunPipeline` (bot/login markers still apply — they matter more on short
+  content, not less).
+- Enables **`leadLineTitle`**: since the og:title for a profile-scoped feed is the
+  author's name (every item would share it), `handleScrapeURL` replaces it with the
+  first prose line of the body (stripped of block markers, capped at 90 runes + `…`).
+
+Two pipeline helpers implement the split:
+- `pipeline.DetectFalseParse` — normal article path (length floor on).
+- `pipeline.DetectFalseParseShortForm` — short-form path (length floor off).
+
+The caller (`handleScrapeURL`, `handleRunPipeline`) selects between them via
+`reg.IsShortForm(url)` — the registry lookup is the only branch point; the
+detection logic itself is not duplicated.
+
+### `substack_notes` extractor kind
+Substack publishes RSS for posts but **not** for Notes. The rendered profile page
+hard-gates anonymous visitors after two items ("Log in for more"), so
+browser-scraping it silently truncates an active writer's feed.
+
+`SubstackNotesAdapter` (`extractor/substack_notes.go`) uses the **Substack reader
+API** instead:
+1. `GET /api/v1/user/<handle>/public_profile` → numeric user id
+2. `GET /api/v1/reader/feed/profile/<id>?types[]=note` → activity feed
+
+Items are filtered to the profile's own handle (restacks of other writers appear in
+the same feed). The API ignores a limit parameter, so `MaxURLs` is applied
+client-side. Individual note permalinks render fine anonymously, so only discovery
+needs this detour.
+
+`substackAPIBase` is a package-level `var` (not a constant) so tests can swap it
+for a local `httptest.Server` without any dependency injection.
+
+The registry keys on **exact host**, so one `extractors/substack.com/feed.yaml` serves
+every handle; publication post feeds live on `<handle>.substack.com` — a separate key,
+so the existing `natesnewsletter.substack.com` RSS config is untouched.
+
+A shipped extractor config for `substack.com` must set **both**:
+- `article_selector` — otherwise trafilatura keeps Substack's marketing chrome
+  instead of the note body (a permalink page is ~95% product upsell around a
+  tweet-sized body; pruning cuts 246549 → 37666 bytes). Substack's class suffix is a
+  build hash (`feedPermalinkUnit-JBJrHa`) — match by prefix, never in full.
+- `short_form: true` — otherwise every note trips the false-parse length floor.
+
+**Still open:** pipelines fire on short-form Documents like any other, and an LLM handed
+24 characters invents. Narrow the trigger, or teach pipelines to skip short-form docs.
