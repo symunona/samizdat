@@ -346,6 +346,42 @@ pipeline steps mint their own clients (`llm.New` per step), so wiring health thr
   restart. In-memory rows always win over persisted ones — `Restore` skips any key already
   present in the registry.
 
+## Short-form feeds (`short_form: true`)
+
+Substack Notes are the first feed whose items are legitimately tweet-sized, and they
+broke two assumptions that "a Document is an article" had baked in. Both are opt-in
+per domain via `extractors/<domain>/feed.yaml`:
+
+- `DetectFalseParse`'s 200-char floor read **every** note as an empty stub → job dead,
+  Document flagged, no content ever. `short_form: true` routes the two gates (scraper
+  + `handleRunPipeline`) to `pipeline.DetectFalseParseShortForm`, which drops the
+  length floor and **keeps** the bot/login markers — those matter more on short
+  content, not less. `handleRunPipeline` takes the `extractor.Registry` for this.
+- Short-form items have no headline: Substack's `og:title` is the author's profile
+  name, so every note of one writer shared a title in the list. Short-form Documents
+  take their title from the first body line (`leadLineTitle`, 90 runes + ellipsis).
+
+Still open: pipelines fire on short-form Documents like any other, and an LLM handed
+24 characters invents a summary. Narrow the trigger, or teach pipelines to skip them.
+
+## `kind: substack_notes`
+
+Substack has RSS for posts (`<handle>.substack.com/feed`) but **not for Notes**, and
+the rendered profile page gates anonymous visitors after 2 items ("Log in for more" —
+scrolling adds nothing), so `html_links` + browser silently truncates an active
+writer to its two newest notes. The adapter uses the unauthenticated reader API
+instead: `/api/v1/user/<handle>/public_profile` → id, then
+`/api/v1/reader/feed/profile/<id>?types[]=note`. Two plain GETs, no browser.
+
+- The activity feed carries **restacks of other writers** — filter on
+  `comment.handle == <handle>`, not just `context.type == "note"`.
+- The API **ignores a limit param**; `max_urls` must be applied client-side.
+- Registry keys on exact host, so one `extractors/substack.com/feed.yaml` serves every
+  handle. Publication feeds live on `<handle>.substack.com` — a separate key.
+- The permalink page is ~95% product upsell around the note, and trafilatura picks the
+  upsell; `article_selector` prunes to the note unit. Substack's class suffix is a
+  build hash (`feedPermalinkUnit-JBJrHa`) → match by prefix, never in full.
+
 ## Scraper paywall auth (per-domain login)
 Paywalled domains reuse the owner's subscription via a persisted browser session,
 so gated articles render full-text. Config lives in the existing per-domain seam —
