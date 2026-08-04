@@ -226,6 +226,15 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 
 	title := strings.TrimSpace(extracted.Metadata.Title)
 
+	// Short-form items have no headline of their own — Substack's og:title is the
+	// author's profile name, so every note of a given writer would land in the
+	// list under one identical title. Lead with the body instead.
+	if reg.IsShortForm(canonical) {
+		if lead := leadLineTitle(md); lead != "" {
+			title = lead
+		}
+	}
+
 	excerpt := strings.TrimSpace(extracted.Metadata.Description)
 	if len(excerpt) > 500 {
 		excerpt = excerpt[:500]
@@ -275,7 +284,11 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	// article content. Flag the Document and fail the job permanently (no retry —
 	// re-scraping a blocked/paywalled URL is what design rule 3 forbids) instead of
 	// letting the pipeline extract junk highlights.
-	if fpe := pipeline.DetectFalseParse(title, md); fpe != nil {
+	detectFalseParse := pipeline.DetectFalseParse
+	if reg.IsShortForm(canonical) {
+		detectFalseParse = pipeline.DetectFalseParseShortForm
+	}
+	if fpe := detectFalseParse(title, md); fpe != nil {
 		logScraper.Warnf("false parse for %s: %s — flagging document, no pipeline", canonical, fpe.Reason)
 		return "", flagFalseParse(ctx, q, doc.ID, fpe)
 	}
@@ -444,6 +457,29 @@ func fixInlineSpacing(h string) string {
 // extractLeadLists recovers link-free bullet/numbered lists from the raw HTML
 // that trafilatura skips (e.g. article summary bullets before the body).
 // Returns markdown list lines not already present in extractedMD.
+var leadMarkerRe = regexp.MustCompile(`^(?:[#>]+\s*|[-*+]\s+)+`)
+
+// leadLineTitle builds a list-friendly title from the first line of prose in md,
+// for items that carry no headline of their own (Substack Notes). Image-only and
+// blank leads yield "" so the caller keeps whatever metadata gave it.
+func leadLineTitle(md string) string {
+	const maxTitleRunes = 90
+	for _, line := range strings.Split(md, "\n") {
+		// Drop block markers (heading hashes, quote carets, list bullets) but not
+		// inline emphasis — `**bold** opener` must keep its asterisks.
+		line = strings.TrimSpace(leadMarkerRe.ReplaceAllString(line, ""))
+		if line == "" || strings.HasPrefix(line, "![") {
+			continue
+		}
+		runes := []rune(line)
+		if len(runes) > maxTitleRunes {
+			return strings.TrimSpace(string(runes[:maxTitleRunes])) + "…"
+		}
+		return line
+	}
+	return ""
+}
+
 func extractLeadLists(rawHTML []byte, extractedMD string) string {
 	root, err := html.Parse(bytes.NewReader(rawHTML))
 	if err != nil {

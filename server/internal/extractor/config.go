@@ -31,6 +31,11 @@ type ExtractorConfig struct {
 	// A selector that matches nothing is a no-op (the raw HTML passes through).
 	ArticleSelector string `yaml:"article_selector,omitempty"`
 
+	// ShortForm marks a feed whose items are legitimately tweet-sized (Substack
+	// Notes). It exempts their Documents from the false-parse length floor, which
+	// otherwise reads every one of them as an empty stub.
+	ShortForm bool `yaml:"short_form,omitempty"`
+
 	// Auth, when set, logs in once and reuses a persisted browser session
 	// (storageState cookie jar) so paywalled articles render full-text.
 	Auth *AuthConfig `yaml:"auth,omitempty"`
@@ -122,6 +127,12 @@ func (r Registry) SaveConfig(extractorsDir, domain string, cfg ExtractorConfig) 
 // it holds live cookies. chmod 0600 is applied at write time.
 func AuthStatePath(cacheDir, domain string) string {
 	return filepath.Join(cacheDir, "auth", domain+".json")
+}
+
+// IsShortForm reports whether rawURL belongs to a feed marked short_form.
+func (r Registry) IsShortForm(rawURL string) bool {
+	cfg, ok := r.LookupByURL(rawURL)
+	return ok && cfg.ShortForm
 }
 
 // LookupByURL resolves the domain from rawURL and looks it up in the registry.

@@ -217,7 +217,7 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	case "poll_feed":
 		result, err = handlePollFeed(ctx, w.q, job, w.browser, w.extractorReg)
 	case "run_pipeline":
-		result, err = handleRunPipeline(ctx, w.q, w.db, job, w.llmClient)
+		result, err = handleRunPipeline(ctx, w.q, w.db, job, w.llmClient, w.extractorReg)
 	case "run_pipeline_step":
 		result, err = handleRunPipelineStep(ctx, w.q, job, w.llmClient)
 	default:

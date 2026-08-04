@@ -55,11 +55,26 @@ var imageMarkdownRe = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
 // or nil for genuine content. Intended for article Documents only — callers must
 // not run it on video (transcript) Documents.
 func DetectFalseParse(title, markdown string) *FalseParseError {
+	return detectFalseParse(title, markdown, true)
+}
+
+// DetectFalseParseShortForm is DetectFalseParse without the length floor, for
+// feeds whose items are legitimately tweet-sized (Substack Notes) and would
+// otherwise be flagged as empty stubs on every single scrape. The bot/login
+// markers still apply — they matter more on short content, not less.
+func DetectFalseParseShortForm(title, markdown string) *FalseParseError {
+	return detectFalseParse(title, markdown, false)
+}
+
+func detectFalseParse(title, markdown string, applyLengthFloor bool) *FalseParseError {
 	hay := strings.ToLower(title + "\n" + markdown)
 	for _, m := range botMarkers {
 		if strings.Contains(hay, m) {
 			return &FalseParseError{Reason: ReasonBotProtection}
 		}
+	}
+	if !applyLengthFloor {
+		return nil
 	}
 	// Length floor: only for text-only docs. Image-bearing docs are handled by
 	// extract_images + the summarizer's own empty-return, so never length-flagged.

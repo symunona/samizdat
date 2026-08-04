@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
@@ -33,7 +34,7 @@ type runPipelineStepPayload struct {
 	StepIndex     int    `json:"step_index,omitempty"`
 }
 
-func handleRunPipeline(ctx context.Context, q *store.Queries, db *sql.DB, job store.Job, llmClient llm.Client) (string, error) {
+func handleRunPipeline(ctx context.Context, q *store.Queries, db *sql.DB, job store.Job, llmClient llm.Client, reg extractor.Registry) (string, error) {
 	var p runPipelinePayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 		return "", fmt.Errorf("bad payload: %w", err)
@@ -50,7 +51,11 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, db *sql.DB, job st
 	// bot-challenge / login-wall / empty-stub Document. Flag it and fail permanently.
 	// Video (transcript) Documents have a different content model and are exempt.
 	if doc.MediaType != "video" {
-		if fpe := pipeline.DetectFalseParse(doc.Title, doc.Markdown); fpe != nil {
+		detectFalseParse := pipeline.DetectFalseParse
+		if reg.IsShortForm(doc.CanonicalUrl) {
+			detectFalseParse = pipeline.DetectFalseParseShortForm
+		}
+		if fpe := detectFalseParse(doc.Title, doc.Markdown); fpe != nil {
 			logPipeline.Warnf("false parse for document %s: %s — skipping pipeline", p.DocumentID[:8], fpe.Reason)
 			return "", flagFalseParse(ctx, q, doc.ID, fpe)
 		}

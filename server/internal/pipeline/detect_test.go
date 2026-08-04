@@ -86,3 +86,21 @@ func TestDetectFalseParse(t *testing.T) {
 		})
 	}
 }
+
+// A Substack Note is a couple of sentences — genuine content that the length
+// floor reads as an empty stub, which is why short-form feeds opt out of it.
+func TestDetectFalseParseShortForm(t *testing.T) {
+	const note = "some reflections on 2025"
+
+	if fpe := DetectFalseParse("Samuel Albanie (@samuelalbanie)", note); fpe == nil {
+		t.Fatal("baseline broken: the length floor should flag a tweet-sized body")
+	}
+	if fpe := DetectFalseParseShortForm("Samuel Albanie (@samuelalbanie)", note); fpe != nil {
+		t.Fatalf("short-form body flagged as %q, want genuine", fpe.Reason)
+	}
+	// Dropping the floor must not drop the login/bot gates too.
+	gated := DetectFalseParseShortForm("Members only", "Subscribe to keep reading this note.")
+	if gated == nil || gated.Reason != ReasonBotProtection {
+		t.Fatalf("want %q on a short-form login wall, got %v", ReasonBotProtection, gated)
+	}
+}

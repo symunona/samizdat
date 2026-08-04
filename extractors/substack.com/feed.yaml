@@ -1,0 +1,15 @@
+# Substack Notes. Feed URL is a profile: https://substack.com/@<handle>/notes
+# One config covers every handle — Notes all live on the substack.com host,
+# while publication post feeds live on <handle>.substack.com (separate key).
+kind: substack_notes
+max_urls: 50
+
+# A note permalink page is 95% Substack chrome (product upsell, "Great
+# discussions", footer marketing) wrapped around a tweet-sized body, and
+# trafilatura reliably picks the chrome. Prune to the note unit first. The
+# suffix on Substack's class names is a build hash, so match by prefix.
+article_selector: '[class*="feedPermalinkUnit"]'
+
+# A note is a tweet, not an article — well under the false-parse length floor,
+# which would otherwise flag every single one as an empty stub.
+short_form: true

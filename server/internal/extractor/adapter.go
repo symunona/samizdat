@@ -20,6 +20,8 @@ func AdapterFor(kind string) FeedAdapter {
 		return &RSSAdapter{}
 	case "html_links":
 		return &HTMLLinksAdapter{}
+	case "substack_notes":
+		return &SubstackNotesAdapter{}
 	case "js_script":
 		return &JSScriptAdapter{}
 	default:

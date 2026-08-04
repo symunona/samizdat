@@ -84,3 +84,27 @@ func TestFixInlineSpacing_LeavesCleanTextAndCode(t *testing.T) {
 		t.Errorf("fixInlineSpacing altered clean HTML:\n in: %q\nout: %q", in, got)
 	}
 }
+
+// Substack Notes carry no headline: og:title is the author's profile name, so
+// every note of one writer would share a title. leadLineTitle supplies one.
+func TestLeadLineTitle(t *testing.T) {
+	long := strings.Repeat("word ", 40)
+	cases := []struct{ name, md, want string }{
+		{"plain first line", "some reflections on 2025\n\nmore body", "some reflections on 2025"},
+		{"skips hero image", "![[hero.jpg]]\n\nthe actual note text", "the actual note text"},
+		{"strips markdown lead", "> **quoted** opener", "**quoted** opener"},
+		{"empty markdown", "\n\n  \n", ""},
+		{"image-only", "![[a.jpg]]\n![[b.jpg]]", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := leadLineTitle(tc.md); got != tc.want {
+				t.Fatalf("leadLineTitle = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	got := leadLineTitle(long)
+	if r := []rune(got); len(r) > 91 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("long lead not truncated to ~90 runes + ellipsis: %d runes, %q", len(r), got)
+	}
+}
