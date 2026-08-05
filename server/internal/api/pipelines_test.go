@@ -12,10 +12,11 @@ import (
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
-// TestPipelineUpdatePreservesAPIKey: the UI never receives an api_key (GET
-// redacts it), so a PUT whose steps omit it must keep the stored value — while
-// the edit that came with it lands. GET must still hide the key afterwards.
-func TestPipelineUpdatePreservesAPIKey(t *testing.T) {
+// TestPipelineStripsLegacyCredential: credentials belong to the LLM Router, not
+// to a pipeline row — but rows written before that still carry an api_key. It must
+// never reach a client on any read path, and the save that drops it must still
+// land the edit that came with it.
+func TestPipelineStripsLegacyCredential(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +36,6 @@ func TestPipelineUpdatePreservesAPIKey(t *testing.T) {
 
 	h := &pipelinesHandler{q: q}
 
-	// GET must not leak the key.
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/p1", nil)
 	getReq.SetPathValue("id", "p1")
 	getRec := httptest.NewRecorder()
@@ -47,7 +47,6 @@ func TestPipelineUpdatePreservesAPIKey(t *testing.T) {
 		t.Fatalf("GET leaked api_key: %s", getRec.Body.String())
 	}
 
-	// Save the redacted steps back with one edited value.
 	body, _ := json.Marshal(map[string]string{
 		"steps": `[{"kind":"llm_summarize","config":{"model":"new","prompt":"P"}}]`,
 	})
@@ -66,18 +65,18 @@ func TestPipelineUpdatePreservesAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stored.Steps, "sk-secret") {
-		t.Fatalf("api_key wiped by save: %s", stored.Steps)
+	if strings.Contains(stored.Steps, "sk-secret") {
+		t.Fatalf("legacy api_key survived a save: %s", stored.Steps)
 	}
 	if !strings.Contains(stored.Steps, `"new"`) {
 		t.Fatalf("edit not persisted: %s", stored.Steps)
 	}
 }
 
-// TestStepCatalogMarksSecretFields: the catalog names a secret field and flags it,
-// so the client hides it by spec rather than by guessing at the key name — but it
-// never carries a value for one.
-func TestStepCatalogMarksSecretFields(t *testing.T) {
+// TestStepCatalogDeclaresNoCredential: a step names a provider id and the Router
+// resolves the endpoint + key. If a credential field ever reappears in a kind
+// spec, a key is back in the DB and back on the wire — fail loudly.
+func TestStepCatalogDeclaresNoCredential(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handleStepCatalog(rec, httptest.NewRequest(http.MethodGet, "/api/v1/pipeline-steps", nil))
 	if rec.Code != http.StatusOK {
@@ -86,9 +85,8 @@ func TestStepCatalogMarksSecretFields(t *testing.T) {
 	var specs []struct {
 		Kind   string `json:"kind"`
 		Fields []struct {
-			Key     string `json:"key"`
-			Secret  bool   `json:"secret"`
-			Default any    `json:"default"`
+			Key  string `json:"key"`
+			Type string `json:"type"`
 		} `json:"fields"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &specs); err != nil {
@@ -97,22 +95,22 @@ func TestStepCatalogMarksSecretFields(t *testing.T) {
 	if len(specs) != 7 {
 		t.Fatalf("want 7 step kinds, got %d", len(specs))
 	}
-	var sawSecret bool
+	var sawModelPicker bool
 	for _, s := range specs {
 		for _, f := range s.Fields {
-			if f.Key != "api_key" {
-				continue
+			switch f.Key {
+			case "api_key", "base_url":
+				t.Fatalf("%s: %q is the Router's to own, not a step's", s.Kind, f.Key)
 			}
-			sawSecret = true
-			if !f.Secret {
-				t.Fatalf("%s: api_key not flagged secret", s.Kind)
-			}
-			if f.Default != nil {
-				t.Fatalf("%s: secret field carries a value", s.Kind)
+			if f.Key == "model" {
+				sawModelPicker = true
+				if f.Type != "model" {
+					t.Fatalf("%s: model field type = %q, want \"model\" (the app renders a picker off it)", s.Kind, f.Type)
+				}
 			}
 		}
 	}
-	if !sawSecret {
-		t.Fatal("no api_key field in catalog — the client cannot know which keys are credentials")
+	if !sawModelPicker {
+		t.Fatal("no model field in the catalog — the model picker has nothing to bind to")
 	}
 }

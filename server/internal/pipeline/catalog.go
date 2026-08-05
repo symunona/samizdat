@@ -11,10 +11,7 @@ type FieldSpec struct {
 	// Type is one of: string | text | int | bool. "text" is a long/multiline string.
 	Type    string `json:"type"`
 	Default any    `json:"default,omitempty"`
-	// Secret fields are never serialized to clients and never edited from the UI
-	// (the server preserves the stored value on write). Currently: api_key.
-	Secret bool   `json:"secret,omitempty"`
-	Help   string `json:"help,omitempty"`
+	Help    string `json:"help,omitempty"`
 }
 
 // KindSpec is the self-description of a registered step kind.
@@ -41,8 +38,7 @@ func Register(spec KindSpec, h Handler) {
 	registry[spec.Kind] = registration{spec: spec, handler: h}
 }
 
-// Catalog returns every registered step spec, ordered by kind. Callers that
-// serialize it to a client must drop Secret fields first.
+// Catalog returns every registered step spec, ordered by kind.
 func Catalog() []KindSpec {
 	specs := make([]KindSpec, 0, len(registry))
 	for _, reg := range registry {

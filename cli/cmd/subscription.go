@@ -1,16 +1,13 @@
 package cmd
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/symunona/samizdat/cli/config"
 )
 
 var subAddInterval int
@@ -206,62 +203,16 @@ func getJSON[T any](path string) (T, error) {
 	return out, nil
 }
 
-// authedRequest fires a bearer-authed request at /api/v1<path>, reusing the
-// cached local-trust token and re-pairing once on 401 (mirrors yt.go's flow).
-func authedRequest(method, path string, body interface{}) (*http.Response, error) {
-	port, err := loadPort()
+// authedRequest fires a bearer-authed request at /api/v1<path> through the shared
+// apiClient — port + cached local-trust token + re-pair once on 401, all in one
+// place (cmd/api.go). It used to be a third copy of that flow, which is how it
+// came to read the DEFAULT config path and ignore --config.
+func authedRequest(method, path string, body any) (*http.Response, error) {
+	c, err := newAPIClient()
 	if err != nil {
 		return nil, err
 	}
-	cfgPath, err := config.DefaultPath()
-	if err != nil {
-		return nil, fmt.Errorf("config path: %w", err)
-	}
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
-	}
-
-	token := cfg.DeviceToken
-	if token == "" {
-		if token, err = pairAndCache(port, cfg, cfgPath); err != nil {
-			return nil, err
-		}
-	}
-
-	do := func(tok string) (*http.Response, error) {
-		var r io.Reader
-		if body != nil {
-			b, _ := json.Marshal(body)
-			r = bytes.NewReader(b)
-		}
-		endpoint := fmt.Sprintf("http://localhost:%d/api/v1%s", port, path)
-		req, err := http.NewRequest(method, endpoint, r) //nolint:noctx
-		if err != nil {
-			return nil, fmt.Errorf("build request: %w", err)
-		}
-		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		req.Header.Set("Authorization", "Bearer "+tok)
-		return http.DefaultClient.Do(req)
-	}
-
-	resp, err := do(token)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not reach server on port %d. Is `samizdat serve` running?\n", port)
-		return nil, fmt.Errorf("do request: %w", err)
-	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		_ = resp.Body.Close()
-		if token, err = pairAndCache(port, cfg, cfgPath); err != nil {
-			return nil, err
-		}
-		if resp, err = do(token); err != nil {
-			return nil, fmt.Errorf("do request: %w", err)
-		}
-	}
-	return resp, nil
+	return c.do(method, path, body)
 }
 
 // checkStatus turns a non-2xx response into an error, surfacing the server's

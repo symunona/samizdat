@@ -845,9 +845,9 @@ export type PipelineFilter = {
 export type StepFieldSpec = {
   key: string
   label: string
-  type: string      // 'string' | 'text' | 'int' | 'bool'
+  // 'model' renders the provider-grouped picker; the rest are plain inputs.
+  type: string      // 'string' | 'text' | 'int' | 'bool' | 'model'
   default?: unknown
-  secret?: boolean  // the server omits these; the UI must never render one either
   help?: string
 }
 
@@ -867,7 +867,8 @@ export async function fetchStepCatalog(serverUrl: string, token: string): Promis
 }
 
 // The server stores `steps` as a JSON string, so it is serialized here rather
-// than sent as an array. A config that omits a secret key keeps the stored value.
+// than sent as an array. Credentials never travel: they belong to the LLM Router
+// (config.toml + env), not to a pipeline row.
 export async function putPipelineSteps(
   serverUrl: string, token: string, id: string, steps: PipelineStep[],
 ): Promise<Pipeline> {

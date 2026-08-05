@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
   newConnectedPage, seedTextDoc, seedVideoDoc, seedHighlight, seedLLMHealth, seedPipeline,
+  startStubLLM, STUB_LLM_MODELS,
   makeCleanup,
 } from './harness.js'
 
@@ -141,7 +142,8 @@ const FIGURE_DOC = {
 
 let browser = null
 let serverProc = null
-const cleanup = makeCleanup(() => ({ browser, serverProc }))
+let stubLLM = null
+const cleanup = makeCleanup(() => ({ browser, serverProc, stubLLM }))
 
 process.on('exit', () => { if (serverProc) { try { process.kill(-serverProc.pid, 'SIGKILL') } catch {} } })
 process.on('SIGINT', async () => { await cleanup(); process.exit(130) })
@@ -1026,6 +1028,23 @@ async function runSettingsServices(token, deviceId) {
     return null
   })
 
+  // The probe is the ONE active path: a tap, never a render. It must tell the two
+  // failure shapes apart — a box with nothing listening vs a box that answered.
+  await check('settings: Probe reports each provider live, reachable and not', async () => {
+    await clickByText(page, e => e.innerText === 'Probe', 'Probe')
+    await page.waitForFunction(() => /Probed:/.test(document.body.innerText), { timeout: 15000 })
+    await sleep(300)
+    // Read in place: settingsText() re-navigates, and a remount clears the probe
+    // results (they are screen state — nothing probes on a render).
+    const t = await page.evaluate(() => document.body.innerText)
+    const llm = t.slice(t.indexOf('LLM Services'))
+    if (!/Probed: Unreachable/.test(llm)) return `the dead-port provider did not probe as unreachable: ${llm.slice(0, 500)}`
+    if (!new RegExp(`Probed: ${STUB_LLM_MODELS.length} models`).test(llm)) {
+      return `the stub box did not report its model count: ${llm.slice(0, 500)}`
+    }
+    return null
+  })
+
   await check('settings: a retired provider keeps its history without raising an alarm', async () => {
     if (!/retired/i.test(txt)) return 'the dropped provider is not marked retired'
     const dots = await page.$$('[data-testid="drawer-alert-dot"]')
@@ -1083,11 +1102,15 @@ const PIPE_NAME = 'Integration Summarizer'
 const PIPE_PROMPT = 'Summarize the article in three caveman bullets for the integration test.'
 const PIPE_SECRET = 'sk-integration-NEVER-RENDER-THIS'
 const PIPE_MODEL = 'qwen3:4b-instruct'
-const PIPE_NEW_MODEL = 'claude-haiku-4-5'
+// The model is chosen from the picker now, so it must be a model the stub box
+// actually serves — that is the whole point of grouping by provider.
+const PIPE_NEW_MODEL = STUB_LLM_MODELS[1]
+const STUB_PROVIDER_ID = '127.0.0.1:8767'
 const PIPE_STEPS = [{ kind: 'llm_summarize', config: { model: PIPE_MODEL, prompt: PIPE_PROMPT, api_key: PIPE_SECRET } }]
 
 const PROMPT_FIELD = '[aria-label="llm_summarize prompt"]'
 const MODEL_FIELD = '[aria-label="llm_summarize model"]'
+const MODEL_SEARCH = '[aria-label="model search"]'
 
 // The screen lists every pipeline (the highlight fixture seeds one too), so every
 // assertion is scoped to the card of the pipeline under test: the SMALLEST element
@@ -1160,7 +1183,7 @@ async function runPipelineStepsUi(token, deviceId) {
     return txt.includes('Summarize') ? null : `the step does not render its catalog label: "${txt.slice(0, 200)}"`
   })
 
-  await check('pipelines: the step api_key is nowhere in the page', async () => {
+  await check('pipelines: a legacy step api_key is nowhere in the page', async () => {
     const leak = await page.evaluate(secret => {
       const html = document.documentElement.outerHTML
       const values = [...document.querySelectorAll('input,textarea')].map(el => el.value).join('\n')
@@ -1183,23 +1206,58 @@ async function runPipelineStepsUi(token, deviceId) {
     return null
   })
 
-  await check('pipelines: editing a step field and saving persists it', async () => {
-    await page.click(MODEL_FIELD, { clickCount: 3 })
-    await page.keyboard.type(PIPE_NEW_MODEL, { delay: 30 })
-    await sleep(200)
-    await page.click(`[aria-label="Save steps ${PIPE_NAME}"]`)
-    await page.waitForFunction(() => document.body.innerText.includes('Steps saved'), { timeout: 8000 })
-    const steps = JSON.parse((await seededPipeline(token)).steps)
-    if (steps[0]?.config?.model !== PIPE_NEW_MODEL) return `the server kept model "${steps[0]?.config?.model}"`
-    if (!String(steps[0]?.config?.prompt || '').includes('three caveman bullets')) return 'saving the model dropped the prompt'
+  // The interaction, not the API: the model is picked from a provider-grouped,
+  // searchable list, and choosing one must write BOTH model and provider — a model
+  // aimed at the wrong endpoint is a 404 that never falls back.
+  await check('pipelines: the model field opens a picker grouped by provider', async () => {
+    const err = await openPipelineSteps(page)
+    if (err) return err
+    await page.click(MODEL_FIELD)
+    await page.waitForSelector(MODEL_SEARCH, { timeout: 6000 })
+    await sleep(400)
+    const txt = await page.evaluate(() => document.body.innerText)
+    if (!txt.includes(STUB_PROVIDER_ID)) {
+      return `the picker does not group by provider (no "${STUB_PROVIDER_ID}" header): ${txt.slice(-400)}`
+    }
+    for (const m of STUB_LLM_MODELS) {
+      if (!txt.includes(m)) return `the picker does not offer "${m}" — the catalog did not reach it`
+    }
     return null
   })
 
-  await check('pipelines: the saved model is what the editor shows after a reload', async () => {
+  await check('pipelines: searching filters the grouped list down to the match', async () => {
+    await page.click(MODEL_SEARCH)
+    await page.keyboard.type(PIPE_NEW_MODEL.slice(-5), { delay: 30 })
+    await sleep(400)
+    const txt = await page.evaluate(() => document.body.innerText)
+    if (!txt.includes(PIPE_NEW_MODEL)) return `the searched-for model disappeared: ${txt.slice(-300)}`
+    if (txt.includes(STUB_LLM_MODELS[0])) return `search did not filter out "${STUB_LLM_MODELS[0]}"`
+    return null
+  })
+
+  await check('pipelines: picking a model writes model AND provider, and saving persists both', async () => {
+    await page.click(`[aria-label="model ${PIPE_NEW_MODEL}"]`)
+    await sleep(300)
+    const shown = await page.$eval(MODEL_FIELD, el => el.innerText)
+    if (!shown.includes(PIPE_NEW_MODEL)) return `the field still reads "${shown}" after picking`
+    await page.click(`[aria-label="Save steps ${PIPE_NAME}"]`)
+    await page.waitForFunction(() => document.body.innerText.includes('Steps saved'), { timeout: 8000 })
+
+    const steps = JSON.parse((await seededPipeline(token)).steps)
+    if (steps[0]?.config?.model !== PIPE_NEW_MODEL) return `the server kept model "${steps[0]?.config?.model}"`
+    if (steps[0]?.config?.provider !== STUB_PROVIDER_ID) {
+      return `the provider was not written alongside the model: "${steps[0]?.config?.provider}"`
+    }
+    if (!String(steps[0]?.config?.prompt || '').includes('three caveman bullets')) return 'saving the model dropped the prompt'
+    if (/api_key/i.test((await seededPipeline(token)).steps)) return 'the save did not drop the legacy api_key'
+    return null
+  })
+
+  await check('pipelines: the picked model is what the editor shows after a reload', async () => {
     const err = await openPipelineSteps(page)
     if (err) return err
-    const model = await page.$eval(MODEL_FIELD, el => el.value)
-    return model === PIPE_NEW_MODEL ? null : `the model field reloaded as "${model}"`
+    const model = await page.$eval(MODEL_FIELD, el => el.innerText)
+    return model.includes(PIPE_NEW_MODEL) ? null : `the model field reloaded as "${model}"`
   })
 
   await sleep(300)
@@ -1363,6 +1421,7 @@ async function main() {
   console.log('\n=== Samizdat integration test ===\n')
   try {
     resetTestEnv()
+    stubLLM = startStubLLM()
     serverProc = await startServer()
     const { token, deviceId } = await pairDevice('integration-device')
     seedVideoDoc(deviceId, VIDEO_DOC_ID)

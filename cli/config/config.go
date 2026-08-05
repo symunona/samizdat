@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/BurntSushi/toml"
 )
@@ -99,6 +100,12 @@ func Load(path string) (*Config, error) {
 }
 
 // Save writes cfg to path as TOML with 0600 permissions.
+// Save re-serializes the WHOLE file from this struct, so it silently drops every
+// key this struct does not model. That is fine for `sam setup`, which authors the
+// file — and catastrophic for anything else: the server's config.toml has a richer
+// schema ([llm] provider/base_url/fallback, [ytdlp], [export], …), and one Save
+// against it wipes all of them. To persist a single value into a config you did
+// not author, use SaveDeviceToken (or write another surgical helper like it).
 func Save(cfg *Config, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("mkdir config dir: %w", err)
@@ -110,6 +117,49 @@ func Save(cfg *Config, path string) error {
 	defer func() { _ = f.Close() }()
 	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
 		return fmt.Errorf("encode config: %w", err)
+	}
+	return nil
+}
+
+// deviceTokenRe matches the cached-token line anywhere in a TOML file, at the top
+// level (leading whitespace only — a line indented under a [table] would belong to
+// that table, not to the root key we mean).
+var deviceTokenRe = regexp.MustCompile(`(?m)^[ \t]*device_token[ \t]*=.*$`)
+
+// SaveDeviceToken writes the cached local-trust token into path, touching NOTHING
+// else: it rewrites the one line if present, else appends it. The CLI caches its
+// token in whatever config it was pointed at — including the server's, whose schema
+// this package does not model — so a full re-encode there would destroy the user's
+// configuration. It did, once. Hence the surgical edit.
+func SaveDeviceToken(path, token string) error {
+	line := fmt.Sprintf("device_token = %q", token)
+
+	raw, err := os.ReadFile(path) //nolint:gosec // path comes from --config / DefaultPath
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("read config file: %w", err)
+		}
+		// No config yet: create a minimal one rather than a full Defaults() dump, so
+		// a later hand-written config is never fighting keys it did not ask for.
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			return fmt.Errorf("mkdir config dir: %w", err)
+		}
+		if err := os.WriteFile(path, []byte(line+"\n"), 0600); err != nil {
+			return fmt.Errorf("write config file: %w", err)
+		}
+		return nil
+	}
+
+	out := string(raw)
+	if deviceTokenRe.MatchString(out) {
+		out = deviceTokenRe.ReplaceAllLiteralString(out, line)
+	} else {
+		// Prepend: appending would land inside whatever [table] ends the file, which
+		// would make it that table's key instead of a root one.
+		out = line + "\n" + out
+	}
+	if err := os.WriteFile(path, []byte(out), 0600); err != nil {
+		return fmt.Errorf("write config file: %w", err)
 	}
 	return nil
 }

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
 )
@@ -21,10 +20,8 @@ func init() {
 		Label:       "3-2-1 newsletter",
 		Description: "Extracts James Clear's 3 ideas, 2 quotes and 1 question as highlights.",
 		Fields: []FieldSpec{
-			{Key: "model", Label: "Model", Type: "string", Help: "Empty = the provider's default_model."},
-			{Key: "provider", Label: "Provider", Type: "string", Help: "anthropic | openai_compat. Empty = the server's LLM client."},
-			{Key: "base_url", Label: "Base URL", Type: "string", Help: "openai_compat endpoint override."},
-			{Key: "api_key", Label: "API key", Type: "string", Secret: true},
+			{Key: "model", Label: "Model", Type: "model", Help: "Empty = the provider's default_model."},
+			{Key: "provider", Label: "Provider", Type: "string", Help: "Router provider id (`just check-llm` lists them). Empty = the configured chain."},
 			{Key: promptKey, Label: "Prompt", Type: "text", Default: nl321DefaultPrompt},
 		},
 	}, handleLLM321Newsletter)
@@ -34,8 +31,6 @@ type nl321Config struct {
 	Model    string `json:"model"`
 	Prompt   string `json:"prompt"`
 	Provider string `json:"provider"`
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
 }
 
 type nl321Highlight struct {
@@ -61,7 +56,7 @@ Extract exactly these 6 highlights in order:
 If the newsletter has a different structure, extract as many as exist. Preserve verbatim text — do not paraphrase.
 Return [] if no highlights found.` + promptTemplateTail
 
-func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, globalClient llm.Client) (StepResult, error) {
+func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, router *llm.Router) (StepResult, error) {
 	var c nl321Config
 	_ = ParseStepConfig(cfg, &c)
 	// Unset model = the configured provider's default_model (see step_llm_summarize).
@@ -69,17 +64,8 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 		c.Prompt = defaultPrompt(kindLLM321Newsletter)
 	}
 
-	client := globalClient
-	if c.Provider != "" {
-		client = llm.New(config.LLMSection{
-			Provider:     c.Provider,
-			BaseURL:      c.BaseURL,
-			APIKey:       c.APIKey,
-			DefaultModel: c.Model,
-		})
-	}
-	if client == nil {
-		return StepResult{}, fmt.Errorf("llm_321_newsletter: no LLM client configured")
+	if !router.Configured() {
+		return StepResult{}, fmt.Errorf("llm_321_newsletter: no LLM provider configured")
 	}
 
 	doc, err := q.GetDocumentByID(ctx, run.DocumentID)
@@ -93,7 +79,7 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 	}
 
 	userMsg := renderPrompt(c.Prompt, map[string]string{"title": doc.Title, "content": content})
-	reply, usage, err := client.Complete(ctx, c.Model, []llm.Message{
+	reply, usage, err := router.CompleteRoute(ctx, llm.Route{Provider: c.Provider, Model: c.Model}, []llm.Message{
 		{Role: "user", Content: userMsg},
 	})
 	if err != nil {

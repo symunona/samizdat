@@ -46,6 +46,11 @@ server/
     pair/
       codes.go              # DB-backed pair codes: mint, claim, expire
     llm/
+      router.go             # THE router: NewRouter(cfg) → discovery + fallback chain; Complete / CompleteRoute
+      provider.go           # Provider: id, transport, flavor, base URL, key resolution (env fallback)
+      discover.go           # config + [[llm.fallback]] + env keys + well-known localhost:11434, deduped
+      probe.go              # ACTIVE checks: reachable / auth / credits (the only path that asks)
+      models.go             # per-provider model catalog (5-min cache) for the app's model picker
       health.go             # package-level provider-health registry: Record, Snapshot, Restore, SetPersist
       health_test.go        # unit tests for classify, Record, Restore
     api/
@@ -59,6 +64,8 @@ server/
                             # GET  /api/v1/documents/{id}/audio (audio streaming)
       ytdlp_status.go       # GET  /api/v1/ytdlp/status    (bearer-authed, proxy health)
       llm_status.go         # GET  /api/v1/llm/status      (bearer-authed, provider health + spend)
+                            # GET  /api/v1/llm/models      (bearer-authed, model catalog per provider)
+                            # POST /api/v1/llm/probe       (bearer-authed, ACTIVE probe; ?deep=1 spends 1 token)
       middleware.go         # bearerAuth, localhostOnly guards
       sync.go               # GET  /api/v1/sync            (bearer-authed, incremental pull)
       sync_test.go          # unit tests for cursor correctness
@@ -330,51 +337,68 @@ step kind = one `Register` in the step's `init()`. `GET /api/v1/pipeline-steps` 
   appended, so a hand-typed one-line prompt still receives the document.
   `TestDefaultPromptsComposeLegacyMessage` is the guard that a default-config pipeline sends
   a byte-identical message to the pre-templating one — don't "tidy" the prompt consts.
-- **`api_key` is `Secret: true`** — omitted from the catalog response, stripped from every
-  pipeline GET (`pipeline.RedactSecrets`), and re-injected on PUT when the incoming step
-  omits it (`pipeline.PreserveSecrets`, matched by index + kind). Without that merge the UI,
-  which never sees the key, would wipe it on every save.
+- **No step field is a credential.** `model` (type `model` — the app renders a picker off
+  that) and `provider` (a Router provider id) are the only routing keys; the endpoint and
+  the key belong to the Router. `TestStepCatalogDeclaresNoCredential` fails the build if
+  `api_key`/`base_url` ever reappear in a kind spec.
 - **The prompt backfill is NOT in `store.migrate()`** — the catalog lives in `pipeline`,
   which imports `store`, so a migration there would be an import cycle.
   `pipeline.BackfillStepPrompts` runs in `main.go` right after `store.Open`, guarded by
   `server_settings.pipeline_step_prompts_backfilled` and by a per-step "already has a
   prompt" check. Any future data migration needing engine code goes the same way.
 
-### Secret field handling (api_key round-trip)
+### Credentials never live in a pipeline row
 
-Secret fields (`Secret: true` in `FieldSpec`) follow a strict contract across all three
-call sites — deviation breaks silent key wipe:
+Design rule 5 used to be defended with a redact-on-read / re-inject-on-write pair around a
+`Secret: true` field. That whole machinery is gone with the key it protected: a step names
+a provider id, and the Router resolves the endpoint and its key from config.toml + env.
 
-1. **`GET /api/v1/pipelines` and `GET /api/v1/pipelines/{id}`**: `pipeline.RedactSecrets`
-   removes the key entirely from the steps JSON before the response is written. The key is
-   **absent**, not blank — a client can tell "never set" from "was set, now redacted" by
-   the presence of the field in the spec (`Secret: true`) rather than by the value.
-2. **`GET /api/v1/pipeline-steps`** (catalog): the `Default` value of a secret field is
-   cleared to `nil`. The field spec itself is still returned so the client knows which
-   keys are credentials.
-3. **`PUT /api/v1/pipelines/{id}`**: `pipeline.PreserveSecrets` is called before the DB
-   write. It matches by **index + kind** and copies any secret key the incoming steps omit
-   from the stored steps. An explicitly sent value wins. A kind change at the same index
-   does NOT inherit the old key.
+What remains is one function. `pipeline.StripCredentials(stepsJSON)` removes every
+credential-*named* key (`api_key`, `secret`, `token`, `password`, `passphrase`, any case,
+`apiKey` too) from every step config on **every read path** (`GET /api/v1/pipelines`,
+`GET /api/v1/pipelines/{id}`, and the PUT response). Keyed on the NAME, not on the
+catalog, so it also covers a legacy row and a hand-added key no kind declares — the case a
+catalog-driven redaction always missed.
 
-`steps_json.go` owns all three operations as pure string→string functions so they can be
-unit-tested without an HTTP stack. The JSON rewrite is raw-message-level to preserve
-unknown keys.
+There is deliberately **no write-side counterpart**: nothing reads these keys any more, so
+a save that drops one loses nothing the server would have used. The app mirrors the same
+name test (`SECRET_KEY` in `pipelines.tsx`) as a second lock, including in its raw-JSON
+view.
 
-## LLM model resolution — a model name belongs to ONE provider
+`steps_json.go` keeps the operation as a pure string→string function so it is unit-testable
+without an HTTP stack, and the JSON rewrite stays raw-message-level to preserve unknown keys.
 
-A pipeline step that names no model must NOT get a hardcoded Claude id: point the
-primary at a local Ollama box and that id is a **404 → a 4xx → not `ErrTransport` →
-no fallback → the pipeline dies hard**. So the resolution lives in the client:
+## The LLM Router owns every endpoint (`internal/llm/router.go`)
 
-- `newSingle` hands each client its section's `default_model`; the client fills in an
-  empty model (anthropic still ends at `claude-haiku-4-5-20251001`, `openai_compat`
-  errors naming `llm.default_model` — a local box serves only what was pulled onto it).
-- `Usage.Model` reports the model that actually **ran**. Steps write that (via
-  `pipeline.servedModel`) to `llm_usages` and to the highlight's `metadata.model`,
-  so a call served by a fallback is not logged under the primary's model.
-- Steps therefore pass `c.Model` straight through, empty and all. Never re-introduce a
-  provider-specific default in a step.
+`llm.NewRouter(cfg.LLM)` is built ONCE in `api.New` and threaded api → worker →
+`pipeline.Dispatch` → `Handler`. Steps take a `*llm.Router`, never a `Client`: choosing
+an endpoint is routing, and routing has one owner. Before it, all four `step_llm_*.go`
+carried their own `provider`/`base_url`/`api_key`/`model` keys and their own
+`llm.New(config.LLMSection{…})` block — four copies of the router, and a credential in a
+DB row.
+
+- **A step names a provider id, nothing else.** `provider` + `model` are the only routing
+  keys in a step config. `base_url` and `api_key` are gone from every step spec: the
+  Router resolves the endpoint and the key from config.toml + env. A legacy row that
+  still carries one is stripped on read (`pipeline.StripCredentials`) and dropped on the
+  next save.
+- **Pinning is pinning.** `CompleteRoute(ctx, Route{Provider: id}, msgs)` uses that
+  provider and does **not** fall back. A step aimed at the local box must fail when the
+  box is down, never quietly spend cloud money. An empty `Route.Provider` uses the chain
+  (primary → each fallback, on `ErrTransport` only).
+- **Legacy provider names still resolve.** Rows written before the Router stored a bare
+  transport (`"anthropic"`, `"openai_compat"`); `Router.resolve` falls back to the first
+  provider on that transport. Don't remove that path while such rows exist.
+- **Provider ids** are brands for cloud endpoints (`anthropic`, `openrouter`, `openai`)
+  and `host:port` for anything self-hosted — the only thing that tells two Ollama boxes
+  apart. `Provider.HealthKey()` is a SEPARATE identity (`transport@base_url`): the health
+  rows and `llm_usages` were written with it, and renaming it would orphan them.
+- **A model name belongs to ONE provider.** An unset model still resolves inside the
+  client to that endpoint's `default_model` (anthropic ends at
+  `claude-haiku-4-5-20251001`; `openai_compat` errors naming `llm.default_model` — a local
+  box serves only what was pulled onto it). Never re-introduce a provider-specific default
+  in a step. `Usage.Model` reports what actually ran, and steps write that (via
+  `pipeline.servedModel`) to `llm_usages` and to `metadata.model`.
 - **Ollama's context defaults to 4096 tokens and truncates silently**; the summarize step
   feeds up to 12k chars. The OpenAI-compatible endpoint has no `num_ctx`, so bake it into
   a model variant (`FROM qwen3:4b-instruct` + `PARAMETER num_ctx 7168` → `ollama create`)
@@ -382,10 +406,58 @@ no fallback → the pipeline dies hard**. So the resolution lives in the client:
   to what stays on the GPU (`ollama ps` prints the split) — the first byte that spills to
   CPU roughly halves throughput.
 
+### Discovery (`discover.go`)
+
+Deduped by `HealthKey`, in routing order: `[llm]` → `primary`, each `[[llm.fallback]]` →
+`fallback`, then anything an env key makes usable (`ANTHROPIC_API_KEY`,
+`OPENROUTER_API_KEY`, `OPENAI_API_KEY`) and the well-known `http://localhost:11434/v1` →
+`available`. **There is no LAN scan** — the LAN Ollama box is whatever `base_url` names;
+sweeping a subnet would be slow, rude, and would invent endpoints nobody asked to send
+documents to.
+
+`available` providers populate the model picker and `just check-llm`, but nothing routes
+through them, so they never raise the app's alert dot (only `primary`/`fallback` do).
+
+### Probe (`probe.go`) — the only thing that actively asks
+
+`POST /api/v1/llm/probe` (→ `just check-llm`, → the Settings **Probe** button). Never on a
+render path; that is exactly why `health.go` stays passive. Cheapest honest check per
+flavor:
+
+| Flavor | Check | Credits |
+|---|---|---|
+| local / openai_compat | `GET {base}/models` | `n/a` — no balance to run out of |
+| OpenRouter | `GET /api/v1/models` + `GET /api/v1/key` | real numbers (`$6.30 used of $10`) |
+| Anthropic | `GET /v1/models` (proves the key) | **no endpoint exists** — see below |
+
+- **Anthropic has no balance API.** Shallow: credits come from the health registry's last
+  recorded `quota` error. `?deep=1`: a `max_tokens`-1 completion settles it for
+  ~$0.000001, and because it goes through the normal client it also *updates* the health
+  registry — probe and passive status agree by construction. `just check-llm` runs deep by
+  default (it is a manual command); `--shallow` opts out. The Settings button is always
+  shallow — it is one tap away from a render.
+- **Unreachable means nothing is listening.** A 4xx came back over a working connection:
+  the box is up and refused the request (`reachable: true`, `auth: bad_key`). Only
+  `ErrTransport` sets `reachable: false`.
+- A provider with **no key is never contacted** — claiming reachability we never
+  established would be a guess.
+- `anthropicBaseURL` is a `var`, not a const, so probe tests can point it at an httptest
+  server (same trick as `extractor.substackAPIBase`). One real value.
+
+### Model catalog (`models.go`)
+
+`GET /api/v1/llm/models` → groups of `{provider_id, provider_label, role, models[]}`,
+cached 5 minutes (`?refresh=1` busts it). All four flavors serve the OpenAI-shaped
+`{"data":[…]}` list. Anthropic **without** a key answers with the tiers `CLAUDE.md` names
+(Haiku/Sonnet/Opus) — an empty picker for the provider you are about to configure is worse
+than a short honest list. An unreachable provider contributes an `error` on its group,
+never an empty picker for everyone else.
+
 ## LLM provider health (`internal/llm/health.go`)
 
-**There is no probe.** A health check would be a real completion — tokens and money
-on every Settings render — so status is the outcome of the LAST real call. Both
+**Nothing here probes.** A health check on a render would be a real completion — tokens
+and money every time Settings paints — so status is the outcome of the LAST real call.
+(The *active* answer lives in `probe.go` above, behind an explicit tap or CLI run.) Both
 clients (`anthropic.go`, `openai_compat.go`) `defer Record(provider, baseURL, err)`
 on every return path, into a package-level registry. That placement is deliberate:
 pipeline steps mint their own clients (`llm.New` per step), so wiring health through
@@ -404,8 +476,11 @@ pipeline steps mint their own clients (`llm.New` per step), so wiring health thr
 - **Persisted** to `server_settings.llm_provider_health` after every Record, and
   re-read on every `GET /api/v1/llm/status` (in-memory always wins) — so an overnight
   failure survives a restart and a seeded row lands without one (used by `just e2e-int`).
-- A provider dropped from config still gets a row with `role: "retired"`: its spend
-  and its error are history worth keeping, but it must never raise the app's alert dot.
+- Rows come from `Router.Providers()` — the API no longer re-derives the client's
+  defaulting rules (the old `describeProvider`/`configuredSections` pair is gone). A
+  provider dropped from config still gets a row with `role: "retired"`: its spend and its
+  error are history worth keeping, but it must never raise the app's alert dot. Neither
+  must an `available` one — only `primary`/`fallback` can break a pipeline.
 - `llm.HasKey(cfg)` mirrors `newSingle`'s env fallback (`ANTHROPIC_API_KEY`) — keep the
   two in step, or a working provider reads as "No API key configured". The API never
   returns the key itself, only `has_key`.

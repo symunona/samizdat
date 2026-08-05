@@ -25,7 +25,7 @@ func (h *pipelinesHandler) list(w http.ResponseWriter, r *http.Request) {
 		rows = []store.Pipeline{}
 	}
 	for i := range rows {
-		rows[i].Steps = pipeline.RedactSecrets(rows[i].Steps)
+		rows[i].Steps = pipeline.StripCredentials(rows[i].Steps)
 	}
 	writeJSON(w, http.StatusOK, rows)
 }
@@ -37,7 +37,7 @@ func (h *pipelinesHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "pipeline not found")
 		return
 	}
-	row.Steps = pipeline.RedactSecrets(row.Steps)
+	row.Steps = pipeline.StripCredentials(row.Steps)
 	writeJSON(w, http.StatusOK, row)
 }
 
@@ -116,10 +116,6 @@ func (h *pipelinesHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Steps == "" {
 		req.Steps = existing.Steps
-	} else {
-		// The client never sees an api_key (GET redacts it), so a step config that
-		// omits one means "unchanged", not "cleared".
-		req.Steps = pipeline.PreserveSecrets(req.Steps, existing.Steps)
 	}
 	enabled := existing.Enabled
 	if req.Enabled != nil {
@@ -145,7 +141,7 @@ func (h *pipelinesHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, _ := h.q.GetPipeline(r.Context(), id)
-	updated.Steps = pipeline.RedactSecrets(updated.Steps)
+	updated.Steps = pipeline.StripCredentials(updated.Steps)
 	writeJSON(w, http.StatusOK, updated)
 }
 

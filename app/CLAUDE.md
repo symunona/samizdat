@@ -133,14 +133,33 @@ go as a JSON **string** — that's the column).
   keys of `pipeline.PipelineFilter`; anything else is printed verbatim as `key: value`. The
   old code checked `feed_id`/`tag`/`domain`/`url_pattern` — none of which exist — so every
   pipeline read "all documents", the maximally wrong answer for a feed-scoped pipeline.
-- **A credential must never enter the DOM.** The catalog omits `secret` fields and the
-  server redacts `api_key` from GET, but the screen ALSO drops any key matching
-  `SECRET_KEY` — including in the raw-JSON view, which is rebuilt from the parsed steps
-  rather than echoing the stored string. A saved config omits secret keys entirely; the
-  server's `PreserveSecrets` keeps the stored value (sending back a redacted key would
-  wipe it).
+- **A credential must never enter the DOM.** No step kind declares one any more (the LLM
+  Router owns endpoints and keys) and the server strips every credential-*named* key from
+  each read path, but the screen ALSO drops anything matching `SECRET_KEY` — including in
+  the raw-JSON view, which is rebuilt from the parsed steps rather than echoing the stored
+  string. A legacy `api_key` therefore never renders, and the next save drops it for good.
 
-Covered by `just e2e-int` (`runPipelineStepsUi` + `seedPipeline` in the harness).
+### The `model` field is a picker, not a text box (`src/ModelPicker.tsx`)
+
+A model name belongs to exactly ONE provider: a Claude id sent to an Ollama box is a 404 →
+a 4xx → no fallback → the pipeline dies hard. Typing one was the easiest way to break a
+pipeline, so the catalog gives the `model` field `type: "model"` and the editor renders a
+searchable modal instead: results **grouped under provider headers**, the search matching
+model ids AND provider names, plus an explicit *Provider default* row (clearing the model
+hands the choice back to the endpoint's `default_model` — what a fallback chain needs).
+
+- Selecting writes **both** `model` and `provider` through one `setModelChoice` update.
+  Two `setFieldValue` calls would each start from the pre-update drafts and the second
+  would drop the first's write — and a model naming a different endpoint than its provider
+  is exactly the 404 this feature exists to prevent.
+- `src/llmModels.ts` — `fetchLLMModels` (`GET /api/v1/llm/models`, grouped + cached
+  server-side) and `probeLLMProviders` (`POST /api/v1/llm/probe`). Sibling of
+  `llmStatus.ts`; that one reads the passive health registry, these ACTIVELY ask.
+- The picker follows the native Modal focus rule below (focus from `onShow`, deferred).
+
+Covered by `just e2e-int` (`runPipelineStepsUi` + `seedPipeline`/`startStubLLM` in the
+harness — a stub OpenAI-compatible box gives the catalog real rows with no network and no
+spend).
 
 ## Connection state — NEVER bypass ConnectionProvider
 
@@ -506,10 +525,26 @@ Settings row, the same affordance as "update available" (a broken service outran
 
 `src/llmStatus.ts` hits `GET /api/v1/llm/status` and owns the two label helpers:
 `llmErrorLabel` (kind → "Out of credits / rate limited", "Bad or missing API key",
-"Unreachable") and `llmProviderLabel` (host for a self-hosted openai_compat box). The
-server never probes — a row's status is the last real call's outcome (see
-`server/CLAUDE.md` → LLM provider health), so a provider with lifetime spend but no
-recorded outcome reads "No status yet — last call …", not "No calls yet".
+"Unreachable") and `llmProviderLabel` (the Router's own `label`, falling back to the host
+for a retired row). Nothing probes on a render — a row's status is the last real call's
+outcome (see `server/CLAUDE.md` → LLM provider health), so a provider with lifetime spend
+but no recorded outcome reads "No status yet — last call …", not "No calls yet".
+
+**The card's Probe button is the one active check.** It calls
+`probeLLMProviders(url, token)` (shallow — a screen never spends tokens) and adds a
+`Probed: …` line per row: reachable, bad key, out of credits, or the model count. The
+results are screen state on purpose, so a re-navigation clears them (an e2e check that
+re-navigates to read the text will therefore see nothing — read in place).
+
+**Spend is never shown on an `available` row.** `llm_usages` records the provider NAME
+only, so every `openai_compat` row matches the same usage total — a discovered box nothing
+ever routed to would claim another endpoint's calls and its "last call" time. The lookup is
+therefore skipped for `role === 'available'`; such a row reads "No calls yet".
+
+**The drawer dot follows the ROUTING CHAIN.** `useServiceAlert` flags only a
+`primary`/`fallback` provider whose last call failed. `retired` is history, and
+`available` (discovered from an env key — nothing routes through it) is an offer, not a
+dependency; neither can break a pipeline, so neither raises the dot.
 
 Covered by `just e2e-int` (`runSettingsServices`): group order, a staged quota failure
 rendering as *out of credits*, a retired provider keeping its history without alarming,

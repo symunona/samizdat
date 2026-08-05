@@ -34,7 +34,7 @@ func TestOpenAICompatUsesSectionDefaultModel(t *testing.T) {
 	srv := fakeOllama(t, &got)
 	defer srv.Close()
 
-	c := New(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL + "/v1", DefaultModel: "gemma3:4b"})
+	c := NewRouter(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL + "/v1", DefaultModel: "gemma3:4b"})
 	_, usage, err := c.Complete(context.Background(), "", nil)
 	if err != nil {
 		t.Fatalf("complete: %v", err)
@@ -52,7 +52,7 @@ func TestExplicitModelBeatsDefault(t *testing.T) {
 	srv := fakeOllama(t, &got)
 	defer srv.Close()
 
-	c := New(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL + "/v1", DefaultModel: "gemma3:4b"})
+	c := NewRouter(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL + "/v1", DefaultModel: "gemma3:4b"})
 	if _, _, err := c.Complete(context.Background(), "qwen2.5:3b", nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestOpenAICompatNoModelIsAnError(t *testing.T) {
 	srv := fakeOllama(t, &got)
 	defer srv.Close()
 
-	c := New(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL + "/v1"})
+	c := NewRouter(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL + "/v1"})
 	_, _, err := c.Complete(context.Background(), "", nil)
 	if err == nil || !strings.Contains(err.Error(), "default_model") {
 		t.Fatalf("want a 'set llm.default_model' error, got %v", err)
@@ -91,7 +91,7 @@ func TestFallbackChainResolvesPerProviderModels(t *testing.T) {
 	}))
 	defer local.Close()
 
-	c := New(config.LLMSection{
+	r := NewRouter(config.LLMSection{
 		Provider:     "openai_compat",
 		BaseURL:      local.URL + "/v1",
 		DefaultModel: "gemma3:4b",
@@ -100,9 +100,9 @@ func TestFallbackChainResolvesPerProviderModels(t *testing.T) {
 		},
 	})
 
-	fc, ok := c.(*fallbackClient)
+	fc, ok := r.chain.(*fallbackClient)
 	if !ok {
-		t.Fatalf("want a fallback chain, got %T", c)
+		t.Fatalf("want a fallback chain, got %T", r.chain)
 	}
 	// Swap the cloud leg for a stub — the point is the model each leg is asked for,
 	// not a real Anthropic call.

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
 )
@@ -21,10 +20,8 @@ func init() {
 		Label:       "Summarize",
 		Description: "One caveman-style bullet summary highlight per document.",
 		Fields: []FieldSpec{
-			{Key: "model", Label: "Model", Type: "string", Help: "Empty = the provider's default_model."},
-			{Key: "provider", Label: "Provider", Type: "string", Help: "anthropic | openai_compat. Empty = the server's LLM client."},
-			{Key: "base_url", Label: "Base URL", Type: "string", Help: "openai_compat endpoint override."},
-			{Key: "api_key", Label: "API key", Type: "string", Secret: true},
+			{Key: "model", Label: "Model", Type: "model", Help: "Empty = the provider's default_model."},
+			{Key: "provider", Label: "Provider", Type: "string", Help: "Router provider id (`just check-llm` lists them). Empty = the configured chain."},
 			{Key: promptKey, Label: "Prompt", Type: "text", Default: summarizeDefaultPrompt},
 		},
 	}, handleLLMSummarize)
@@ -40,12 +37,10 @@ const summarizeDefaultPrompt = "Summarize as caveman. Rules: drop all articles (
 type llmSummarizeConfig struct {
 	Model    string `json:"model"`
 	Prompt   string `json:"prompt"`
-	Provider string `json:"provider"` // optional: override global client provider
-	BaseURL  string `json:"base_url"` // optional: override base URL (for openai_compat)
-	APIKey   string `json:"api_key"`  // optional: override API key
+	Provider string `json:"provider"` // optional: pin a Router provider (no fallback)
 }
 
-func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, globalClient llm.Client) (StepResult, error) {
+func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, router *llm.Router) (StepResult, error) {
 	var c llmSummarizeConfig
 	_ = ParseStepConfig(cfg, &c)
 	// No model default here: model names are provider-specific, so an unset model
@@ -55,18 +50,8 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 		c.Prompt = defaultPrompt(kindLLMSummarize)
 	}
 
-	// Use step-level provider if specified, otherwise fall back to global client.
-	client := globalClient
-	if c.Provider != "" {
-		client = llm.New(config.LLMSection{
-			Provider:     c.Provider,
-			BaseURL:      c.BaseURL,
-			APIKey:       c.APIKey,
-			DefaultModel: c.Model,
-		})
-	}
-	if client == nil {
-		return StepResult{}, fmt.Errorf("llm_summarize: no LLM client configured")
+	if !router.Configured() {
+		return StepResult{}, fmt.Errorf("llm_summarize: no LLM provider configured")
 	}
 
 	doc, err := q.GetDocumentByID(ctx, run.DocumentID)
@@ -80,7 +65,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	}
 
 	userMsg := renderPrompt(c.Prompt, map[string]string{"title": doc.Title, "content": content})
-	reply, usage, err := client.Complete(ctx, c.Model, []llm.Message{
+	reply, usage, err := router.CompleteRoute(ctx, llm.Route{Provider: c.Provider, Model: c.Model}, []llm.Message{
 		{Role: "user", Content: userMsg},
 	})
 	if err != nil {

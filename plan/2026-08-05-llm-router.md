@@ -2,7 +2,7 @@
 created: 2026-08-05
 topic: Centralize the LLM router — provider discovery, real probes, model catalog, model picker UI
 excerpt: One Router owns every LLM endpoint (LAN Ollama, local Ollama, Anthropic, OpenRouter); `just check-llm` actually probes auth + credits; `GET /api/v1/llm/models` feeds a searchable, provider-grouped model selector in the pipeline step editor
-status: planned
+status: built + verified (unit + e2e-int + live probe), awaiting user check before squash-merge to main
 ---
 
 ## Why
@@ -234,3 +234,53 @@ the last recorded error).
 
 The automatic paths are untouched: nothing on a render path probes, deep or otherwise.
 The Settings Probe button is shallow — it is one tap away from a render.
+
+## What changed while building it
+
+Three things landed differently from the design above. Each is a decision, not a slip:
+
+1. **Provider ids are `host:port` for self-hosted boxes, not `ollama-local`.** The plan
+   assumed the well-known local candidate is Ollama; nothing proves that (LM Studio on
+   `localhost:1234` would read as "ollama-local" and lie). `localhost:11434` /
+   `100.111.210.47:11434` is unambiguous, and it is the only thing that tells two boxes
+   apart. Cloud endpoints still get their brand (`anthropic`, `openrouter`, `openai`).
+
+2. **`RedactSecrets`/`PreserveSecrets` did not stay — they were replaced by one
+   `StripCredentials`.** With `api_key` gone from every step spec, `Secret: true` had no
+   live field, so both functions plus `FieldSpec.Secret` were dead code by the repo's own
+   rule. `StripCredentials` keys on the credential *name* instead of the catalog, which
+   covers strictly more: a legacy row AND a hand-added key no kind declares. There is no
+   write-side counterpart because nothing reads those keys any more. Guarded by
+   `TestStepCatalogDeclaresNoCredential` (a credential field reappearing fails the build)
+   and `TestPipelineStripsLegacyCredential`.
+
+3. **`Router.Complete` kept the `Client` signature; the routed call is `CompleteRoute`.**
+   Go cannot have two methods named `Complete`, and the Router has to remain a `Client` so
+   every pre-Router caller is untouched.
+
+Two things the work surfaced that were not in the plan:
+
+- **The drawer alert dot was scoped to the routing chain.** It flagged any non-`retired`
+  provider whose last call failed — but discovery introduces `available` providers
+  (an env key, the well-known local box) that nothing routes through. A dead
+  `localhost:11434` nobody uses must not paint an alert, so `useServiceAlert` now flags
+  only `primary`/`fallback`.
+- **The e2e server now runs with the cloud env keys stripped.** Discovery reads the
+  environment, so on this box the suite was probing the live internet and the
+  "retired provider" fixture stopped being retired (Anthropic got discovered). The
+  harness clears `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` for the
+  test server: config only, hermetic.
+
+## Verified
+
+- `just test-go` — unit tests incl. discovery dedup, pinned-no-fallback, legacy provider
+  names, probe classification (reachable vs refused, OpenRouter credits, a deep ping on a
+  spent balance), model grouping.
+- `just lint` — 0 issues (server, cli, app, tooling), parity clean.
+- `just e2e` — green. `just e2e-int` — green, including the model picker interaction
+  (grouped list → search → pick → save writes model AND provider → survives reload) and
+  the Settings Probe row.
+- **Live**: `just check-llm` against the real config discovered all four providers —
+  LAN Ollama (primary, 5 models), Anthropic (fallback, credits verified by 1-token ping),
+  OpenRouter (discovered from env, `$6.30 used, no limit set`, 338 models), and the local
+  Ollama that is not running (unreachable).

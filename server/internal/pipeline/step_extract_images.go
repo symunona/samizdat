@@ -31,7 +31,7 @@ type extractImagesConfig struct {
 // mdImageRe matches ![alt](url) in markdown.
 var mdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\((https?://[^)\s]+)\)`)
 
-func handleExtractImages(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, _ llm.Client) (StepResult, error) {
+func handleExtractImages(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, _ *llm.Router) (StepResult, error) {
 	var c extractImagesConfig
 	_ = ParseStepConfig(cfg, &c)
 

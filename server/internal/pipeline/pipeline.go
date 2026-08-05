@@ -85,11 +85,12 @@ type StepResult struct {
 	NewState string // updated intermediate state for next call
 }
 
-// Handler is the function signature for a step kind.
-type Handler func(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, llmClient llm.Client) (StepResult, error)
+// Handler is the function signature for a step kind. Every step gets the Router,
+// not a Client: choosing an endpoint is routing, and routing has exactly one owner.
+type Handler func(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, router *llm.Router) (StepResult, error)
 
 // Dispatch runs the current step for the given pipeline run.
-func Dispatch(ctx context.Context, q *store.Queries, run store.PipelineRun, pipeline store.Pipeline, llmClient llm.Client) (StepResult, error) {
+func Dispatch(ctx context.Context, q *store.Queries, run store.PipelineRun, pipeline store.Pipeline, router *llm.Router) (StepResult, error) {
 	var steps []StepConfig
 	if err := json.Unmarshal([]byte(pipeline.Steps), &steps); err != nil {
 		return StepResult{}, fmt.Errorf("parse steps: %w", err)
@@ -105,7 +106,7 @@ func Dispatch(ctx context.Context, q *store.Queries, run store.PipelineRun, pipe
 	if !ok {
 		return StepResult{}, fmt.Errorf("unknown step kind %q", step.Kind)
 	}
-	return reg.handler(ctx, q, run, step.Config, llmClient)
+	return reg.handler(ctx, q, run, step.Config, router)
 }
 
 // MatchesDocument checks whether the pipeline filter matches the given document + feed URL.

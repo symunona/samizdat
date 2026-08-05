@@ -4,6 +4,7 @@
 import puppeteer from 'puppeteer-core'
 import { spawn, execSync } from 'node:child_process'
 import fs from 'node:fs'
+import http from 'node:http'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -65,6 +66,10 @@ export async function startServer() {
   const serverProc = spawn(SERVER_BIN, ['--config', TEST_CONFIG], {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true, // own process group — cleanup kills the whole tree
+    // The LLM Router discovers providers from the environment, so a real key on
+    // this box would make the suite probe the live internet AND would un-retire
+    // the retired-provider fixture. Strip them: the test server sees config only.
+    env: { ...process.env, ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', OPENROUTER_API_KEY: '' },
   })
   serverProc.stdout.on('data', d => process.stdout.write(`  [server] ${d}`))
   serverProc.stderr.on('data', d => process.stdout.write(`  [server] ${d}`))
@@ -75,6 +80,37 @@ export async function startServer() {
   if (!up) throw new Error('server did not become healthy within 8s')
   console.log('  server ready')
   return serverProc
+}
+
+// The port config-test.toml's llm fallback points at. A stub box here gives the
+// model catalog (and the picker) real rows with no network and no spend; when it
+// is NOT running (the smoke suite), that provider simply probes as unreachable.
+export const STUB_LLM_PORT = 8767
+
+export const STUB_LLM_MODELS = ['stub-large', 'stub-small']
+
+// startStubLLM serves the OpenAI-compatible surface the Router probes and lists:
+// GET /v1/models and POST /v1/chat/completions.
+export function startStubLLM() {
+  const server = http.createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json')
+    if (req.url.startsWith('/v1/models')) {
+      res.end(JSON.stringify({ data: STUB_LLM_MODELS.map(id => ({ id })) }))
+      return
+    }
+    if (req.url.startsWith('/v1/chat/completions')) {
+      res.end(JSON.stringify({
+        choices: [{ message: { content: 'stub reply' } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }))
+      return
+    }
+    res.statusCode = 404
+    res.end('{}')
+  })
+  server.listen(STUB_LLM_PORT, '127.0.0.1')
+  console.log('  stub LLM box on port', STUB_LLM_PORT)
+  return server
 }
 
 export async function pairDevice(name = 'e2e-device') {
@@ -295,8 +331,9 @@ export function makeCleanup(getState) {
   return async function cleanup() {
     if (done) return
     done = true
-    const { browser, serverProc } = getState()
+    const { browser, serverProc, stubLLM } = getState()
     if (browser) { try { await browser.close() } catch {} }
+    if (stubLLM) { try { stubLLM.close() } catch {} }
     if (serverProc) {
       try { process.kill(-serverProc.pid, 'SIGTERM') } catch {}
       await sleep(600)

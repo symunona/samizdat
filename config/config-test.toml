@@ -21,3 +21,12 @@ dir     = "/tmp/samizdat-test/export-vault"
 provider      = "openai_compat"
 base_url      = "http://127.0.0.1:9/v1"
 default_model = "test-model"
+
+# The integration harness serves a stub OpenAI-compatible box here (harness.js
+# startStubLLM), so the model catalog and the picker have real rows without any
+# network or spend. `just e2e` does not start it — that provider then simply
+# probes as unreachable, which is itself an assertion in the probe check.
+[[llm.fallback]]
+provider      = "openai_compat"
+base_url      = "http://127.0.0.1:8767/v1"
+default_model = "stub-large"

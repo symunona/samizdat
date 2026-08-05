@@ -34,7 +34,7 @@ type runPipelineStepPayload struct {
 	StepIndex     int    `json:"step_index,omitempty"`
 }
 
-func handleRunPipeline(ctx context.Context, q *store.Queries, db *sql.DB, job store.Job, llmClient llm.Client, reg extractor.Registry) (string, error) {
+func handleRunPipeline(ctx context.Context, q *store.Queries, db *sql.DB, job store.Job, llmRouter *llm.Router, reg extractor.Registry) (string, error) {
 	var p runPipelinePayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 		return "", fmt.Errorf("bad payload: %w", err)
@@ -148,7 +148,7 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, db *sql.DB, job st
 	return string(result), nil
 }
 
-func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job, llmClient llm.Client) (string, error) {
+func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job, llmRouter *llm.Router) (string, error) {
 	var p runPipelineStepPayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 		return "", fmt.Errorf("bad payload: %w", err)
@@ -167,7 +167,7 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 	logPipeline.Printf("run %s pipeline %s (%s) step %d dispatching",
 		run.ID[:8], pl.ID[:8], pl.Name, run.StepIndex)
 
-	result, err := pipeline.Dispatch(pipeline.WithParentJobID(ctx, job.ID), q, run, pl, llmClient)
+	result, err := pipeline.Dispatch(pipeline.WithParentJobID(ctx, job.ID), q, run, pl, llmRouter)
 	if err != nil {
 		return "", fmt.Errorf("dispatch step: %w", err)
 	}

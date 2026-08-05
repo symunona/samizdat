@@ -11,6 +11,8 @@ import { useLatestBuild } from '../../src/useUpdate'
 import { useProxyStatus, useExportStats, useLLMStatus } from '../../src/useServices'
 import { llmErrorLabel, llmProviderLabel } from '../../src/llmStatus'
 import type { LLMProvider } from '../../src/llmStatus'
+import { probeLLMProviders, probeSummary } from '../../src/llmModels'
+import type { LLMProbeResult } from '../../src/llmModels'
 import { clearConnection, removeServerUrl, loadUrlLastUsedMap } from '../../src/storage'
 import { useConnection } from '../../src/ConnectionContext'
 import { useConfirm } from '../../src/ConfirmContext'
@@ -105,6 +107,12 @@ export default function SettingsScreen() {
   const { data: proxyStatus, refetch: refetchProxy, isFetching: proxyFetching } = useProxyStatus()
   const { data: exportStats, refetch: refetchExport, isFetching: exportFetching } = useExportStats()
   const { data: llmStatus } = useLLMStatus()
+  // The LLM card is passive by default (status = the last real call's outcome, see
+  // server/CLAUDE.md). This is the one place that ACTIVELY asks — on a tap, never
+  // on a render, and shallow: no tokens are spent from a screen.
+  const [llmProbing, setLlmProbing] = useState(false)
+  const [llmProbe, setLlmProbe] = useState<LLMProbeResult[] | null>(null)
+  const [llmProbeError, setLlmProbeError] = useState<string | null>(null)
   const [proxyRechecking, setProxyRechecking] = useState(false)
   // Only flash "Checking…" on first load, on an explicit recheck, or while the
   // last known status was broken. A healthy background poll stays green instead
@@ -423,12 +431,30 @@ export default function SettingsScreen() {
     )
   }
 
+  async function handleProbeLLM() {
+    if (!activeUrl || !token || llmProbing) return
+    setLlmProbing(true)
+    setLlmProbeError(null)
+    try {
+      setLlmProbe(await probeLLMProviders(activeUrl, token))
+    } catch (e) {
+      setLlmProbeError(e instanceof Error ? e.message : 'Probe failed')
+    } finally {
+      setLlmProbing(false)
+    }
+  }
+
   // One row per configured LLM endpoint: what it is, whether the LAST real call
   // worked, and what went wrong if it didn't (there is no active probe — a
   // health-check completion would cost money on every render).
   const renderLLMProvider = (p: LLMProvider, last: boolean) => {
     const color = p.status === 'ok' ? theme.colors.online : p.status === 'error' ? theme.colors.error : theme.colors.placeholder
-    const usage = llmStatus?.usage.find((u) => u.provider === p.provider)
+    // Spend is keyed by provider NAME (all llm_usages records), so every
+    // openai_compat row would otherwise claim the same calls — including a
+    // discovered box nothing has ever routed to. Only a row that is (or was) in the
+    // routing chain can own that history.
+    const usage = p.role === 'available' ? undefined : llmStatus?.usage.find((u) => u.provider === p.provider)
+    const probe = llmProbe?.find((r) => r.id === p.id)
     return (
       <View key={p.key} style={[s.providerRow, !last && s.providerRowBorder]}>
         <View style={s.providerHeadRow}>
@@ -453,6 +479,11 @@ export default function SettingsScreen() {
         {p.status === 'error' && p.last_error ? (
           <Text style={s.providerError} numberOfLines={3}>{p.last_error}</Text>
         ) : null}
+        {probe ? (
+          <Text style={[s.providerProbe, !probe.reachable && { color: theme.colors.error }]} numberOfLines={2}>
+            {`Probed: ${probeSummary(probe)}${probe.latency_ms ? ` · ${probe.latency_ms}ms` : ''}`}
+          </Text>
+        ) : null}
         {p.calls > 0 || usage ? (
           <Text style={s.providerUsage}>
             {/* Routing is per ENDPOINT (health registry); spend is per provider name
@@ -473,10 +504,24 @@ export default function SettingsScreen() {
 
   const renderLLMCard = () => (
     <View style={s.card}>
-      <View style={s.titleGroup}>
-        <Text style={s.cardTitle}>LLM Services</Text>
-        <Text style={s.cardSubtitle}>Status of the last call to each provider — pipelines route through these</Text>
+      <View style={s.cardHeader}>
+        <View style={s.titleGroup}>
+          <Text style={s.cardTitle}>LLM Services</Text>
+          <Text style={s.cardSubtitle}>Status of the last call to each provider — pipelines route through these</Text>
+        </View>
+        <Pressable
+          onPress={handleProbeLLM}
+          disabled={llmProbing}
+          style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed, llmProbing && s.refreshBtnDisabled]}
+          accessibilityLabel="probe llm providers"
+        >
+          {llmProbing
+            ? <ActivityIndicator size="small" color={theme.colors.accent} />
+            : <Text style={s.refreshBtnText}>Probe</Text>
+          }
+        </Pressable>
       </View>
+      {llmProbeError ? <Text style={s.providerError}>{llmProbeError}</Text> : null}
       {!llmStatus ? (
         <ActivityIndicator size="small" color={theme.colors.accent} style={{ alignSelf: 'flex-start' }} />
       ) : llmStatus.providers.length === 0 ? (
@@ -1155,6 +1200,7 @@ function buildStyles(t: Theme) {
     providerModel: { color: t.colors.placeholder, fontSize: 11, fontFamily: 'monospace', flexShrink: 1 },
     providerStatus: { fontSize: 13, fontWeight: '600', lineHeight: 18 },
     providerError: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace', lineHeight: 15 },
+    providerProbe: { color: t.colors.muted, fontSize: 11, marginTop: 2 },
     providerUsage: { color: t.colors.muted, fontSize: 11, lineHeight: 16 },
     providerShare: { color: t.colors.accent, fontWeight: '700' },
     subHeading: { color: t.colors.muted, fontSize: 12, fontWeight: '700', marginTop: t.spacing.sm },

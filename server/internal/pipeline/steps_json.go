@@ -1,6 +1,9 @@
 package pipeline
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"regexp"
+)
 
 // stepMap is one {kind, config} object of the pipelines.steps array, kept as raw
 // JSON so a rewrite preserves keys this server doesn't know about.
@@ -58,43 +61,32 @@ func encodeSteps(steps []stepMap, fallback string) string {
 	return string(out)
 }
 
-// secretKeys lists the config keys a kind marks Secret — never sent to a client,
-// never taken from one.
-func secretKeys(kind string) []string {
-	reg, ok := registry[kind]
-	if !ok {
-		return nil
-	}
-	var keys []string
-	for _, f := range reg.spec.Fields {
-		if f.Secret {
-			keys = append(keys, f.Key)
-		}
-	}
-	return keys
-}
+// credentialKeyRe matches config keys that would be credentials. Credentials no
+// longer belong in a pipeline row at all — the Router owns every endpoint and its
+// key (design rule 5) — but rows written before that still carry an api_key, and
+// an inert secret must still never reach a client.
+var credentialKeyRe = regexp.MustCompile(`(?i)api[_-]?key|secret|token|password|passphrase`)
 
-// RedactSecrets strips every Secret config key (api_key) from a steps JSON
-// string, for responses. The key is removed entirely, not blanked, so a client
-// round-trip can be told apart from a deliberate clear.
-func RedactSecrets(stepsJSON string) string {
+// StripCredentials removes every credential-looking config key from a steps JSON
+// string, for responses. Keyed on the key NAME rather than on the step catalog,
+// so it also covers a legacy or hand-added key no kind declares.
+//
+// There is deliberately no write-side counterpart: nothing reads these keys any
+// more, so a save that drops one loses nothing the server would have used.
+func StripCredentials(stepsJSON string) string {
 	steps, ok := decodeSteps(stepsJSON)
 	if !ok {
 		return stepsJSON
 	}
 	changed := false
 	for _, step := range steps {
-		keys := secretKeys(stepKind(step))
-		if len(keys) == 0 {
-			continue
-		}
 		cfg, ok := stepConfig(step)
 		if !ok {
 			continue
 		}
 		dropped := false
-		for _, k := range keys {
-			if _, present := cfg[k]; present {
+		for k := range cfg {
+			if credentialKeyRe.MatchString(k) {
 				delete(cfg, k)
 				dropped = true
 			}
@@ -107,57 +99,4 @@ func RedactSecrets(stepsJSON string) string {
 		return stepsJSON
 	}
 	return encodeSteps(steps, stepsJSON)
-}
-
-// PreserveSecrets copies Secret config values from the stored steps into the
-// incoming ones (matched by index + kind) whenever the incoming step omits them.
-// The UI never sees an api_key, so without this a save would wipe it.
-func PreserveSecrets(incomingJSON, storedJSON string) string {
-	incoming, ok := decodeSteps(incomingJSON)
-	if !ok {
-		return incomingJSON
-	}
-	stored, ok := decodeSteps(storedJSON)
-	if !ok {
-		return incomingJSON
-	}
-	changed := false
-	for i, step := range incoming {
-		if i >= len(stored) {
-			break
-		}
-		kind := stepKind(step)
-		if kind == "" || kind != stepKind(stored[i]) {
-			continue
-		}
-		keys := secretKeys(kind)
-		if len(keys) == 0 {
-			continue
-		}
-		cfg, ok := stepConfig(step)
-		if !ok {
-			continue
-		}
-		oldCfg, ok := stepConfig(stored[i])
-		if !ok {
-			continue
-		}
-		restored := false
-		for _, k := range keys {
-			if _, present := cfg[k]; present {
-				continue
-			}
-			if v, had := oldCfg[k]; had {
-				cfg[k] = v
-				restored = true
-			}
-		}
-		if restored && setStepConfig(step, cfg) {
-			changed = true
-		}
-	}
-	if !changed {
-		return incomingJSON
-	}
-	return encodeSteps(incoming, incomingJSON)
 }

@@ -12,6 +12,9 @@ import (
 type anthropicClient struct {
 	apiKey       string
 	defaultModel string
+	// baseURL is a field rather than a constant so probe tests can point it at an
+	// httptest server. There is exactly one real value (anthropicBaseURL).
+	baseURL string
 }
 
 func (c *anthropicClient) Complete(ctx context.Context, model string, messages []Message) (reply string, u Usage, err error) {
@@ -43,7 +46,7 @@ func (c *anthropicClient) Complete(ctx context.Context, model string, messages [
 	body, _ := json.Marshal(reqBody{Model: model, MaxTokens: 4096, Messages: msgs})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+		trimSlash(c.baseURL)+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return "", Usage{}, fmt.Errorf("new request: %w", err)
 	}

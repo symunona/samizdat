@@ -1,20 +1,36 @@
 package pipeline
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/llm"
 )
 
-// summarizeStub is a canned llm.Client: it returns a fixed reply so the summarize
-// step is exercised without a real provider.
-type summarizeStub struct{ reply string }
-
-func (s summarizeStub) Complete(_ context.Context, _ string, _ []llm.Message) (string, llm.Usage, error) {
-	return s.reply, llm.Usage{Provider: "stub"}, nil
+// stubRouter is a Router pointed at a fake OpenAI-compatible box that answers
+// with reply. Steps take a Router, not a Client, so the test drives the same
+// resolution path production does.
+func stubRouter(t *testing.T, reply string) *llm.Router {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"choices": []map[string]any{{"message": map[string]string{"content": reply}}},
+		"usage":   map[string]int{"prompt_tokens": 7, "completion_tokens": 3},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	return llm.NewRouter(config.LLMSection{
+		Provider: "openai_compat", BaseURL: srv.URL + "/v1", DefaultModel: "stub",
+	})
 }
 
 // TestLLMSummarizeFalseParseToken: when the model emits the NOT_PARSEABLE
@@ -23,7 +39,7 @@ func (s summarizeStub) Complete(_ context.Context, _ string, _ []llm.Message) (s
 func TestLLMSummarizeFalseParseToken(t *testing.T) {
 	ctx, q, run := setupRun(t)
 
-	_, err := handleLLMSummarize(ctx, q, run, json.RawMessage(`{}`), summarizeStub{reply: notParseableToken})
+	_, err := handleLLMSummarize(ctx, q, run, json.RawMessage(`{}`), stubRouter(t, notParseableToken))
 	var fpe *FalseParseError
 	if !errors.As(err, &fpe) {
 		t.Fatalf("want *FalseParseError, got %v", err)
@@ -45,7 +61,7 @@ func TestLLMSummarizeFalseParseToken(t *testing.T) {
 func TestLLMSummarizeNormalControl(t *testing.T) {
 	ctx, q, run := setupRun(t)
 
-	_, err := handleLLMSummarize(ctx, q, run, json.RawMessage(`{}`), summarizeStub{reply: "- **foxes** run fast, matters for speed"})
+	_, err := handleLLMSummarize(ctx, q, run, json.RawMessage(`{}`), stubRouter(t, "- **foxes** run fast, matters for speed"))
 	if err != nil {
 		t.Fatalf("normal summarize: %v", err)
 	}

@@ -17,11 +17,11 @@ func configOf(t *testing.T, stepsJSON string, idx int) map[string]any {
 	return steps[idx].Config
 }
 
-// TestRedactSecretsDropsAPIKey: the key is removed entirely, other config
-// survives, and a kind with no secret field is untouched.
-func TestRedactSecretsDropsAPIKey(t *testing.T) {
+// TestStripCredentialsDropsLegacyKey: the key is removed entirely, other config
+// survives, and a step carrying no credential is untouched.
+func TestStripCredentialsDropsLegacyKey(t *testing.T) {
 	in := `[{"kind":"llm_summarize","config":{"model":"m","api_key":"sk-123"}},{"kind":"extract_images","config":{"max_images":3}}]`
-	out := RedactSecrets(in)
+	out := StripCredentials(in)
 	if strings.Contains(out, "sk-123") {
 		t.Fatalf("api key leaked: %s", out)
 	}
@@ -37,34 +37,27 @@ func TestRedactSecretsDropsAPIKey(t *testing.T) {
 	}
 }
 
-// TestPreserveSecretsRestoresOmittedKey: a save that omits api_key (the UI never
-// sees it) keeps the stored value; an explicitly sent value wins.
-func TestPreserveSecretsRestoresOmittedKey(t *testing.T) {
-	stored := `[{"kind":"llm_summarize","config":{"model":"old","api_key":"sk-123"}}]`
-
-	merged := PreserveSecrets(`[{"kind":"llm_summarize","config":{"model":"new"}}]`, stored)
-	cfg := configOf(t, merged, 0)
-	if cfg["api_key"] != "sk-123" {
-		t.Fatalf("api_key not preserved: %s", merged)
-	}
-	if cfg["model"] != "new" {
-		t.Fatalf("edit lost: %s", merged)
-	}
-
-	rotated := PreserveSecrets(`[{"kind":"llm_summarize","config":{"api_key":"sk-new"}}]`, stored)
-	if got := configOf(t, rotated, 0)["api_key"]; got != "sk-new" {
-		t.Fatalf("explicit api_key overwritten: %s", rotated)
+// TestStripCredentialsCoversUndeclaredKeys: the strip is keyed on the key NAME,
+// not on the step catalog, so a hand-added credential no kind declares is caught
+// too — that is the case a catalog-driven redaction always missed.
+func TestStripCredentialsCoversUndeclaredKeys(t *testing.T) {
+	for _, key := range []string{"api_key", "apiKey", "auth_token", "password", "webhook_secret"} {
+		in := `[{"kind":"extract_images","config":{"` + key + `":"leak-me","max_images":1}}]`
+		out := StripCredentials(in)
+		if strings.Contains(out, "leak-me") {
+			t.Fatalf("%s survived the strip: %s", key, out)
+		}
+		if configOf(t, out, 0)["max_images"] != float64(1) {
+			t.Fatalf("%s: sibling config lost: %s", key, out)
+		}
 	}
 }
 
-// TestPreserveSecretsIgnoresKindChange: replacing a step with a different kind
-// must not inherit the old step's key.
-func TestPreserveSecretsIgnoresKindChange(t *testing.T) {
-	merged := PreserveSecrets(
-		`[{"kind":"extract_images","config":{}}]`,
-		`[{"kind":"llm_summarize","config":{"api_key":"sk-123"}}]`,
-	)
-	if strings.Contains(merged, "sk-123") {
-		t.Fatalf("key carried across a kind change: %s", merged)
+// TestStripCredentialsLeavesUnparseableAlone: a rewrite must never corrupt a row
+// it cannot read.
+func TestStripCredentialsLeavesUnparseableAlone(t *testing.T) {
+	in := `not json at all`
+	if out := StripCredentials(in); out != in {
+		t.Fatalf("mangled unparseable steps: %s", out)
 	}
 }

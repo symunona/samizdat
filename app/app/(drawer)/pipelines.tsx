@@ -27,6 +27,8 @@ import type {
 } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
 import IconButton from '../../src/IconButton'
+import ModelPicker from '../../src/ModelPicker'
+import type { ModelChoice } from '../../src/ModelPicker'
 import { useToast } from '../../src/ToastContext'
 
 const STATUS_COLOR: Record<string, string> = {
@@ -89,7 +91,7 @@ function summarizeSteps(stepsJson: string): string {
 // describes the keys a kind knows about. Keys the catalog does not describe are
 // still editable — a pipeline row can carry anything.
 
-type FieldType = 'string' | 'text' | 'int' | 'bool' | 'json'
+type FieldType = 'string' | 'text' | 'int' | 'bool' | 'json' | 'model'
 
 type StepFieldRow = {
   key: string
@@ -103,14 +105,14 @@ type StepFieldRow = {
 
 type StepDraft = { kind: string; label: string; description: string; rows: StepFieldRow[] }
 
-// Credentials never reach a client (design rule 5): the catalog FLAGS a field
-// `secret` (naming it, never valuing it) and the server redacts it from GET. The
-// key-name guard is the third lock, and the only one covering a hand-added custom
-// key the catalog does not describe — a leaked credential must not become a
-// rendered, re-savable input.
+// Credentials never reach a client (design rule 5): they belong to the LLM Router
+// (config.toml + env), no step kind declares one, and the server strips any
+// credential-named key from every read path. This mirrors that same key-name test
+// as the second lock — a leaked credential must not become a rendered, re-savable
+// input, and the raw-JSON view is rebuilt through it too.
 const SECRET_KEY = /api[_-]?key|secret|token|password|passphrase/i
-function isSecretField(key: string, spec?: StepFieldSpec): boolean {
-  return spec?.secret === true || SECRET_KEY.test(key)
+function isSecretField(key: string): boolean {
+  return SECRET_KEY.test(key)
 }
 
 // The key is always shown, so a label that is only the key re-cased ("base_url" →
@@ -120,9 +122,11 @@ function addsMeaning(label: string, key: string): boolean {
   return norm(label) !== norm(key)
 }
 
+const SPEC_TYPES: FieldType[] = ['text', 'int', 'bool', 'string', 'model']
+
 function fieldType(spec: StepFieldSpec | undefined, value: unknown): FieldType {
-  if (spec?.type === 'text' || spec?.type === 'int' || spec?.type === 'bool' || spec?.type === 'string') {
-    return spec.type
+  if (spec && (SPEC_TYPES as string[]).includes(spec.type)) {
+    return spec.type as FieldType
   }
   if (typeof value === 'boolean') return 'bool'
   if (typeof value === 'number') return 'int'
@@ -159,7 +163,7 @@ function buildDrafts(pipeline: Pipeline, catalog: StepKindSpec[]): StepDraft[] {
     const fields = spec?.fields ?? []
     const extraKeys = Object.keys(step.config).filter(k => !fields.some(f => f.key === k))
     const rows: StepFieldRow[] = [...fields.map(f => f.key), ...extraKeys]
-      .filter(key => !isSecretField(key, fields.find(f => f.key === key)))
+      .filter(key => !isSecretField(key))
       .map(key => {
         const fs = fields.find(f => f.key === key)
         const raw = step.config[key]
@@ -196,13 +200,12 @@ function draftsToSteps(drafts: StepDraft[]): PipelineStep[] {
 
 // Rebuilt from the parsed steps rather than echoing the stored string, so the raw
 // view cannot become the one place a credential shows up.
-function prettySteps(pipeline: Pipeline, catalog: StepKindSpec[]): string {
+function prettySteps(pipeline: Pipeline): string {
   const steps = parseSteps(pipeline).map(step => {
-    const fields = catalog.find(k => k.kind === step.kind)?.fields ?? []
     return {
       kind: step.kind,
       config: Object.fromEntries(
-        Object.entries(step.config).filter(([k]) => !isSecretField(k, fields.find(f => f.key === k))),
+        Object.entries(step.config).filter(([k]) => !isSecretField(k)),
       ),
     }
   })
@@ -216,17 +219,22 @@ const FIELD_LINE_H = 18
 const FIELD_LINES = 4
 const FIELD_LINES_EXPANDED = 16
 
-function StepFieldEditor({ step, row, onChange }: {
+function StepFieldEditor({ step, row, onChange, onPickModel }: {
   step: StepDraft
   row: StepFieldRow
   onChange: (value: string | boolean) => void
+  // A model choice writes model AND provider (see ModelPicker) — one callback for
+  // both, so the two can never end up naming different endpoints.
+  onPickModel: (choice: ModelChoice) => void
 }) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const [expanded, setExpanded] = useState(false)
+  const [picking, setPicking] = useState(false)
   const multiline = row.type === 'text' || row.type === 'json'
   const lines = expanded ? FIELD_LINES_EXPANDED : FIELD_LINES
   const label = `${step.kind} ${row.key}`
+  const providerValue = String(step.rows.find(r => r.key === 'provider')?.value ?? '')
 
   return (
     <View style={s.fieldRow}>
@@ -242,7 +250,23 @@ function StepFieldEditor({ step, row, onChange }: {
           : null}
       </View>
       {row.help ? <Text style={s.fieldHelp}>{row.help}</Text> : null}
-      {row.type === 'bool'
+      {row.type === 'model' ? (
+        <>
+          <Pressable style={s.fieldPicker} onPress={() => setPicking(true)} accessibilityLabel={label}>
+            <Text style={[s.fieldPickerText, !row.value && s.fieldPickerPlaceholder]} numberOfLines={1}>
+              {row.value ? String(row.value) : 'Provider default'}
+            </Text>
+            <Text style={s.fieldPickerCaret}>▾</Text>
+          </Pressable>
+          <ModelPicker
+            visible={picking}
+            value={String(row.value)}
+            provider={providerValue}
+            onSelect={choice => { onPickModel(choice); setPicking(false) }}
+            onClose={() => setPicking(false)}
+          />
+        </>
+      ) : row.type === 'bool'
         ? <Switch
             value={row.value === true}
             onValueChange={onChange}
@@ -326,6 +350,21 @@ function PipelineCard({ pipeline, catalog, onToggleEnabled, onPipelineSaved, tog
     setDrafts(prev => prev?.map((d, i) => i !== stepIdx
       ? d
       : { ...d, rows: d.rows.map(r => r.key === key ? { ...r, value, present: true } : r) }) ?? null)
+  }
+
+  // Both keys in ONE update: two setFieldValue calls would each start from the
+  // pre-update drafts, so the second would drop the first's write.
+  function setModelChoice(stepIdx: number, choice: ModelChoice) {
+    setDrafts(prev => prev?.map((d, i) => i !== stepIdx
+      ? d
+      : {
+          ...d,
+          rows: d.rows.map(r => {
+            if (r.key === 'model') return { ...r, value: choice.model, present: true }
+            if (r.key === 'provider') return { ...r, value: choice.provider, present: true }
+            return r
+          }),
+        }) ?? null)
   }
 
   async function saveSteps() {
@@ -486,7 +525,7 @@ function PipelineCard({ pipeline, catalog, onToggleEnabled, onPipelineSaved, tog
           </View>
           {saveError ? <Text style={s.saveErrorText}>{saveError}</Text> : null}
           {showRaw
-            ? <Text style={s.rawJson} selectable>{prettySteps(pipeline, catalog)}</Text>
+            ? <Text style={s.rawJson} selectable>{prettySteps(pipeline)}</Text>
             : null}
           {drafts === null || drafts.length === 0
             ? <Text style={s.emptySection}>No steps configured.</Text>
@@ -502,6 +541,7 @@ function PipelineCard({ pipeline, catalog, onToggleEnabled, onPipelineSaved, tog
                           step={step}
                           row={row}
                           onChange={v => setFieldValue(i, row.key, v)}
+                          onPickModel={choice => setModelChoice(i, choice)}
                         />
                       ))}
                 </View>
@@ -690,6 +730,20 @@ function buildStyles(t: Theme) {
       paddingVertical: 6,
       marginTop: 3,
     },
+    fieldPicker: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: t.spacing.sm,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      borderRadius: 6,
+      paddingHorizontal: t.spacing.sm,
+      paddingVertical: 7,
+      backgroundColor: t.colors.background,
+    },
+    fieldPickerText: { flex: 1, fontSize: 12, color: t.colors.text },
+    fieldPickerPlaceholder: { color: t.colors.placeholder },
+    fieldPickerCaret: { fontSize: 11, color: t.colors.muted },
     fieldInputMultiline: { textAlignVertical: 'top' },
     jobRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm, paddingVertical: 5 },
     jobDot: { width: 7, height: 7, borderRadius: 4, flexShrink: 0 },

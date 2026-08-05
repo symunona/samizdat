@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
 )
@@ -19,7 +18,10 @@ const llmHealthKey = "llm_provider_health"
 // llmProvider is one configured (or previously used) LLM endpoint. It never
 // carries the API key — only whether one is present.
 type llmProvider struct {
-	Key      string `json:"key"`
+	Key string `json:"key"` // health-registry identity (transport@base_url)
+	// ID is the friendly Router provider id a pipeline step stores in `provider`.
+	ID       string `json:"id"`
+	Label    string `json:"label"`
 	Provider string `json:"provider"`
 	BaseURL  string `json:"base_url,omitempty"`
 	Model    string `json:"model,omitempty"`
@@ -59,14 +61,14 @@ type llmStatusPayload struct {
 }
 
 type llmStatusHandler struct {
-	q   *store.Queries
-	cfg config.LLMSection
+	q      *store.Queries
+	router *llm.Router
 }
 
 // newLLMStatusHandler restores the persisted health snapshot and installs the
 // persist callback, so Record() survives a restart.
-func newLLMStatusHandler(ctx context.Context, q *store.Queries, cfg config.LLMSection) *llmStatusHandler {
-	h := &llmStatusHandler{q: q, cfg: cfg}
+func newLLMStatusHandler(ctx context.Context, q *store.Queries, router *llm.Router) *llmStatusHandler {
+	h := &llmStatusHandler{q: q, router: router}
 	h.restore(ctx)
 	llm.SetPersist(func(rows []llm.ProviderHealth) {
 		blob, err := json.Marshal(rows)
@@ -108,14 +110,14 @@ func (h *llmStatusHandler) get(w http.ResponseWriter, r *http.Request) {
 
 	var providers []llmProvider
 	seen := map[string]bool{}
-	for i, sec := range configuredSections(h.cfg) {
-		role := "fallback"
-		if i == 0 {
-			role = "primary"
+	for _, p := range h.router.Providers() {
+		row := llmProvider{
+			Key: p.HealthKey(), Provider: p.Transport, BaseURL: p.BaseURL,
+			ID: p.ID, Label: p.Label, Model: p.Model, Role: p.Role,
+			HasKey: p.HasKey || !p.NeedsKey, Status: "unknown",
 		}
-		p := describeProvider(sec, role, health)
-		seen[p.Key] = true
-		providers = append(providers, p)
+		seen[row.Key] = true
+		providers = append(providers, mergeHealth(row, health[row.Key]))
 	}
 	// A provider dropped from config keeps its row: its error is still the reason
 	// yesterday's pipeline died, and its spend is still real.
@@ -124,7 +126,8 @@ func (h *llmStatusHandler) get(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		providers = append(providers, mergeHealth(llmProvider{
-			Key: ph.Key, Provider: ph.Provider, BaseURL: ph.BaseURL, Role: "retired",
+			Key: ph.Key, ID: ph.Key, Label: ph.Key, Provider: ph.Provider,
+			BaseURL: ph.BaseURL, Role: "retired",
 		}, ph))
 	}
 
@@ -145,42 +148,6 @@ func (h *llmStatusHandler) get(w http.ResponseWriter, r *http.Request) {
 		Usage:      usage,
 		Totals:     totals,
 	})
-}
-
-// configuredSections flattens primary + fallbacks in the order the chain tries
-// them. An empty provider with no key configured means "no LLM at all".
-func configuredSections(cfg config.LLMSection) []config.LLMSection {
-	if cfg.Provider == "" && cfg.APIKey == "" && len(cfg.Fallback) == 0 {
-		return nil
-	}
-	return append([]config.LLMSection{cfg}, cfg.Fallback...)
-}
-
-func describeProvider(sec config.LLMSection, role string, health map[string]llm.ProviderHealth) llmProvider {
-	provider := sec.Provider
-	baseURL := sec.BaseURL
-	// Mirror llm.newSingle's defaults so the row names the endpoint actually used.
-	switch provider {
-	case "":
-		provider = "anthropic" // auto-detect path (ANTHROPIC_API_KEY)
-	case "openai_compat":
-		if baseURL == "" {
-			baseURL = "http://localhost:11434/v1"
-		}
-	}
-	if provider == "anthropic" {
-		baseURL = ""
-	}
-	p := llmProvider{
-		Key:      llm.ProviderKey(provider, baseURL),
-		Provider: provider,
-		BaseURL:  baseURL,
-		Model:    sec.DefaultModel,
-		Role:     role,
-		HasKey:   llm.HasKey(sec), // config key, ANTHROPIC_API_KEY, or a keyless local box
-		Status:   "unknown",
-	}
-	return mergeHealth(p, health[p.Key])
 }
 
 func mergeHealth(p llmProvider, ph llm.ProviderHealth) llmProvider {
@@ -257,4 +224,22 @@ func toString(v interface{}) string {
 		return x.Format(time.RFC3339)
 	}
 	return ""
+}
+
+// models serves the provider-grouped model catalog the app's model picker renders.
+// A model name belongs to exactly one provider, so the picker never offers a
+// Claude id for an Ollama box — the 404-with-no-fallback trap.
+func (h *llmStatusHandler) models(w http.ResponseWriter, r *http.Request) {
+	groups := h.router.Models(r.Context(), r.URL.Query().Get("refresh") == "1")
+	writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
+}
+
+// probe actively asks every provider whether it is usable right now. This is the
+// ONE path that probes — health.go stays passive precisely so that rendering
+// Settings costs nothing. `deep=1` additionally spends a 1-token completion where
+// no balance endpoint exists (Anthropic), which is the only way to tell a valid
+// key from a valid key on an empty account.
+func (h *llmStatusHandler) probe(w http.ResponseWriter, r *http.Request) {
+	results := h.router.Probe(r.Context(), r.URL.Query().Get("deep") == "1")
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }

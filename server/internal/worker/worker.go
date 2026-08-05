@@ -31,12 +31,12 @@ type Worker struct {
 	cacheDir     string
 	browser      *BrowserPool
 	extractorReg extractor.Registry
-	llmClient    llm.Client
+	llmRouter    *llm.Router
 	ytdlp        config.YTDLPSection
 	creds        *credstore.Store
 }
 
-func New(q *store.Queries, db *sql.DB, cacheDir string, extractorDir string, llmClient llm.Client, ytdlp config.YTDLPSection, creds *credstore.Store) *Worker {
+func New(q *store.Queries, db *sql.DB, cacheDir string, extractorDir string, llmRouter *llm.Router, ytdlp config.YTDLPSection, creds *credstore.Store) *Worker {
 	browser, err := NewBrowserPool()
 	if err != nil {
 		logWorker.Fatalf("browser init failed: %v", err)
@@ -47,7 +47,7 @@ func New(q *store.Queries, db *sql.DB, cacheDir string, extractorDir string, llm
 		reg = make(extractor.Registry)
 	}
 	logWorker.Printf("loaded %d extractor configs from %s", len(reg), extractorDir)
-	return &Worker{q: q, db: db, cacheDir: cacheDir, browser: browser, extractorReg: reg, llmClient: llmClient, ytdlp: ytdlp, creds: creds}
+	return &Worker{q: q, db: db, cacheDir: cacheDir, browser: browser, extractorReg: reg, llmRouter: llmRouter, ytdlp: ytdlp, creds: creds}
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -217,9 +217,9 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	case "poll_feed":
 		result, err = handlePollFeed(ctx, w.q, job, w.browser, w.extractorReg)
 	case "run_pipeline":
-		result, err = handleRunPipeline(ctx, w.q, w.db, job, w.llmClient, w.extractorReg)
+		result, err = handleRunPipeline(ctx, w.q, w.db, job, w.llmRouter, w.extractorReg)
 	case "run_pipeline_step":
-		result, err = handleRunPipelineStep(ctx, w.q, job, w.llmClient)
+		result, err = handleRunPipelineStep(ctx, w.q, job, w.llmRouter)
 	default:
 		err = fmt.Errorf("unknown job kind: %s", job.Kind)
 	}

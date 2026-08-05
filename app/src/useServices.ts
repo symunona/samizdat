@@ -60,6 +60,11 @@ export function useServiceAlert(): boolean {
   const { data: llm } = useLLMStatus()
   const proxyDown = !!proxy?.configured && !proxy.ok
   const exportBroken = !!exp?.enabled && !!exp.last_error
-  const llmBroken = !!llm?.providers.some((p) => p.role !== 'retired' && p.status === 'error')
+  // Only the routing chain can break a pipeline: a 'retired' provider is history
+  // and an 'available' one (discovered from an env key, nothing routes to it) is
+  // an offer, not a dependency.
+  const llmBroken = !!llm?.providers.some(
+    (p) => (p.role === 'primary' || p.role === 'fallback') && p.status === 'error',
+  )
   return proxyDown || exportBroken || llmBroken
 }

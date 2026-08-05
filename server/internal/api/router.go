@@ -32,12 +32,15 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 		go exp.Run(ctx)
 	}
 
-	var llmClient llm.Client
+	// One Router for the whole process: the worker's pipeline steps, the status
+	// endpoint and the probe all route through the same discovered provider set.
+	var llmSection config.LLMSection
 	if len(llmCfg) > 0 {
-		llmClient = llm.New(llmCfg[0])
+		llmSection = llmCfg[0]
 	}
+	llmRouter := llm.NewRouter(llmSection)
 
-	w := worker.New(q, db, cacheDir, extractorDir, llmClient, ytdlp, creds)
+	w := worker.New(q, db, cacheDir, extractorDir, llmRouter, ytdlp, creds)
 	w.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -144,12 +147,10 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	ytStatusH := newYtdlpStatusHandler(ctx, q, ytdlp.Proxy)
 	mux.HandleFunc("GET /api/v1/ytdlp/status", bearerAuth(q, ytStatusH.get))
 
-	var llmSection config.LLMSection
-	if len(llmCfg) > 0 {
-		llmSection = llmCfg[0]
-	}
-	llmStatusH := newLLMStatusHandler(ctx, q, llmSection)
+	llmStatusH := newLLMStatusHandler(ctx, q, llmRouter)
 	mux.HandleFunc("GET /api/v1/llm/status", bearerAuth(q, llmStatusH.get))
+	mux.HandleFunc("GET /api/v1/llm/models", bearerAuth(q, llmStatusH.models))
+	mux.HandleFunc("POST /api/v1/llm/probe", bearerAuth(q, llmStatusH.probe))
 
 	exportH := &exportHandler{exp: exp}
 	mux.HandleFunc("GET /api/v1/export/stats", bearerAuth(q, exportH.stats))

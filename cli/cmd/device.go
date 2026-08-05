@@ -34,10 +34,13 @@ func init() {
 	Root.AddCommand(deviceCmd)
 }
 
+// loadPort reads the server port from the config the user actually named. It must
+// go through resolveConfigPath, not config.DefaultPath: `sam --config X` that talks
+// to the port in some OTHER config is a silent cross-instance call.
 func loadPort() (int, error) {
-	cfgPath, err := config.DefaultPath()
+	cfgPath, err := resolveConfigPath()
 	if err != nil {
-		return 0, fmt.Errorf("default config path: %w", err)
+		return 0, err
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {

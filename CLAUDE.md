@@ -30,7 +30,7 @@ The app logo source of truth is `assets/samizdat.svg` (repo root). Edit that one
 ## Stack decisions (locked)
 - **Server:** Go, single static binary. SQLite via pure-Go `modernc.org/sqlite` (no CGO). Job queue = a `jobs` table (no Redis). TLS = CertMagic.
 - **DB portability:** write portable SQL via `sqlc`; engine swap (SQLite→Postgres) only at a future cloud step.
-- **LLM:** provider-agnostic. Two adapters — Anthropic native (Messages API) + OpenAI-compatible (covers OpenAI cloud AND local Ollama/LM Studio/llama.cpp). Tiered: triage→cheap/local or Haiku, breakdown→Sonnet, digest/draft→Opus. Model IDs: `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`.
+- **LLM:** provider-agnostic. Two adapters — Anthropic native (Messages API) + OpenAI-compatible (covers OpenAI cloud AND local Ollama/LM Studio/llama.cpp). Tiered: triage→cheap/local or Haiku, breakdown→Sonnet, digest/draft→Opus. Model IDs: `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`. **One router owns every endpoint** (`server/internal/llm`): providers are discovered from config + env keys + the well-known local Ollama, and a pipeline step names a provider id, never a URL or a key. `just check-llm` probes them all (reachable / auth / out of credits).
 - **App:** Expo (RN + RN Web). Editor: CodeMirror 6-in-WebView for anchored/linked edits; plain RN `TextInput` for casual notes.
 - **Clipper:** fork Obsidian Web Clipper patterns; Defuddle + Turndown; adapters shipped as **config/data**, not remote code (MV3).
 - **Auth:** no accounts. Owner passphrase (Argon2id) → device tokens (Bearer, revocable) → web cookie same-origin → CLI = local trust.

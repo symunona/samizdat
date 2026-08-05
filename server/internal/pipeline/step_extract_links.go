@@ -53,7 +53,7 @@ type doneLink struct {
 // We detect and skip image links by checking the preceding byte.
 var mdLinkRe = regexp.MustCompile(`\[([^\]]+)\]\((https?://[^)\s]+)\)`)
 
-func handleExtractLinks(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, _ llm.Client) (StepResult, error) {
+func handleExtractLinks(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, _ *llm.Router) (StepResult, error) {
 	var c extractLinksConfig
 	_ = ParseStepConfig(cfg, &c)
 

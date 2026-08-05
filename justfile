@@ -319,6 +319,16 @@ sam *args: build-cli
     ./cli/bin/sam {{_config_flag}} {{args}}
 
 [group('dev')]
+[doc('Probe every LLM provider (LAN/local Ollama, Anthropic, OpenRouter): reachable? key good? out of credits? Pass --shallow to spend no tokens')]
+check-llm *args: build-cli
+    ./cli/bin/sam {{_config_flag}} llm check {{args}}
+
+[group('dev')]
+[doc('List the models each LLM provider serves (what the app model picker offers)')]
+list-models *args: build-cli
+    ./cli/bin/sam {{_config_flag}} llm models {{args}}
+
+[group('dev')]
 [doc('Run the Expo app (native/Expo Go)')]
 app:
     cd app && npx expo start 2>/dev/null || echo "app/ not initialized yet"

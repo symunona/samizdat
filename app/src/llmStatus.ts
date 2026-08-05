@@ -7,6 +7,10 @@ export type LLMErrorKind = 'quota' | 'auth' | 'transport' | 'api'
 
 export interface LLMProvider {
   key: string
+  // id is the friendly Router provider id a pipeline step stores in `provider`
+  // (e.g. "anthropic", "openrouter", "100.111.210.47:11434").
+  id: string
+  label: string
   provider: string
   base_url?: string
   model?: string
@@ -72,6 +76,9 @@ export function llmErrorLabel(p: LLMProvider): string {
 // llmProviderLabel names the endpoint: the provider for cloud APIs, the host for
 // a self-hosted openai_compat box (two Ollama nodes must read differently).
 export function llmProviderLabel(p: LLMProvider): string {
+  // The Router already names the endpoint (brand for a cloud API, host:port for a
+  // self-hosted box); fall back only for a retired row minted from a health key.
+  if (p.label) return p.label
   if (p.provider !== 'openai_compat' || !p.base_url) return p.provider
   try { return new URL(p.base_url).host } catch { return p.base_url }
 }

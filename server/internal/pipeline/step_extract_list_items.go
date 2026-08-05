@@ -52,7 +52,7 @@ type extractListItemsConfig struct {
 	SkipNewScrapes bool `json:"skip_new_scrapes"`
 }
 
-func handleExtractListItems(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, _ llm.Client) (StepResult, error) {
+func handleExtractListItems(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, _ *llm.Router) (StepResult, error) {
 	var c extractListItemsConfig
 	_ = ParseStepConfig(cfg, &c)
 	var state extractListItemsState
