@@ -2,7 +2,7 @@
 created: 2026-08-05
 topic: Pipeline step config — prompts into JSON, step catalog, KV editor UI
 excerpt: Move hardcoded Go prompts into pipelines.steps config JSON, expose a step-kind catalog, add a per-step key/value editor + raw JSON view on the Pipelines screen, fix summarizeFilter
-status: in-progress
+status: done — squash-merged to main 2026-08-05
 ---
 
 ## Why

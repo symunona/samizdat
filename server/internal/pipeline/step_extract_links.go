@@ -14,7 +14,14 @@ import (
 )
 
 func init() {
-	Register("extract_links", handleExtractLinks)
+	Register(KindSpec{
+		Kind:        "extract_links",
+		Label:       "Extract links",
+		Description: "Scrapes the document's outbound links and highlights each with an excerpt.",
+		Fields: []FieldSpec{
+			{Key: "skip_new_scrapes", Label: "Skip new scrapes", Type: "bool", Default: false, Help: "Only use links already scraped; never enqueue new scrape jobs."},
+		},
+	}, handleExtractLinks)
 }
 
 type extractLinksConfig struct {

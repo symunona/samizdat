@@ -14,7 +14,14 @@ import (
 )
 
 func init() {
-	Register("extract_list_items", handleExtractListItems)
+	Register(KindSpec{
+		Kind:        "extract_list_items",
+		Label:       "Extract list items",
+		Description: "One highlight per list item, each enriched with its linked article's summary.",
+		Fields: []FieldSpec{
+			{Key: "skip_new_scrapes", Label: "Skip new scrapes", Type: "bool", Default: false, Help: "Only enrich items whose URLs are already scraped; never enqueue new scrape jobs."},
+		},
+	}, handleExtractListItems)
 }
 
 // itemPhase tracks each list item independently through scrape → summary → enrich.

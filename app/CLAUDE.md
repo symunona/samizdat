@@ -120,6 +120,28 @@ the pure helpers derive the UI:
 
 Covered by `just e2e` (`runErrorStateUiCheck` + `seedDeadJob` in the harness).
 
+## Pipeline step editor (`app/(drawer)/pipelines.tsx`)
+
+A step is `{kind, config}` free-form JSON; `GET /api/v1/pipeline-steps` (`fetchStepCatalog`)
+describes the keys each kind knows — label, type (`string|text|int|bool`), default, help.
+The editor renders the union of *catalog fields* and *config keys*, so a key the catalog
+doesn't describe is still visible and editable; a `text` field (the prompt) opens at ~4
+lines with an expand toggle. Save serializes the drafts through `putPipelineSteps` (steps
+go as a JSON **string** — that's the column).
+
+- **The filter summary mirrors Go exactly.** `PipelineFilter` in `src/api.ts` = the four
+  keys of `pipeline.PipelineFilter`; anything else is printed verbatim as `key: value`. The
+  old code checked `feed_id`/`tag`/`domain`/`url_pattern` — none of which exist — so every
+  pipeline read "all documents", the maximally wrong answer for a feed-scoped pipeline.
+- **A credential must never enter the DOM.** The catalog omits `secret` fields and the
+  server redacts `api_key` from GET, but the screen ALSO drops any key matching
+  `SECRET_KEY` — including in the raw-JSON view, which is rebuilt from the parsed steps
+  rather than echoing the stored string. A saved config omits secret keys entirely; the
+  server's `PreserveSecrets` keeps the stored value (sending back a redacted key would
+  wipe it).
+
+Covered by `just e2e-int` (`runPipelineStepsUi` + `seedPipeline` in the harness).
+
 ## Connection state — NEVER bypass ConnectionProvider
 
 `ConnectionProvider` (in `src/ConnectionContext.tsx`) is the single owner of connection state. It probes the server on mount and every 30s, and picks the fastest reachable URL automatically.

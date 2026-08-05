@@ -14,7 +14,8 @@
 import { readFileSync } from 'node:fs'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
-  newConnectedPage, seedTextDoc, seedVideoDoc, seedHighlight, seedLLMHealth, makeCleanup,
+  newConnectedPage, seedTextDoc, seedVideoDoc, seedHighlight, seedLLMHealth, seedPipeline,
+  makeCleanup,
 } from './harness.js'
 
 const VIDEO_DOC_ID = 'eeeeeeee-0000-4000-8000-000000000001'
@@ -1071,6 +1072,143 @@ async function runSettingsServices(token, deviceId) {
   await page.close()
 }
 
+// ── Pipelines: filter summary + the step config editor ───────────────────────
+// Two things this guards. (1) The card used to summarize every filter as "all
+// documents" because it checked keys the Go filter never had. (2) The prompt that
+// decides what a pipeline DOES is now step config, editable here — while the
+// api_key in the same config must not reach the DOM at all.
+const PIPE_ID = 'cccccccc-0000-4000-8000-000000000001'
+const PIPE_FEED_ID = 'aaaaaaaa-0000-4000-8000-0000000000f1'
+const PIPE_NAME = 'Integration Summarizer'
+const PIPE_PROMPT = 'Summarize the article in three caveman bullets for the integration test.'
+const PIPE_SECRET = 'sk-integration-NEVER-RENDER-THIS'
+const PIPE_MODEL = 'qwen3:4b-instruct'
+const PIPE_NEW_MODEL = 'claude-haiku-4-5'
+const PIPE_STEPS = [{ kind: 'llm_summarize', config: { model: PIPE_MODEL, prompt: PIPE_PROMPT, api_key: PIPE_SECRET } }]
+
+const PROMPT_FIELD = '[aria-label="llm_summarize prompt"]'
+const MODEL_FIELD = '[aria-label="llm_summarize model"]'
+
+// The screen lists every pipeline (the highlight fixture seeds one too), so every
+// assertion is scoped to the card of the pipeline under test: the SMALLEST element
+// holding both its name and the filter line.
+const cardScript = `(n) => {
+  const hits = [...document.querySelectorAll('div')]
+    .filter(e => e.innerText && e.innerText.includes(n) && e.innerText.includes('filter:'))
+  hits.sort((a, b) => a.innerText.length - b.innerText.length)
+  return hits[0] || null
+}`
+
+async function pipelineCardText(page) {
+  return page.evaluate((src, n) => {
+    // eslint-disable-next-line no-eval
+    const card = eval('(' + src + ')')(n)
+    return card ? card.innerText : ''
+  }, cardScript, PIPE_NAME)
+}
+
+async function clickInPipelineCard(page, text) {
+  return page.evaluate((src, n, t) => {
+    // eslint-disable-next-line no-eval
+    const card = eval('(' + src + ')')(n)
+    if (!card) return false
+    const hits = [...card.querySelectorAll('*')].filter(e => e.innerText === t && e.offsetParent)
+    if (!hits.length) return false
+    const pointer = hits.filter(e => getComputedStyle(e).cursor === 'pointer')
+    const el = (pointer.length ? pointer : hits).sort((a, b) => {
+      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect()
+      return rb.width * rb.height - ra.width * ra.height
+    })[0]
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    return true
+  }, cardScript, PIPE_NAME, text)
+}
+
+async function openPipelineSteps(page) {
+  await page.goto(`${BASE_URL}/pipelines`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction(n => document.body.innerText.includes(n), { timeout: 10000 }, PIPE_NAME)
+  if (!await clickInPipelineCard(page, '▶ Steps')) return 'no Steps toggle on the pipeline card'
+  await page.waitForSelector(PROMPT_FIELD, { timeout: 6000 })
+  return null
+}
+
+async function seededPipeline(token) {
+  const res = await fetch(`${BASE_URL}/api/v1/pipelines`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) throw new Error(`GET /api/v1/pipelines: HTTP ${res.status}`)
+  return (await res.json()).find(p => p.id === PIPE_ID)
+}
+
+async function runPipelineStepsUi(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.goto(`${BASE_URL}/pipelines`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction(n => document.body.innerText.includes(n), { timeout: 10000 }, PIPE_NAME)
+
+  await check('pipelines: a feed-scoped pipeline is not summarized as "all documents"', async () => {
+    const txt = await pipelineCardText(page)
+    if (!txt) return 'the seeded pipeline card did not render'
+    if (/all documents/.test(txt)) return `a source_feed_id filter still reads "all documents": "${txt}"`
+    if (!txt.includes(PIPE_FEED_ID)) return `the card does not name the feed it is scoped to: "${txt}"`
+    return null
+  })
+
+  await check('pipelines: the Steps section shows the prompt the step actually runs', async () => {
+    const err = await openPipelineSteps(page)
+    if (err) return err
+    const prompt = await page.$eval(PROMPT_FIELD, el => el.value)
+    if (!prompt.includes('three caveman bullets')) return `the prompt field does not hold the stored prompt: "${prompt.slice(0, 80)}"`
+    const txt = await pipelineCardText(page)
+    return txt.includes('Summarize') ? null : `the step does not render its catalog label: "${txt.slice(0, 200)}"`
+  })
+
+  await check('pipelines: the step api_key is nowhere in the page', async () => {
+    const leak = await page.evaluate(secret => {
+      const html = document.documentElement.outerHTML
+      const values = [...document.querySelectorAll('input,textarea')].map(el => el.value).join('\n')
+      return {
+        secret: html.includes(secret) || values.includes(secret),
+        field: /api[_-]?key/i.test(html),
+      }
+    }, PIPE_SECRET)
+    if (leak.secret) return 'the step api_key value is rendered in the page'
+    return leak.field ? 'an api_key field is rendered — it must not exist in the DOM at all' : null
+  })
+
+  await check('pipelines: the raw JSON view shows the steps without the credential', async () => {
+    if (!await clickInPipelineCard(page, 'raw JSON')) return 'no raw JSON toggle'
+    await sleep(300)
+    const txt = await pipelineCardText(page)
+    if (!txt.includes('"kind": "llm_summarize"')) return `no pretty-printed steps in the raw view: "${txt.slice(-300)}"`
+    if (/api_key/i.test(txt)) return 'the raw JSON view leaks the api_key'
+    if (!await clickInPipelineCard(page, 'hide raw JSON')) return 'the raw JSON toggle does not close'
+    return null
+  })
+
+  await check('pipelines: editing a step field and saving persists it', async () => {
+    await page.click(MODEL_FIELD, { clickCount: 3 })
+    await page.keyboard.type(PIPE_NEW_MODEL, { delay: 30 })
+    await sleep(200)
+    await page.click(`[aria-label="Save steps ${PIPE_NAME}"]`)
+    await page.waitForFunction(() => document.body.innerText.includes('Steps saved'), { timeout: 8000 })
+    const steps = JSON.parse((await seededPipeline(token)).steps)
+    if (steps[0]?.config?.model !== PIPE_NEW_MODEL) return `the server kept model "${steps[0]?.config?.model}"`
+    if (!String(steps[0]?.config?.prompt || '').includes('three caveman bullets')) return 'saving the model dropped the prompt'
+    return null
+  })
+
+  await check('pipelines: the saved model is what the editor shows after a reload', async () => {
+    const err = await openPipelineSteps(page)
+    if (err) return err
+    const model = await page.$eval(MODEL_FIELD, el => el.value)
+    return model === PIPE_NEW_MODEL ? null : `the model field reloaded as "${model}"`
+  })
+
+  await sleep(300)
+  if (errors.length) fail('pipeline steps: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('pipeline steps: no console/HTTP errors')
+
+  await page.close()
+}
+
 // ── Reading mode: flow / auto / page + the page threshold ─────────────────────
 // `auto` is the default: paginate only past the threshold. The decision is made
 // inside the frame (only it can measure), so every check here reads the frame's
@@ -1233,6 +1371,7 @@ async function main() {
     seedTextDoc(SHORT_DOC)
     seedTextDoc(LONG_DOC)
     seedHighlight({ id: HL_ID, documentId: TEXT_DOC_ID, title: 'Go 1.21 Release', body: HL_BODY })
+    seedPipeline({ id: PIPE_ID, name: PIPE_NAME, filter: { source_feed_id: PIPE_FEED_ID }, steps: PIPE_STEPS })
 
     console.log('  launching browser...')
     browser = await launchBrowser()
@@ -1244,6 +1383,7 @@ async function main() {
     await runSelectionLifecycle(token, deviceId)
     await runHighlightSelectionLifecycle(token, deviceId)
     await runSettingsServices(token, deviceId)
+    await runPipelineStepsUi(token, deviceId)
     // Last: the reading mode persists globally (AsyncStorage → shared localStorage),
     // so leaving it on Page would silently paginate every earlier check's viewer.
     await runPageMode(token, deviceId)

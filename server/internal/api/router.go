@@ -168,6 +168,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	mux.HandleFunc("POST /api/v1/pipelines/{id}/run", bearerAuth(q, plH.run))
 	mux.HandleFunc("GET /api/v1/pipelines/{id}/documents", bearerAuth(q, plH.listDocuments))
 	mux.HandleFunc("GET /api/v1/pipelines/{id}/jobs", bearerAuth(q, plH.listJobs))
+	mux.HandleFunc("GET /api/v1/pipeline-steps", bearerAuth(q, handleStepCatalog))
 
 	hlH := &highlightsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/highlights", bearerAuth(q, hlH.listAll))

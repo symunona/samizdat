@@ -666,21 +666,26 @@ fmt-js:
     cd app && npx prettier -w . 2>/dev/null || true
     cd clipper && npx prettier -w . 2>/dev/null || true
 
+# Every e2e suite drives the SERVED web bundle, so it must depend on build-app-web
+# as well as build-server. With only build-server, an app-only change is tested
+# against whatever bundle was last left on disk — the suite passes on code it never
+# ran, which is worse than no suite at all.
+
 [group('quality')]
-[doc('E2E smoke test: builds server, starts on port 8766, pairs device, navigates all pages, checks for JS errors')]
-e2e: build-server
+[doc('E2E smoke test: builds server + web app, starts on port 8766, pairs device, navigates all pages, checks for JS errors')]
+e2e: build-server build-app-web
     @echo "Running smoke test (port 8766, fresh /tmp/samizdat-test DB)..."
     cd e2e && node smoke.js
 
 [group('quality')]
 [doc('E2E integration test: drives real interactions (select→annotate→highlight lifecycle + per-page)')]
-e2e-int: build-server
+e2e-int: build-server build-app-web
     @echo "Running integration test (port 8766, fresh /tmp/samizdat-test DB)..."
     cd e2e && node integration.js
 
 [group('quality')]
 [doc('E2E offline test: outbox unit tests + offline→reconnect→server-synced walkthrough')]
-e2e-offline: build-server
+e2e-offline: build-server build-app-web
     @echo "Running chunked-storage unit tests (Android CursorWindow guard)..."
     node e2e/chunked-storage-unit.mjs
     @echo "Running outbox unit tests (pure, no network)..."
@@ -891,9 +896,41 @@ install-bins: build
 
 [group('deploy')]
 [doc('Restart the installed user service (no sudo) — picks up a fresh build/config')]
-restart:
+restart: _free-port-for-service
     systemctl --user restart samizdat-{{_instance}}
     systemctl --user --no-pager status samizdat-{{_instance}} | head -5
+    @sleep 2; just _assert-service-holds-port
+
+# `just dev` takes the port from the service; this hands it back. Without it the
+# dev nohup keeps :PORT, the service starts, FAILS TO BIND, and systemd still
+# reports active — so `just restart` looks successful while the OLD dev binary
+# serves every request. Same stale-binary trap `just dev` guards against in the
+# other direction, and invisible unless you compare /health's commit stamp.
+_free-port-for-service:
+    @PORT={{_dev_port}}; \
+    PID=$(ss -tlnp 2>/dev/null | grep ":$PORT " | grep -oP 'pid=\K[0-9]+' | head -1); \
+    if [ -n "${PID:-}" ]; then \
+        MAIN=$(systemctl --user show samizdat-{{_instance}} -p MainPID --value 2>/dev/null); \
+        if [ "$PID" = "${MAIN:-none}" ]; then \
+            echo "service already holds :$PORT — restarting in place"; \
+        else \
+            echo "dev server (pid $PID) holds :$PORT — stopping so the service can bind..."; \
+            kill "$PID" 2>/dev/null || true; \
+            for i in $(seq 1 20); do ss -tlnp 2>/dev/null | grep -q ":$PORT " || break; sleep 0.3; done; \
+        fi; \
+    fi
+
+# A service that cannot bind still reports "active". Verify it really owns the port.
+_assert-service-holds-port:
+    @PORT={{_dev_port}}; \
+    MAIN=$(systemctl --user show samizdat-{{_instance}} -p MainPID --value 2>/dev/null); \
+    HOLDER=$(ss -tlnp 2>/dev/null | grep ":$PORT " | grep -oP 'pid=\K[0-9]+' | head -1); \
+    if [ "${HOLDER:-none}" != "${MAIN:-none}" ]; then \
+        echo "ERROR: samizdat-{{_instance}} (pid ${MAIN:-none}) is NOT serving :$PORT (pid ${HOLDER:-none} is)." >&2; \
+        echo "       The service is 'active' but never bound. Run 'just kill', then 'just restart'." >&2; \
+        exit 1; \
+    fi; \
+    echo "service (pid $MAIN) holds :$PORT"
 
 [group('deploy')]
 [doc('Configure public HTTPS reachability (domain or sslip.io)')]

@@ -202,6 +202,23 @@ VALUES ('${q(id)}','${q(documentId)}','${q(runId)}','item','${q(title)}','${q(bo
   console.log('  seeded highlight', id)
 }
 
+// Seed a Pipeline row — the shape the API creates. `filter` and `steps` are
+// objects/arrays here and stored as the JSON strings the column holds, so a test
+// can stage a scoped filter or a step config (including a secret the UI must
+// never render) without going through the create endpoint.
+export function seedPipeline({ id, name, filter, steps, trigger = 'on_new_document', enabled = 1 }) {
+  const now = new Date().toISOString()
+  const q = s => s.replace(/'/g, "''")
+  const sql = `
+INSERT OR REPLACE INTO pipelines (id,name,enabled,trigger,filter,steps,created_at,updated_at,rev,deleted_at)
+VALUES ('${q(id)}','${q(name)}',${enabled},'${q(trigger)}','${q(JSON.stringify(filter))}','${q(JSON.stringify(steps))}','${now}','${now}',1,NULL);
+`
+  const f = '/tmp/samizdat-test/seed-pipeline.sql'
+  fs.writeFileSync(f, sql)
+  execSync(`sqlite3 ${TEST_DB} < ${f}`)
+  console.log('  seeded pipeline', name)
+}
+
 // Seed a false-parse Document (a bot-protection / login-wall scrape that the
 // engine flagged) so the Documents-list error badge is exercised by the smoke
 // test. error_reason is the visible flag; no highlights are created.

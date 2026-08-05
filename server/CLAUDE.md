@@ -63,11 +63,23 @@ server/
       sync.go               # GET  /api/v1/sync            (bearer-authed, incremental pull)
       sync_test.go          # unit tests for cursor correctness
       jobs.go               # POST /api/v1/jobs            (bearer-authed, idempotent enqueue)
+      pipeline_steps.go     # GET  /api/v1/pipeline-steps  (bearer-authed, step catalog)
+      pipelines.go          # CRUD for pipelines; redacts secrets on every read path
+      pipelines_test.go     # integration test: api_key round-trip (preserve + redact)
     extractor/
       substack_notes.go     # SubstackNotesAdapter: discovers Notes via Substack reader API
                             # (no auth, no headless browser — profile page gates anon after 2 items)
     transcript/
       vtt.go                # WebVTT parser → []Segment{StartMs,EndMs,Text}
+    pipeline/
+      catalog.go            # Register(KindSpec, Handler) — single registry for all step kinds
+      prompt.go             # renderPrompt(tmpl, vars): single-pass {{token}} expansion
+      steps_json.go         # RedactSecrets / PreserveSecrets — JSON rewrite helpers
+      backfill.go           # BackfillStepPrompts: one-shot migration to write default prompts
+      backfill_test.go
+      prompt_test.go
+      steps_json_test.go
+      step_*.go             # one file per step kind; each calls Register in init()
     worker/
       youtube.go            # yt-dlp ingest: audio + transcript → video Document
       pdf.go                # PDF text extraction, figure splicing, layout reconstruction
@@ -102,6 +114,7 @@ CREATE TABLE IF NOT EXISTS server_settings (
   -- keys: "passphrase_hash" (Argon2id $argon2id$... string)
   --       "ytdlp_proxy_last_ok_at" (RFC3339, persisted across restarts)
   --       "llm_provider_health" (JSON []llm.ProviderHealth, see LLM provider health)
+  --       "pipeline_step_prompts_backfilled" (RFC3339, guards the one-shot prompt backfill)
 );
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -299,6 +312,54 @@ which Obsidian would read as a width.
   - `media_metadata`: JSON `{provider, external_id, duration_ms, transcript_status, orig_lang, transcript_langs}` where `transcript_status` ∈ `"subs" | "auto" | "none"` (of the original track), `orig_lang` is the original language code, and `transcript_langs` lists all languages present.
   - `transcript`: JSON **lang-keyed map** `{lang: [{start_ms, end_ms, text}]}` (empty object `{}` when none). Legacy rows may still hold a bare array `[...]`; the app parsers accept both.
   - `markdown`: flattened transcript text (one segment per line); falls back to video description when no transcript.
+
+## Step catalog + prompts live in config, not in Go
+
+`internal/pipeline/catalog.go` is the single registry: `Register(spec KindSpec, h Handler)`
+binds a step's handler and its `[]FieldSpec` in one call, so the two cannot drift. Adding a
+step kind = one `Register` in the step's `init()`. `GET /api/v1/pipeline-steps` serves
+`Catalog()` so the app renders a config editor it never hardcodes.
+
+- **The prompt is a config value, not a const.** Each LLM step's default prompt is the
+  `prompt` FieldSpec's `Default`; the handler falls back to it (`defaultPrompt(kind)`) only
+  when the step config carries none. Tuning a prompt is a DB edit, not a redeploy.
+- **One renderer for all four LLM steps** (`prompt.go`): `renderPrompt(tmpl, vars)` expands
+  `{{title}}` / `{{content}}` / `{{recently_covered}}` in a single pass (document text that
+  contains a token is never re-expanded). Every catalog default ends with the shared
+  `promptTemplateTail`; a stored template with no `{{content}}` gets `legacyPromptTail`
+  appended, so a hand-typed one-line prompt still receives the document.
+  `TestDefaultPromptsComposeLegacyMessage` is the guard that a default-config pipeline sends
+  a byte-identical message to the pre-templating one — don't "tidy" the prompt consts.
+- **`api_key` is `Secret: true`** — omitted from the catalog response, stripped from every
+  pipeline GET (`pipeline.RedactSecrets`), and re-injected on PUT when the incoming step
+  omits it (`pipeline.PreserveSecrets`, matched by index + kind). Without that merge the UI,
+  which never sees the key, would wipe it on every save.
+- **The prompt backfill is NOT in `store.migrate()`** — the catalog lives in `pipeline`,
+  which imports `store`, so a migration there would be an import cycle.
+  `pipeline.BackfillStepPrompts` runs in `main.go` right after `store.Open`, guarded by
+  `server_settings.pipeline_step_prompts_backfilled` and by a per-step "already has a
+  prompt" check. Any future data migration needing engine code goes the same way.
+
+### Secret field handling (api_key round-trip)
+
+Secret fields (`Secret: true` in `FieldSpec`) follow a strict contract across all three
+call sites — deviation breaks silent key wipe:
+
+1. **`GET /api/v1/pipelines` and `GET /api/v1/pipelines/{id}`**: `pipeline.RedactSecrets`
+   removes the key entirely from the steps JSON before the response is written. The key is
+   **absent**, not blank — a client can tell "never set" from "was set, now redacted" by
+   the presence of the field in the spec (`Secret: true`) rather than by the value.
+2. **`GET /api/v1/pipeline-steps`** (catalog): the `Default` value of a secret field is
+   cleared to `nil`. The field spec itself is still returned so the client knows which
+   keys are credentials.
+3. **`PUT /api/v1/pipelines/{id}`**: `pipeline.PreserveSecrets` is called before the DB
+   write. It matches by **index + kind** and copies any secret key the incoming steps omit
+   from the stored steps. An explicitly sent value wins. A kind change at the same index
+   does NOT inherit the old key.
+
+`steps_json.go` owns all three operations as pure string→string functions so they can be
+unit-tested without an HTTP stack. The JSON rewrite is raw-message-level to preserve
+unknown keys.
 
 ## LLM model resolution — a model name belongs to ONE provider
 

@@ -12,6 +12,7 @@ import (
 	cfg "github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/logger"
 	"github.com/symunona/samizdat/server/internal/network"
+	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -81,6 +82,13 @@ func runServe(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("open db: %w", err)
 	}
 	defer func() { _ = db.Close() }()
+
+	// Data migration that needs the step catalog (which imports store, so it
+	// cannot run inside store's migrate()): write each step's default prompt
+	// into its config so it becomes visible + editable. One-shot, self-guarded.
+	if err := pipeline.BackfillStepPrompts(context.Background(), store.New(db)); err != nil {
+		return fmt.Errorf("backfill step prompts: %w", err)
+	}
 
 	if err := os.MkdirAll(c.CacheDir+"/media", 0755); err != nil {
 		return fmt.Errorf("create cache dir: %w", err)

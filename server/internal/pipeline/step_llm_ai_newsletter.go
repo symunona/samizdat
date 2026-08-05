@@ -13,12 +13,28 @@ import (
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
+const kindLLMAINewsletter = "llm_ai_newsletter"
+
 func init() {
-	Register("llm_ai_newsletter", handleLLMAINewsletter)
+	Register(KindSpec{
+		Kind:        kindLLMAINewsletter,
+		Label:       "AI newsletter",
+		Description: "Caveman summary plus per-item highlights (models, tools, local models), deduped against recent issues.",
+		Fields: []FieldSpec{
+			{Key: "model", Label: "Model", Type: "string", Help: "Empty = the provider's default_model."},
+			{Key: "provider", Label: "Provider", Type: "string", Help: "anthropic | openai_compat. Empty = the server's LLM client."},
+			{Key: "base_url", Label: "Base URL", Type: "string", Help: "openai_compat endpoint override."},
+			{Key: "api_key", Label: "API key", Type: "string", Secret: true},
+			{Key: "skip_summary", Label: "Skip summary", Type: "bool", Default: false, Help: "Emit only the item highlights, no bulleted summary."},
+			{Key: "dedup_lookback_days", Label: "Dedup lookback (days)", Type: "int", Default: 7, Help: "How far back to look for already-covered items. 0 = 7."},
+			{Key: promptKey, Label: "Prompt", Type: "text", Default: aiNewsletterDefaultPrompt},
+		},
+	}, handleLLMAINewsletter)
 }
 
 type aiNewsletterConfig struct {
 	Model    string `json:"model"`
+	Prompt   string `json:"prompt"`
 	Provider string `json:"provider"`
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
@@ -96,7 +112,7 @@ type aiNewsletterResponse struct {
 	Highlights []aiNewsletterHighlight `json:"highlights"`
 }
 
-const aiNewsletterSystemPrompt = `You analyze AI/ML newsletters. Return ONLY valid JSON, no prose, no markdown fences.
+const aiNewsletterDefaultPrompt = `You analyze AI/ML newsletters. Return ONLY valid JSON, no prose, no markdown fences.
 
 Schema:
 {
@@ -129,12 +145,15 @@ CAVEMAN COMMUNICATION GUIDELINES (apply to all output):
 - Drop hedges: seems, appears, might be, arguably
 - Drop pleasantries, intros ("This article covers..."), outros ("In conclusion...")
 - Fragments OK. Short synonyms. Pattern: [thing] [action] [why].
-- Technical terms stay exact. Code/model names stay exact.`
+- Technical terms stay exact. Code/model names stay exact.` + promptTemplateTail
 
 func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, globalClient llm.Client) (StepResult, error) {
 	var c aiNewsletterConfig
 	_ = ParseStepConfig(cfg, &c)
 	// Unset model = the configured provider's default_model (see step_llm_summarize).
+	if c.Prompt == "" {
+		c.Prompt = defaultPrompt(kindLLMAINewsletter)
+	}
 
 	client := globalClient
 	if c.Provider != "" {
@@ -160,7 +179,9 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 	}
 
 	seen := recentlyCoveredBlock(ctx, q, doc, c.DedupLookbackDays)
-	userMsg := aiNewsletterSystemPrompt + seen + "\n\n# " + doc.Title + "\n\n" + content
+	userMsg := renderPrompt(c.Prompt, map[string]string{
+		"title": doc.Title, "content": content, "recently_covered": seen,
+	})
 	reply, usage, err := client.Complete(ctx, c.Model, []llm.Message{
 		{Role: "user", Content: userMsg},
 	})

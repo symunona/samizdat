@@ -13,14 +13,29 @@ import (
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
+const kindLLMSummarize = "llm_summarize"
+
 func init() {
-	Register("llm_summarize", handleLLMSummarize)
+	Register(KindSpec{
+		Kind:        kindLLMSummarize,
+		Label:       "Summarize",
+		Description: "One caveman-style bullet summary highlight per document.",
+		Fields: []FieldSpec{
+			{Key: "model", Label: "Model", Type: "string", Help: "Empty = the provider's default_model."},
+			{Key: "provider", Label: "Provider", Type: "string", Help: "anthropic | openai_compat. Empty = the server's LLM client."},
+			{Key: "base_url", Label: "Base URL", Type: "string", Help: "openai_compat endpoint override."},
+			{Key: "api_key", Label: "API key", Type: "string", Secret: true},
+			{Key: promptKey, Label: "Prompt", Type: "text", Default: summarizeDefaultPrompt},
+		},
+	}, handleLLMSummarize)
 }
 
 // notParseableToken is the sentinel the summarizer emits when it judges the input
 // to be a bot page / login wall / empty stub rather than real article content —
 // the LLM layer of false-parse detection, catching cases the heuristic misses.
 const notParseableToken = "__NOT_PARSEABLE__"
+
+const summarizeDefaultPrompt = "Summarize as caveman. Rules: drop all articles (a/an/the), drop filler words (just/really/basically/actually/simply/notably), drop hedges (seems/appears/might), no pleasantries, no intro, no outro. Fragments OK. Short synonyms (big not extensive, fix not implement a solution). Max 3 bullets. Pattern: [thing] [action] [why it matters]. Bold the key topic/name of each bullet: **keyword** where it naturally lands — one bold per bullet. Boring or thin = one line. Never start with 'This article'. NO heading and NO title line — do not repeat or restate the article title; start straight with the first bullet (the title is shown separately). IMPORTANT: if content is empty, image-only, or has no meaningful text to summarize, return exactly empty string — nothing else. If the input is NOT a real article — a bot check ('checking your browser', 'verify you are human'), a login or paywall wall, a CAPTCHA, or an error/teaser stub with no article body — respond with EXACTLY " + notParseableToken + " on a single line and nothing else." + promptTemplateTail
 
 type llmSummarizeConfig struct {
 	Model    string `json:"model"`
@@ -37,7 +52,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	// resolves to the configured provider's default_model inside the client (a
 	// Claude id sent to a local Ollama box is a 404, and a 404 never falls back).
 	if c.Prompt == "" {
-		c.Prompt = "Summarize as caveman. Rules: drop all articles (a/an/the), drop filler words (just/really/basically/actually/simply/notably), drop hedges (seems/appears/might), no pleasantries, no intro, no outro. Fragments OK. Short synonyms (big not extensive, fix not implement a solution). Max 3 bullets. Pattern: [thing] [action] [why it matters]. Bold the key topic/name of each bullet: **keyword** where it naturally lands — one bold per bullet. Boring or thin = one line. Never start with 'This article'. NO heading and NO title line — do not repeat or restate the article title; start straight with the first bullet (the title is shown separately). IMPORTANT: if content is empty, image-only, or has no meaningful text to summarize, return exactly empty string — nothing else. If the input is NOT a real article — a bot check ('checking your browser', 'verify you are human'), a login or paywall wall, a CAPTCHA, or an error/teaser stub with no article body — respond with EXACTLY " + notParseableToken + " on a single line and nothing else."
+		c.Prompt = defaultPrompt(kindLLMSummarize)
 	}
 
 	// Use step-level provider if specified, otherwise fall back to global client.
@@ -64,7 +79,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 		content = content[:12000] + "\n\n[truncated]"
 	}
 
-	userMsg := c.Prompt + "\n\n# " + doc.Title + "\n\n" + content
+	userMsg := renderPrompt(c.Prompt, map[string]string{"title": doc.Title, "content": content})
 	reply, usage, err := client.Complete(ctx, c.Model, []llm.Message{
 		{Role: "user", Content: userMsg},
 	})

@@ -13,12 +13,26 @@ import (
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
+const kindLLMTopics = "llm_topics"
+
 func init() {
-	Register("llm_topics", handleLLMTopics)
+	Register(KindSpec{
+		Kind:        kindLLMTopics,
+		Label:       "Split into topics",
+		Description: "One highlight per newsletter section, body kept verbatim.",
+		Fields: []FieldSpec{
+			{Key: "model", Label: "Model", Type: "string", Help: "Empty = the provider's default_model."},
+			{Key: "provider", Label: "Provider", Type: "string", Help: "anthropic | openai_compat. Empty = the server's LLM client."},
+			{Key: "base_url", Label: "Base URL", Type: "string", Help: "openai_compat endpoint override."},
+			{Key: "api_key", Label: "API key", Type: "string", Secret: true},
+			{Key: promptKey, Label: "Prompt", Type: "text", Default: topicsDefaultPrompt},
+		},
+	}, handleLLMTopics)
 }
 
 type topicsConfig struct {
 	Model    string `json:"model"`
+	Prompt   string `json:"prompt"`
 	Provider string `json:"provider"`
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
@@ -33,10 +47,10 @@ type topicsResponse struct {
 	Highlights []topicHighlight `json:"highlights"`
 }
 
-// topicsSystemPrompt splits ANY newsletter into its distinct sections/topics. Unlike
+// topicsDefaultPrompt splits ANY newsletter into its distinct sections/topics. Unlike
 // llm_summarize / llm_ai_newsletter, it does NOT summarize — each topic body is the
 // section's original text, verbatim. Source language is preserved.
-const topicsSystemPrompt = `You split a newsletter into its distinct topics/sections. Return ONLY valid JSON, no prose, no markdown fences.
+const topicsDefaultPrompt = `You split a newsletter into its distinct topics/sections. Return ONLY valid JSON, no prose, no markdown fences.
 
 Schema:
 {"highlights": [{"title": string, "body": string}]}
@@ -47,12 +61,15 @@ Rules:
 - body: that section's FULL text, VERBATIM. Do NOT summarize, paraphrase, shorten, translate, or add commentary. Copy the original wording exactly.
 - Reply in the same language as the newsletter.
 - Skip pure boilerplate (greeting salutations, unsubscribe footer, "view in browser").
-- Return {"highlights": []} if there are no real topics.`
+- Return {"highlights": []} if there are no real topics.` + promptTemplateTail
 
 func handleLLMTopics(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, globalClient llm.Client) (StepResult, error) {
 	var c topicsConfig
 	_ = ParseStepConfig(cfg, &c)
 	// Unset model = the configured provider's default_model (see step_llm_summarize).
+	if c.Prompt == "" {
+		c.Prompt = defaultPrompt(kindLLMTopics)
+	}
 
 	client := globalClient
 	if c.Provider != "" {
@@ -79,7 +96,7 @@ func handleLLMTopics(ctx context.Context, q *store.Queries, run store.PipelineRu
 		content = content[:16000] + "\n\n[truncated]"
 	}
 
-	userMsg := topicsSystemPrompt + "\n\n# " + doc.Title + "\n\n" + content
+	userMsg := renderPrompt(c.Prompt, map[string]string{"title": doc.Title, "content": content})
 	reply, usage, err := client.Complete(ctx, c.Model, []llm.Message{
 		{Role: "user", Content: userMsg},
 	})

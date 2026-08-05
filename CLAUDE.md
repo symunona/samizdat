@@ -88,6 +88,10 @@ nohup, so you can rebuild/restart/tail freely.
 The handoff is built in and one-directional-per-command:
 - `just dev` → `_check-no-service` **stops the systemd service** and takes the port as a nohup.
 - `just restart` → hands the port **back to the systemd service** (picks up a fresh build).
+  It first kills a dev nohup still holding the port, then asserts the service's MainPID is
+  the process actually listening. Both halves matter: a service that cannot bind still
+  reports `active`, so without the assert `just restart` prints success while the OLD dev
+  binary keeps serving every request — visible only by comparing `/health`'s commit stamp.
 - `just status` → reports which mode holds the port (dev nohup vs systemd) + build staleness.
 - `just service-logs` → follow the service journal.
 

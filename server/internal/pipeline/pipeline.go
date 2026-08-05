@@ -88,13 +88,6 @@ type StepResult struct {
 // Handler is the function signature for a step kind.
 type Handler func(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, llmClient llm.Client) (StepResult, error)
 
-var registry = map[string]Handler{}
-
-// Register adds a step kind handler. Call from init().
-func Register(kind string, h Handler) {
-	registry[kind] = h
-}
-
 // Dispatch runs the current step for the given pipeline run.
 func Dispatch(ctx context.Context, q *store.Queries, run store.PipelineRun, pipeline store.Pipeline, llmClient llm.Client) (StepResult, error) {
 	var steps []StepConfig
@@ -108,11 +101,11 @@ func Dispatch(ctx context.Context, q *store.Queries, run store.PipelineRun, pipe
 	}
 
 	step := steps[idx]
-	h, ok := registry[step.Kind]
+	reg, ok := registry[step.Kind]
 	if !ok {
 		return StepResult{}, fmt.Errorf("unknown step kind %q", step.Kind)
 	}
-	return h(ctx, q, run, step.Config, llmClient)
+	return reg.handler(ctx, q, run, step.Config, llmClient)
 }
 
 // MatchesDocument checks whether the pipeline filter matches the given document + feed URL.

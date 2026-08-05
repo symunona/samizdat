@@ -13,7 +13,14 @@ import (
 )
 
 func init() {
-	Register("extract_images", handleExtractImages)
+	Register(KindSpec{
+		Kind:        "extract_images",
+		Label:       "Extract images",
+		Description: "One image highlight per distinct image in the document markdown.",
+		Fields: []FieldSpec{
+			{Key: "max_images", Label: "Max images", Type: "int", Default: 0, Help: "0 = all."},
+		},
+	}, handleExtractImages)
 }
 
 type extractImagesConfig struct {

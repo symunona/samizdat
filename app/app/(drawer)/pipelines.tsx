@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   View,
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
@@ -16,10 +17,16 @@ import {
   fetchPipelines,
   fetchPipelineDocuments,
   fetchPipelineJobs,
+  fetchStepCatalog,
+  parseSteps,
   patchPipeline,
+  putPipelineSteps,
 } from '../../src/api'
-import type { Pipeline, Document, Job } from '../../src/api'
+import type {
+  Pipeline, Document, Job, PipelineFilter, PipelineStep, StepFieldSpec, StepKindSpec,
+} from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
+import IconButton from '../../src/IconButton'
 import { useToast } from '../../src/ToastContext'
 
 const STATUS_COLOR: Record<string, string> = {
@@ -45,16 +52,28 @@ function formatDate(iso: string): string {
   } catch { return iso }
 }
 
+// The only keys the server matches on — pipeline.PipelineFilter, mirrored by
+// PipelineFilter in api.ts. Anything else is rendered verbatim as `key: value`
+// so a filter key added on the Go side can never silently read "all documents".
+const FILTER_LABELS: Record<keyof PipelineFilter, string> = {
+  feed_url_contains: 'feed url contains',
+  source_feed_id: 'feed',
+  exclude_feed_url_contains: 'excluding feed url',
+  exclude_source_feed_ids: 'excluding feed',
+}
+
+function filterValueText(v: unknown): string {
+  return Array.isArray(v) ? v.map(String).join(', ') : String(v)
+}
+
 function summarizeFilter(filterJson: string): string {
-  try {
-    const f = JSON.parse(filterJson) as Record<string, unknown>
-    const parts: string[] = []
-    if (f.feed_id) parts.push(`feed: ${String(f.feed_id).slice(0, 8)}`)
-    if (f.tag) parts.push(`tag: ${f.tag}`)
-    if (f.domain) parts.push(`domain: ${f.domain}`)
-    if (f.url_pattern) parts.push(`url: ${f.url_pattern}`)
-    return parts.length ? parts.join(', ') : 'all documents'
-  } catch { return filterJson || 'all documents' }
+  let parsed: unknown
+  try { parsed = JSON.parse(filterJson || '{}') } catch { return filterJson || 'all documents' }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return filterJson || 'all documents'
+  const parts = Object.entries(parsed as Record<string, unknown>)
+    .filter(([, v]) => v !== null && v !== undefined && v !== '' && v !== false && !(Array.isArray(v) && v.length === 0))
+    .map(([k, v]) => `${FILTER_LABELS[k as keyof PipelineFilter] ?? k}: ${filterValueText(v)}`)
+  return parts.length ? parts.join(', ') : 'all documents'
 }
 
 function summarizeSteps(stepsJson: string): string {
@@ -65,25 +84,216 @@ function summarizeSteps(stepsJson: string): string {
   } catch { return stepsJson || 'no steps' }
 }
 
+// ── Step config editor ───────────────────────────────────────────────────────
+// A step's config is free-form JSON; the catalog (GET /api/v1/pipeline-steps)
+// describes the keys a kind knows about. Keys the catalog does not describe are
+// still editable — a pipeline row can carry anything.
+
+type FieldType = 'string' | 'text' | 'int' | 'bool' | 'json'
+
+type StepFieldRow = {
+  key: string
+  label: string
+  help: string
+  type: FieldType
+  placeholder: string
+  value: string | boolean
+  present: boolean  // the key exists in the stored config (an absent+blank one is not written back)
+}
+
+type StepDraft = { kind: string; label: string; description: string; rows: StepFieldRow[] }
+
+// Credentials never reach a client (design rule 5): the catalog FLAGS a field
+// `secret` (naming it, never valuing it) and the server redacts it from GET. The
+// key-name guard is the third lock, and the only one covering a hand-added custom
+// key the catalog does not describe — a leaked credential must not become a
+// rendered, re-savable input.
+const SECRET_KEY = /api[_-]?key|secret|token|password|passphrase/i
+function isSecretField(key: string, spec?: StepFieldSpec): boolean {
+  return spec?.secret === true || SECRET_KEY.test(key)
+}
+
+// The key is always shown, so a label that is only the key re-cased ("base_url" →
+// "Base URL") is noise in a two-column table. Show it only when it says something new.
+function addsMeaning(label: string, key: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[_\-\s]/g, '')
+  return norm(label) !== norm(key)
+}
+
+function fieldType(spec: StepFieldSpec | undefined, value: unknown): FieldType {
+  if (spec?.type === 'text' || spec?.type === 'int' || spec?.type === 'bool' || spec?.type === 'string') {
+    return spec.type
+  }
+  if (typeof value === 'boolean') return 'bool'
+  if (typeof value === 'number') return 'int'
+  if (value !== null && typeof value === 'object') return 'json'
+  return typeof value === 'string' && value.length > 80 ? 'text' : 'string'
+}
+
+function toDraftValue(v: unknown, type: FieldType): string | boolean {
+  if (type === 'bool') return v === true || v === 'true'
+  if (v === undefined || v === null) return ''
+  if (type === 'json') return JSON.stringify(v, null, 2)
+  return String(v)
+}
+
+// Throws with a human-readable reason — the Save handler surfaces it as the row's
+// error, so junk in an int/JSON field never reaches the server.
+function fromDraftValue(row: StepFieldRow): unknown {
+  if (row.type === 'bool') return row.value === true
+  const text = String(row.value)
+  if (row.type === 'int') {
+    const n = Number(text)
+    if (!Number.isFinite(n)) throw new Error(`${row.label}: "${text}" is not a number`)
+    return Math.trunc(n)
+  }
+  if (row.type === 'json') {
+    try { return JSON.parse(text) } catch { throw new Error(`${row.label}: invalid JSON`) }
+  }
+  return text
+}
+
+function buildDrafts(pipeline: Pipeline, catalog: StepKindSpec[]): StepDraft[] {
+  return parseSteps(pipeline).map(step => {
+    const spec = catalog.find(k => k.kind === step.kind)
+    const fields = spec?.fields ?? []
+    const extraKeys = Object.keys(step.config).filter(k => !fields.some(f => f.key === k))
+    const rows: StepFieldRow[] = [...fields.map(f => f.key), ...extraKeys]
+      .filter(key => !isSecretField(key, fields.find(f => f.key === key)))
+      .map(key => {
+        const fs = fields.find(f => f.key === key)
+        const raw = step.config[key]
+        const type = fieldType(fs, raw)
+        return {
+          key,
+          label: fs?.label || key,
+          help: fs?.help ?? '',
+          type,
+          placeholder: fs?.default === undefined || fs.default === null ? '' : String(toDraftValue(fs.default, type)),
+          value: toDraftValue(raw, type),
+          present: key in step.config,
+        }
+      })
+    return {
+      kind: step.kind,
+      label: spec?.label || step.kind || 'step',
+      description: spec?.description ?? '',
+      rows,
+    }
+  })
+}
+
+function draftsToSteps(drafts: StepDraft[]): PipelineStep[] {
+  return drafts.map(d => {
+    const config: Record<string, unknown> = {}
+    for (const row of d.rows) {
+      if (!row.present && (row.value === '' || row.value === false)) continue
+      config[row.key] = fromDraftValue(row)
+    }
+    return { kind: d.kind, config }
+  })
+}
+
+// Rebuilt from the parsed steps rather than echoing the stored string, so the raw
+// view cannot become the one place a credential shows up.
+function prettySteps(pipeline: Pipeline, catalog: StepKindSpec[]): string {
+  const steps = parseSteps(pipeline).map(step => {
+    const fields = catalog.find(k => k.kind === step.kind)?.fields ?? []
+    return {
+      kind: step.kind,
+      config: Object.fromEntries(
+        Object.entries(step.config).filter(([k]) => !isSecretField(k, fields.find(f => f.key === k))),
+      ),
+    }
+  })
+  return JSON.stringify(steps, null, 2)
+}
+
+// A prompt is long enough to swallow the card, so a text field opens at ~4 lines
+// and expands on demand. RN-Web maps numberOfLines to <textarea rows>; native
+// Android honours it only with an explicit height, hence both.
+const FIELD_LINE_H = 18
+const FIELD_LINES = 4
+const FIELD_LINES_EXPANDED = 16
+
+function StepFieldEditor({ step, row, onChange }: {
+  step: StepDraft
+  row: StepFieldRow
+  onChange: (value: string | boolean) => void
+}) {
+  const { theme } = useUnistyles()
+  const s = useMemo(() => buildStyles(theme), [theme])
+  const [expanded, setExpanded] = useState(false)
+  const multiline = row.type === 'text' || row.type === 'json'
+  const lines = expanded ? FIELD_LINES_EXPANDED : FIELD_LINES
+  const label = `${step.kind} ${row.key}`
+
+  return (
+    <View style={s.fieldRow}>
+      <View style={s.fieldHead}>
+        <Text style={s.fieldKey}>{row.key}</Text>
+        {addsMeaning(row.label, row.key) ? <Text style={s.fieldLabel}>{row.label}</Text> : null}
+        {multiline
+          ? <IconButton
+              name={expanded ? 'contract-outline' : 'expand-outline'}
+              size={14}
+              onPress={() => setExpanded(v => !v)}
+            />
+          : null}
+      </View>
+      {row.help ? <Text style={s.fieldHelp}>{row.help}</Text> : null}
+      {row.type === 'bool'
+        ? <Switch
+            value={row.value === true}
+            onValueChange={onChange}
+            accessibilityLabel={label}
+            trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+            thumbColor={theme.colors.background}
+          />
+        : <TextInput
+            style={[s.fieldInput, multiline && s.fieldInputMultiline, multiline && { minHeight: lines * FIELD_LINE_H }]}
+            value={String(row.value)}
+            onChangeText={onChange}
+            accessibilityLabel={label}
+            placeholder={row.placeholder}
+            placeholderTextColor={theme.colors.placeholder}
+            multiline={multiline}
+            numberOfLines={multiline ? lines : 1}
+            inputMode={row.type === 'int' ? 'numeric' : 'text'}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+      }
+    </View>
+  )
+}
+
 type PipelineCardProps = {
   pipeline: Pipeline
+  catalog: StepKindSpec[]
   onToggleEnabled: (p: Pipeline) => void
+  onPipelineSaved: (p: Pipeline) => void
   togglingId: string | null
 }
 
-type ExpandedSection = 'jobs' | 'docs' | null
+type ExpandedSection = 'jobs' | 'docs' | 'steps' | null
 
-function PipelineCard({ pipeline, onToggleEnabled, togglingId }: PipelineCardProps) {
+function PipelineCard({ pipeline, catalog, onToggleEnabled, onPipelineSaved, togglingId }: PipelineCardProps) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const router = useRouter()
   const { activeUrl, token } = useConnection()
+  const { toast } = useToast()
 
   const [expanded, setExpanded] = useState<ExpandedSection>(null)
   const [jobs, setJobs] = useState<Job[] | null>(null)
   const [docs, setDocs] = useState<Document[] | null>(null)
   const [loadingJobs, setLoadingJobs] = useState(false)
   const [loadingDocs, setLoadingDocs] = useState(false)
+  const [drafts, setDrafts] = useState<StepDraft[] | null>(null)
+  const [showRaw, setShowRaw] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   async function toggleSection(section: ExpandedSection) {
     if (expanded === section) {
@@ -91,6 +301,7 @@ function PipelineCard({ pipeline, onToggleEnabled, togglingId }: PipelineCardPro
       return
     }
     setExpanded(section)
+    if (section === 'steps' && drafts === null) setDrafts(buildDrafts(pipeline, catalog))
     if (!activeUrl || !token) return
 
     if (section === 'jobs' && jobs === null) {
@@ -108,6 +319,30 @@ function PipelineCard({ pipeline, onToggleEnabled, togglingId }: PipelineCardPro
         setDocs(data)
       } catch { setDocs([]) }
       finally { setLoadingDocs(false) }
+    }
+  }
+
+  function setFieldValue(stepIdx: number, key: string, value: string | boolean) {
+    setDrafts(prev => prev?.map((d, i) => i !== stepIdx
+      ? d
+      : { ...d, rows: d.rows.map(r => r.key === key ? { ...r, value, present: true } : r) }) ?? null)
+  }
+
+  async function saveSteps() {
+    if (!activeUrl || !token || !drafts || saving) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const updated = await putPipelineSteps(activeUrl, token, pipeline.id, draftsToSteps(drafts))
+      onPipelineSaved(updated)
+      setDrafts(buildDrafts(updated, catalog))
+      toast('Steps saved', 'success')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to save steps'
+      setSaveError(msg)
+      toast(msg, 'error')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -155,6 +390,14 @@ function PipelineCard({ pipeline, onToggleEnabled, togglingId }: PipelineCardPro
         >
           <Text style={[s.sectionBtnText, expanded === 'docs' && s.sectionBtnTextActive]}>
             {expanded === 'docs' ? '▼' : '▶'} Documents
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[s.sectionBtn, expanded === 'steps' && s.sectionBtnActive]}
+          onPress={() => toggleSection('steps')}
+        >
+          <Text style={[s.sectionBtnText, expanded === 'steps' && s.sectionBtnTextActive]}>
+            {expanded === 'steps' ? '▼' : '▶'} Steps
           </Text>
         </Pressable>
         <Pressable
@@ -220,6 +463,51 @@ function PipelineCard({ pipeline, onToggleEnabled, togglingId }: PipelineCardPro
           }
         </View>
       )}
+
+      {/* Steps section — the step config the server actually runs, editable. */}
+      {expanded === 'steps' && (
+        <View style={s.sectionBody}>
+          <View style={s.stepsBar}>
+            <Pressable style={s.sectionBtn} onPress={() => setShowRaw(v => !v)}>
+              <Text style={[s.sectionBtnText, showRaw && s.sectionBtnTextActive]}>
+                {showRaw ? 'hide raw JSON' : 'raw JSON'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[s.saveBtn, saving && s.saveBtnBusy, !!saveError && s.saveBtnError]}
+              onPress={saveSteps}
+              disabled={saving || drafts === null}
+              accessibilityLabel={`Save steps ${pipeline.name}`}
+            >
+              {saving
+                ? <ActivityIndicator size="small" color={theme.colors.accent} />
+                : <Text style={[s.saveBtnText, !!saveError && s.saveBtnTextError]}>Save</Text>}
+            </Pressable>
+          </View>
+          {saveError ? <Text style={s.saveErrorText}>{saveError}</Text> : null}
+          {showRaw
+            ? <Text style={s.rawJson} selectable>{prettySteps(pipeline, catalog)}</Text>
+            : null}
+          {drafts === null || drafts.length === 0
+            ? <Text style={s.emptySection}>No steps configured.</Text>
+            : drafts.map((step, i) => (
+                <View key={`${step.kind}-${i}`} style={s.stepBlock}>
+                  <Text style={s.stepLabel}>{i + 1}. {step.label}</Text>
+                  {step.description ? <Text style={s.stepDescription}>{step.description}</Text> : null}
+                  {step.rows.length === 0
+                    ? <Text style={s.emptySection}>No configuration.</Text>
+                    : step.rows.map(row => (
+                        <StepFieldEditor
+                          key={row.key}
+                          step={step}
+                          row={row}
+                          onChange={v => setFieldValue(i, row.key, v)}
+                        />
+                      ))}
+                </View>
+              ))}
+        </View>
+      )}
     </View>
   )
 }
@@ -231,6 +519,7 @@ export default function PipelinesScreen() {
   const { toast } = useToast()
 
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
+  const [catalog, setCatalog] = useState<StepKindSpec[]>([])
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -241,8 +530,14 @@ export default function PipelinesScreen() {
     isRefresh ? setRefreshing(true) : setLoading(true)
     setError(null)
     try {
-      const data = await fetchPipelines(activeUrl, token)
+      // The catalog only labels + types the step editor: an older server without
+      // the endpoint still lists pipelines, its config keys just render verbatim.
+      const [data, kinds] = await Promise.all([
+        fetchPipelines(activeUrl, token),
+        fetchStepCatalog(activeUrl, token).catch(() => [] as StepKindSpec[]),
+      ])
       setPipelines(data ?? [])
+      setCatalog(kinds ?? [])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -287,7 +582,9 @@ export default function PipelinesScreen() {
               renderItem={({ item }) => (
                 <PipelineCard
                   pipeline={item}
+                  catalog={catalog}
                   onToggleEnabled={handleToggleEnabled}
+                  onPipelineSaved={updated => setPipelines(prev => prev.map(p => p.id === updated.id ? updated : p))}
                   togglingId={togglingId}
                 />
               )}
@@ -303,7 +600,10 @@ export default function PipelinesScreen() {
               ListEmptyComponent={
                 <View style={s.emptyContainer}>
                   <Text style={s.emptyText}>No pipelines configured.</Text>
-                  <Text style={s.emptyHint}>Pipelines are defined in YAML config files on the server.</Text>
+                  <Text style={s.emptyHint}>
+                    A pipeline turns scraped Documents into Highlights. They are rows in the server database,
+                    created through the API (POST /api/v1/pipelines) — once one exists, tune its steps here.
+                  </Text>
                 </View>
               }
             />
@@ -345,6 +645,52 @@ function buildStyles(t: Theme) {
     sectionBtnTextActive: { color: t.colors.accent, fontWeight: '700' },
     sectionBody: { marginTop: t.spacing.sm, borderTopWidth: 1, borderTopColor: t.colors.border, paddingTop: t.spacing.sm },
     emptySection: { color: t.colors.placeholder, fontSize: 12, fontStyle: 'italic', paddingVertical: 4 },
+    stepsBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: t.spacing.sm },
+    saveBtn: {
+      minWidth: 72,
+      alignItems: 'center',
+      paddingHorizontal: t.spacing.md,
+      paddingVertical: 5,
+      borderRadius: t.radius.sm,
+      borderWidth: 1,
+      borderColor: t.colors.accent,
+      backgroundColor: t.colors.accent + '22',
+    },
+    saveBtnBusy: { opacity: 0.6 },
+    saveBtnError: { borderColor: t.colors.error, backgroundColor: t.colors.error + '18' },
+    saveBtnText: { color: t.colors.accent, fontSize: 13, fontWeight: '700' },
+    saveBtnTextError: { color: t.colors.error },
+    saveErrorText: { color: t.colors.error, fontSize: 12, marginTop: t.spacing.xs },
+    rawJson: {
+      color: t.colors.muted,
+      fontSize: 11,
+      fontFamily: 'monospace',
+      backgroundColor: t.colors.background,
+      borderRadius: t.radius.sm,
+      padding: t.spacing.sm,
+      marginTop: t.spacing.sm,
+    },
+    stepBlock: { marginTop: t.spacing.md },
+    stepLabel: { color: t.colors.text, fontSize: 13, fontWeight: '700' },
+    stepDescription: { color: t.colors.placeholder, fontSize: 11, marginTop: 2 },
+    fieldRow: { marginTop: t.spacing.sm },
+    fieldHead: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.xs },
+    fieldKey: { color: t.colors.muted, fontSize: 11, fontFamily: 'monospace' },
+    fieldLabel: { color: t.colors.placeholder, fontSize: 11, flex: 1 },
+    fieldHelp: { color: t.colors.placeholder, fontSize: 10, marginTop: 1 },
+    fieldInput: {
+      color: t.colors.text,
+      fontSize: 12,
+      fontFamily: 'monospace',
+      backgroundColor: t.colors.background,
+      borderWidth: 1,
+      borderColor: t.colors.border,
+      borderRadius: t.radius.sm,
+      paddingHorizontal: t.spacing.sm,
+      paddingVertical: 6,
+      marginTop: 3,
+    },
+    fieldInputMultiline: { textAlignVertical: 'top' },
     jobRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm, paddingVertical: 5 },
     jobDot: { width: 7, height: 7, borderRadius: 4, flexShrink: 0 },
     jobAge: { color: t.colors.placeholder, fontSize: 11, width: 56, flexShrink: 0 },

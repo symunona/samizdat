@@ -13,12 +13,26 @@ import (
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
+const kindLLM321Newsletter = "llm_321_newsletter"
+
 func init() {
-	Register("llm_321_newsletter", handleLLM321Newsletter)
+	Register(KindSpec{
+		Kind:        kindLLM321Newsletter,
+		Label:       "3-2-1 newsletter",
+		Description: "Extracts James Clear's 3 ideas, 2 quotes and 1 question as highlights.",
+		Fields: []FieldSpec{
+			{Key: "model", Label: "Model", Type: "string", Help: "Empty = the provider's default_model."},
+			{Key: "provider", Label: "Provider", Type: "string", Help: "anthropic | openai_compat. Empty = the server's LLM client."},
+			{Key: "base_url", Label: "Base URL", Type: "string", Help: "openai_compat endpoint override."},
+			{Key: "api_key", Label: "API key", Type: "string", Secret: true},
+			{Key: promptKey, Label: "Prompt", Type: "text", Default: nl321DefaultPrompt},
+		},
+	}, handleLLM321Newsletter)
 }
 
 type nl321Config struct {
 	Model    string `json:"model"`
+	Prompt   string `json:"prompt"`
 	Provider string `json:"provider"`
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
@@ -34,7 +48,7 @@ type nl321Response struct {
 	Highlights []nl321Highlight `json:"highlights"`
 }
 
-const nl321SystemPrompt = `You parse James Clear's 3-2-1 newsletter. Return ONLY valid JSON, no prose, no markdown fences.
+const nl321DefaultPrompt = `You parse James Clear's 3-2-1 newsletter. Return ONLY valid JSON, no prose, no markdown fences.
 
 Schema:
 {"highlights": [{"kind": string, "title": string, "body": string}]}
@@ -45,12 +59,15 @@ Extract exactly these 6 highlights in order:
 - 1x kind="question" — the 1 question. Title: "Question". Body: full question verbatim.
 
 If the newsletter has a different structure, extract as many as exist. Preserve verbatim text — do not paraphrase.
-Return [] if no highlights found.`
+Return [] if no highlights found.` + promptTemplateTail
 
 func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, globalClient llm.Client) (StepResult, error) {
 	var c nl321Config
 	_ = ParseStepConfig(cfg, &c)
 	// Unset model = the configured provider's default_model (see step_llm_summarize).
+	if c.Prompt == "" {
+		c.Prompt = defaultPrompt(kindLLM321Newsletter)
+	}
 
 	client := globalClient
 	if c.Provider != "" {
@@ -75,7 +92,7 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 		content = content[:16000] + "\n\n[truncated]"
 	}
 
-	userMsg := nl321SystemPrompt + "\n\n# " + doc.Title + "\n\n" + content
+	userMsg := renderPrompt(c.Prompt, map[string]string{"title": doc.Title, "content": content})
 	reply, usage, err := client.Complete(ctx, c.Model, []llm.Message{
 		{Role: "user", Content: userMsg},
 	})

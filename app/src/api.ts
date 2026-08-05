@@ -808,6 +808,72 @@ export async function patchPipeline(
   return json<Pipeline>(res, `/api/v1/pipelines/${id} PUT`)
 }
 
+// One entry of the pipeline's `steps` JSON array (server: pipeline.StepConfig).
+export type PipelineStep = {
+  kind: string
+  config: Record<string, unknown>
+}
+
+// Tolerant by design: a pipeline whose steps are unparseable or not an array
+// yields no steps instead of blanking the screen it is rendered on.
+export function parseSteps(p: Pipeline): PipelineStep[] {
+  let raw: unknown
+  try { raw = JSON.parse(p.steps || '[]') } catch { return [] }
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((s): PipelineStep[] => {
+    if (!s || typeof s !== 'object') return []
+    const { kind, config } = s as { kind?: unknown; config?: unknown }
+    return [{
+      kind: typeof kind === 'string' ? kind : '',
+      config: config && typeof config === 'object' && !Array.isArray(config)
+        ? { ...(config as Record<string, unknown>) }
+        : {},
+    }]
+  })
+}
+
+// Mirrors pipeline.PipelineFilter (server/internal/pipeline/pipeline.go) EXACTLY.
+// A key that drifts from Go makes a feed-scoped pipeline render as "all documents".
+export type PipelineFilter = {
+  feed_url_contains?: string
+  source_feed_id?: string
+  exclude_feed_url_contains?: string[]
+  exclude_source_feed_ids?: string[]
+}
+
+// One editable config key of a step kind (server: pipeline.FieldSpec).
+export type StepFieldSpec = {
+  key: string
+  label: string
+  type: string      // 'string' | 'text' | 'int' | 'bool'
+  default?: unknown
+  secret?: boolean  // the server omits these; the UI must never render one either
+  help?: string
+}
+
+// A registered step kind and the config it accepts (server: pipeline.KindSpec).
+export type StepKindSpec = {
+  kind: string
+  label: string
+  description: string
+  fields: StepFieldSpec[]
+}
+
+export async function fetchStepCatalog(serverUrl: string, token: string): Promise<StepKindSpec[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/pipeline-steps`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return json<StepKindSpec[]>(res, '/api/v1/pipeline-steps')
+}
+
+// The server stores `steps` as a JSON string, so it is serialized here rather
+// than sent as an array. A config that omits a secret key keeps the stored value.
+export async function putPipelineSteps(
+  serverUrl: string, token: string, id: string, steps: PipelineStep[],
+): Promise<Pipeline> {
+  return patchPipeline(serverUrl, token, id, { steps: JSON.stringify(steps) })
+}
+
 export async function fetchPipelineDocuments(serverUrl: string, token: string, pipelineId: string): Promise<Document[]> {
   const res = await fetch(`${base(serverUrl)}/api/v1/pipelines/${encodeURIComponent(pipelineId)}/documents`, {
     headers: { Authorization: `Bearer ${token}` },
