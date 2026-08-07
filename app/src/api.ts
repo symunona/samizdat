@@ -116,6 +116,18 @@ export async function findReachable(
   return null
 }
 
+// How a Document got here — served by GET /documents/{id} (derived server-side from
+// the scrape job that produced it). 'feed' is a Subscription poll, 'pipeline' a step
+// that followed a link out of `document_id`, 'manual' a URL pushed from a device,
+// 'unknown' a document with no scrape job on record.
+export type AddedVia = {
+  kind: 'feed' | 'pipeline' | 'manual' | 'unknown'
+  device_name?: string
+  pipeline_name?: string
+  document_id?: string
+  document_title?: string
+}
+
 export type Document = {
   id: string
   canonical_url: string
@@ -133,6 +145,7 @@ export type Document = {
   annotation_count?: number
   highlight_count?: number
   capture_ms?: number
+  added_via?: AddedVia
   created_at: string
   updated_at: string
   rev: number

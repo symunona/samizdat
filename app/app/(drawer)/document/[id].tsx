@@ -227,6 +227,15 @@ export default function DocumentViewer() {
     })
   }, [metaAnim])
 
+  // A pipeline-added document knows the document whose links it was pulled from —
+  // jump there from the meta panel.
+  const openLinkingDoc = useCallback(() => {
+    const parentID = doc?.added_via?.document_id
+    if (!parentID) return
+    closeMetaPanel()
+    router.push(`/document/${encodeURIComponent(parentID)}`)
+  }, [doc, closeMetaPanel, router])
+
   // Annotation panel state
   const [annVisible, setAnnVisible] = useState(false)
   const [annMode, setAnnMode] = useState<'create' | 'edit'>('create')
@@ -788,8 +797,31 @@ export default function DocumentViewer() {
                   {sourceFeed.title || (() => { try { return new URL(sourceFeed.url).hostname } catch { return sourceFeed.url } })()}
                   {'\n'}<Text style={s.metaMuted}>{sourceFeed.kind} feed</Text>
                 </Text>
+              ) : doc.added_via?.kind === 'pipeline' ? (
+                <>
+                  <Text style={s.metaValue}>Pipeline</Text>
+                  {doc.added_via.pipeline_name ? (
+                    <Text style={s.metaMuted}>{doc.added_via.pipeline_name}</Text>
+                  ) : null}
+                  {doc.added_via.document_id ? (
+                    <Pressable onPress={openLinkingDoc} hitSlop={4}>
+                      <Text style={s.metaLink} numberOfLines={2}>
+                        from {doc.added_via.document_title || 'another document'}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </>
+              ) : doc.added_via?.kind === 'manual' ? (
+                <>
+                  <Text style={s.metaValue}>Manual</Text>
+                  {doc.added_via.device_name ? (
+                    <Text style={s.metaMuted}>added from {doc.added_via.device_name}</Text>
+                  ) : null}
+                </>
               ) : (
-                <Text style={s.metaValue}>Manual</Text>
+                // No scrape job on record (import, pruned job) — or the offline replica,
+                // which carries the Document row without the server-derived provenance.
+                <Text style={s.metaValue}>Unknown</Text>
               )}
             </View>
             {isWebUrl(docForId?.canonical_url) && (
@@ -876,6 +908,7 @@ function buildStyles(t: Theme) {
     metaLabel: { color: t.colors.muted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
     metaValue: { color: t.colors.text, fontSize: 14 },
     metaMuted: { color: t.colors.muted, fontSize: 12 },
+    metaLink: { color: t.colors.accent, fontSize: 12, marginTop: 2 },
     metaDivider: { height: 1, backgroundColor: t.colors.border, marginVertical: t.spacing.md },
     viewWebBtn: {
       flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,

@@ -1040,6 +1040,28 @@ func (q *Queries) GetScrapeDurationByDocument(ctx context.Context, result string
 	return duration_ms, err
 }
 
+const getScrapeJobByDocument = `-- name: GetScrapeJobByDocument :one
+SELECT payload, parent_job_id FROM jobs
+WHERE kind = 'scrape_url' AND deleted_at IS NULL
+  AND json_valid(result) AND json_extract(result, '$.document_id') = ?
+ORDER BY updated_at DESC LIMIT 1
+`
+
+type GetScrapeJobByDocumentRow struct {
+	Payload     string  `json:"payload"`
+	ParentJobID *string `json:"parent_job_id"`
+}
+
+// The scrape_url job that produced this document: its payload (device that added it)
+// and its parent job (a run_pipeline_step when a pipeline followed a link here).
+// Drives the "Added via" row on the document metadata panel.
+func (q *Queries) GetScrapeJobByDocument(ctx context.Context, result string) (GetScrapeJobByDocumentRow, error) {
+	row := q.db.QueryRowContext(ctx, getScrapeJobByDocument, result)
+	var i GetScrapeJobByDocumentRow
+	err := row.Scan(&i.Payload, &i.ParentJobID)
+	return i, err
+}
+
 const getSetting = `-- name: GetSetting :one
 SELECT value FROM server_settings WHERE key = ? LIMIT 1
 `

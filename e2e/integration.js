@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
-  newConnectedPage, seedTextDoc, seedVideoDoc, seedHighlight, seedLLMHealth, seedPipeline,
+  newConnectedPage, seedTextDoc, seedVideoDoc, seedHighlight, seedLLMHealth, seedPipeline, seedJob,
   startStubLLM, STUB_LLM_MODELS,
   makeCleanup,
 } from './harness.js'
@@ -24,6 +24,10 @@ const TEXT_DOC_ID = 'dddddddd-0000-4000-8000-000000000001'
 const FIGURE_DOC_ID = 'dddddddd-0000-4000-8000-000000000002'
 const SHORT_DOC_ID = 'dddddddd-0000-4000-8000-000000000003'
 const LONG_DOC_ID = 'dddddddd-0000-4000-8000-000000000004'
+const PIPELINE_DOC_ID = 'dddddddd-0000-4000-8000-000000000005'
+const MANUAL_DOC_ID = 'dddddddd-0000-4000-8000-000000000006'
+const PIPE_STEP_JOB_ID = 'bbbbbbbb-0000-4000-8000-000000000001'
+const ADDED_VIA_DEVICE = 'kitchen-laptop'
 const HL_ID = 'ffffffff-0000-4000-8000-000000000001'
 const SWIPE_HL_ID = 'ffffffff-0000-4000-8000-000000000002'
 const DELETE_HL_ID = 'ffffffff-0000-4000-8000-000000000003'
@@ -96,6 +100,23 @@ const TEXT_DOC = {
     // long, otherwise "it paginates" and "resize repaginates" are untestable.
     ...Array.from({ length: 12 }, (_, i) => FILLER_SECTION(i)),
   ].join('\n'),
+}
+
+// Provenance fixtures: one Document a pipeline pulled in by following a link out of
+// TEXT_DOC, one a device added by hand. Only the scrape job that produced them tells
+// the two apart, which is exactly what the meta panel has to surface.
+const PIPELINE_DOC = {
+  id: PIPELINE_DOC_ID,
+  title: 'Linked By Pipeline',
+  canonicalUrl: 'https://example.com/linked-by-pipeline',
+  markdown: '# Linked By Pipeline\n\nA document a pipeline step followed a link to.',
+}
+
+const MANUAL_DOC = {
+  id: MANUAL_DOC_ID,
+  title: 'Added By Hand',
+  canonicalUrl: 'https://example.com/added-by-hand',
+  markdown: '# Added By Hand\n\nA document pushed to POST /jobs from a device.',
 }
 
 // The two ends of the `auto` decision: SHORT is one page, LONG is comfortably past
@@ -458,6 +479,51 @@ async function apiHighlight(page, id) {
     }
     return null
   }, BASE_URL, id)
+}
+
+// ── Provenance on the meta panel ──────────────────────────────────────────────
+// "Where did this come from" is derived server-side from the scrape job, so the
+// only proof is the rendered panel: a pipeline-pulled document must name the
+// pipeline AND link back to the document whose link it followed; a hand-added one
+// must name the device. Reading the API would prove nothing about the panel.
+async function runAddedVia(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.goto(`${BASE_URL}/document/${PIPELINE_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+
+  // Anchored on the SOURCE row: the panel also carries a "▶ Pipeline" action button,
+  // so a bare /Pipeline/ over the whole panel passes on a document that says "Manual".
+  await check('meta panel: a pipeline-pulled document says so', async () => {
+    if (!await openMetaPanel(page)) return 'meta panel did not open'
+    const body = await page.evaluate(() => document.body.innerText)
+    const row = new RegExp(`Source\\s+Pipeline\\s+${PIPE_NAME}\\s+from ${TEXT_DOC.title}`, 'i')
+    return row.test(body) ? null : `Source row does not name pipeline + linking document: "${body.slice(0, 400)}"`
+  })
+
+  await check('meta panel: the link back opens the document it came from', async () => {
+    const matcher = new Function('e', `return (e.innerText || '').trim() === ${JSON.stringify(`from ${TEXT_DOC.title}`)}`)
+    if (!await clickByText(page, matcher, 'linking document')) return 'no link back to the linking document'
+    await sleep(1200)
+    const url = await page.evaluate(() => location.pathname)
+    if (!url.includes(TEXT_DOC_ID)) return `stayed on ${url}`
+    const body = await page.evaluate(() => document.body.innerText)
+    return body.includes(TEXT_DOC.title) ? null : 'navigated but the linking document did not render'
+  })
+
+  await page.goto(`${BASE_URL}/document/${MANUAL_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+
+  await check('meta panel: a hand-added document names the device', async () => {
+    if (!await openMetaPanel(page)) return 'meta panel did not open'
+    const body = await page.evaluate(() => document.body.innerText)
+    const row = new RegExp(`Source\\s+Manual\\s+added from ${ADDED_VIA_DEVICE}`, 'i')
+    return row.test(body) ? null : `Source row does not read a manual add: "${body.slice(0, 400)}"`
+  })
+  await closeMetaPanel(page)
+
+  if (errors.length) fail('added via: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('added via: no console/HTTP errors')
+  await page.close()
 }
 
 // A PDF figure must read as one framed object with its text subordinate to it,
@@ -1585,6 +1651,24 @@ async function main() {
     seedHighlight({ id: SWIPE_HL_ID, documentId: TEXT_DOC_ID, title: SWIPE_HL_TITLE, body: 'A card that must archive on swipe, never delete.' })
     seedHighlight({ id: DELETE_HL_ID, documentId: TEXT_DOC_ID, title: DELETE_HL_TITLE, body: 'A card whose only delete path on a phone is the footer button.' })
     seedPipeline({ id: PIPE_ID, name: PIPE_NAME, filter: { source_feed_id: PIPE_FEED_ID }, steps: PIPE_STEPS })
+    // Provenance: the scrape jobs are what say where these two documents came from.
+    seedTextDoc(PIPELINE_DOC)
+    seedTextDoc(MANUAL_DOC)
+    seedJob({
+      id: PIPE_STEP_JOB_ID, kind: 'run_pipeline_step',
+      payload: { pipeline_run_id: 'run-added-via', pipeline_name: PIPE_NAME, document_id: TEXT_DOC_ID, document_title: TEXT_DOC.title, step_index: 0 },
+    })
+    seedJob({
+      id: 'job-scrape-pipeline', kind: 'scrape_url',
+      payload: { url: PIPELINE_DOC.canonicalUrl },
+      result: { document_id: PIPELINE_DOC_ID },
+      parentJobId: PIPE_STEP_JOB_ID,
+    })
+    seedJob({
+      id: 'job-scrape-manual', kind: 'scrape_url',
+      payload: { url: MANUAL_DOC.canonicalUrl, device_id: deviceId, device_name: ADDED_VIA_DEVICE },
+      result: { document_id: MANUAL_DOC_ID },
+    })
 
     console.log('  launching browser...')
     browser = await launchBrowser()
@@ -1593,6 +1677,7 @@ async function main() {
     await runAddUrlSheet(token, deviceId)
     await runFeedSwipeArchive(token, deviceId)
     await runTouchDelete(token, deviceId)
+    await runAddedVia(token, deviceId)
     await runImageLightbox(token, deviceId)
     await runFigureRendering(token, deviceId)
     await runSelectionLifecycle(token, deviceId)

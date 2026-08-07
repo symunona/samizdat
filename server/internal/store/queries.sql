@@ -84,6 +84,15 @@ WHERE kind = 'scrape_url' AND deleted_at IS NULL
   AND json_valid(result) AND json_extract(result, '$.document_id') = ?
 ORDER BY updated_at DESC LIMIT 1;
 
+-- name: GetScrapeJobByDocument :one
+-- The scrape_url job that produced this document: its payload (device that added it)
+-- and its parent job (a run_pipeline_step when a pipeline followed a link here).
+-- Drives the "Added via" row on the document metadata panel.
+SELECT payload, parent_job_id FROM jobs
+WHERE kind = 'scrape_url' AND deleted_at IS NULL
+  AND json_valid(result) AND json_extract(result, '$.document_id') = ?
+ORDER BY updated_at DESC LIMIT 1;
+
 -- name: ResetStuckJobs :exec
 -- Reset jobs stuck in 'running' for longer than the given cutoff time back to 'queued'
 -- so the worker can retry them. Cutoff is an ISO8601 timestamp; jobs with updated_at

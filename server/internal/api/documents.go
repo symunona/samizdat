@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -90,8 +91,57 @@ func (h *documentsHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, struct {
 		store.Document
-		CaptureMs int64 `json:"capture_ms"`
-	}{Document: doc, CaptureMs: captureMs})
+		CaptureMs int64       `json:"capture_ms"`
+		AddedVia  docAddedVia `json:"added_via"`
+	}{Document: doc, CaptureMs: captureMs, AddedVia: h.addedVia(r.Context(), doc)})
+}
+
+// docAddedVia is how a Document got here. Kind is "feed" (a Subscription poll),
+// "pipeline" (a step followed a link out of another Document), "manual" (a URL
+// pushed to POST /jobs by app, clipper or CLI) or "unknown" (no scrape job on
+// record — imports and documents older than their pruned job).
+type docAddedVia struct {
+	Kind          string `json:"kind"`
+	DeviceName    string `json:"device_name,omitempty"`
+	PipelineName  string `json:"pipeline_name,omitempty"`
+	DocumentID    string `json:"document_id,omitempty"`
+	DocumentTitle string `json:"document_title,omitempty"`
+}
+
+// addedVia derives provenance from the scrape job that produced the Document:
+// a pipeline-spawned scrape carries the driving run_pipeline_step as its parent
+// job, a manual one carries the pushing device in its payload. A feed poll is
+// already on the Document itself.
+func (h *documentsHandler) addedVia(ctx context.Context, doc store.Document) docAddedVia {
+	if doc.SourceFeedID != nil && *doc.SourceFeedID != "" {
+		return docAddedVia{Kind: "feed"}
+	}
+	job, err := h.q.GetScrapeJobByDocument(ctx, doc.ID)
+	if err != nil {
+		return docAddedVia{Kind: "unknown"}
+	}
+	if job.ParentJobID != nil {
+		parent, err := h.q.GetJob(ctx, *job.ParentJobID)
+		if err == nil && (parent.Kind == "run_pipeline_step" || parent.Kind == "run_pipeline") {
+			var p struct {
+				PipelineName  string `json:"pipeline_name"`
+				DocumentID    string `json:"document_id"`
+				DocumentTitle string `json:"document_title"`
+			}
+			_ = json.Unmarshal([]byte(parent.Payload), &p)
+			return docAddedVia{
+				Kind:          "pipeline",
+				PipelineName:  p.PipelineName,
+				DocumentID:    p.DocumentID,
+				DocumentTitle: p.DocumentTitle,
+			}
+		}
+	}
+	var p struct {
+		DeviceName string `json:"device_name"`
+	}
+	_ = json.Unmarshal([]byte(job.Payload), &p)
+	return docAddedVia{Kind: "manual", DeviceName: p.DeviceName}
 }
 
 func (h *documentsHandler) delete(w http.ResponseWriter, r *http.Request) {
