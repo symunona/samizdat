@@ -25,6 +25,10 @@ const FIGURE_DOC_ID = 'dddddddd-0000-4000-8000-000000000002'
 const SHORT_DOC_ID = 'dddddddd-0000-4000-8000-000000000003'
 const LONG_DOC_ID = 'dddddddd-0000-4000-8000-000000000004'
 const HL_ID = 'ffffffff-0000-4000-8000-000000000001'
+const SWIPE_HL_ID = 'ffffffff-0000-4000-8000-000000000002'
+const DELETE_HL_ID = 'ffffffff-0000-4000-8000-000000000003'
+const SWIPE_HL_TITLE = 'Swipe To Archive'
+const DELETE_HL_TITLE = 'Tap To Delete'
 
 // Highlight body whose FIRST paragraph crosses bold + link + code (multiple text
 // nodes — the hard anchoring case), padded past the 800-char clip threshold so the
@@ -306,6 +310,154 @@ async function runAddUrlSheet(token, deviceId) {
   else pass('feed add-URL: no console/HTTP errors')
 
   await page.close()
+}
+
+// ── Feed swipe = archive · footer trash = delete (touch included) ─────────────
+// The destructive action must NOT sit on the easiest gesture: a swipe archives
+// (reversible, "Unread"), and delete is an explicit button that touch devices used
+// to be denied entirely. Both assertions are visible-result assertions — an
+// archive/delete that only reaches the API but never repaints is the bug this
+// guards.
+const TRASH_GLYPH = String.fromCodePoint(
+  JSON.parse(readFileSync(
+    new URL('../app/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/glyphmaps/Ionicons.json',
+      import.meta.url)))['trash-outline'])
+
+// Rect of the feed card carrying `title` — the smallest element wide enough to be
+// the card itself rather than the title text inside it.
+async function cardRect(page, title) {
+  return page.evaluate((t) => {
+    const hits = [...document.querySelectorAll('*')]
+      .filter(e => e.offsetParent && (e.innerText || '').includes(t))
+      .map(e => e.getBoundingClientRect())
+      .filter(r => r.width > 250 && r.height > 40)
+      .sort((a, b) => a.height - b.height)
+    if (!hits.length) return null
+    const r = hits[0]
+    return { x: r.x, y: r.y, width: r.width, height: r.height }
+  }, title)
+}
+
+// A real pointer drag — RNGH's pan is driven by pointer events, so a synthetic
+// MouseEvent never activates it. Steps matter: one big jump is a teleport, not a pan.
+async function dragX(page, rect, dx) {
+  const y = rect.y + Math.min(rect.height / 2, 60)
+  const x = rect.x + 30
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  for (let i = 1; i <= 12; i++) {
+    await page.mouse.move(x + (dx * i) / 12, y)
+    await sleep(16)
+  }
+  await sleep(120)
+  await page.mouse.up()
+  await sleep(500)
+}
+
+async function runFeedSwipeArchive(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 800 })
+  await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction((t) => document.body.innerText.includes(t), { timeout: 10000 }, SWIPE_HL_TITLE)
+  await sleep(600)
+
+  await check('feed: swiping a card right archives it (not deletes)', async () => {
+    const rect = await cardRect(page, SWIPE_HL_TITLE)
+    if (!rect) return 'swipe card not found in the feed'
+    await dragX(page, rect, 220)
+    const body = await page.evaluate(() => document.body.innerText)
+    if (body.includes('deleted')) return 'swipe deleted the highlight instead of archiving it'
+    if (!body.includes('Unread')) return 'no Unread affordance — the card was not archived'
+    if (!body.includes(SWIPE_HL_TITLE)) return 'card vanished from the feed instead of dimming in place'
+    const hl = await apiHighlight(page, SWIPE_HL_ID)
+    return hl && hl.archived_at ? null : 'archived_at never reached the server'
+  })
+
+  await check('feed: Unread puts the archived card back', async () => {
+    if (!await clickByText(page, (e) => e.innerText === 'Unread', 'Unread button')) return 'no Unread button'
+    await sleep(700)
+    if ((await page.evaluate(() => document.body.innerText)).includes('Unread')) return 'Unread button still shown'
+    const hl = await apiHighlight(page, SWIPE_HL_ID)
+    return hl && !hl.archived_at ? null : 'archived_at still set on the server'
+  })
+
+  if (errors.length) fail('feed swipe: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('feed swipe: no console/HTTP errors')
+  await page.close()
+}
+
+// Same feed, emulated as a touch device: `isTouchDevice()` reads `pointer: coarse`,
+// which is what used to hide the trash button on every phone.
+async function runTouchDelete(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.emulate({
+    viewport: { width: 420, height: 900, hasTouch: true, isMobile: true, deviceScaleFactor: 2 },
+    userAgent: 'Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
+  })
+  await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction((t) => document.body.innerText.includes(t), { timeout: 10000 }, DELETE_HL_TITLE)
+
+  await check('feed (touch): the browser really reports a coarse pointer', async () =>
+    await page.evaluate(() => window.matchMedia('(pointer: coarse)').matches)
+      ? null : 'touch emulation did not make the pointer coarse — the check below proves nothing')
+
+  await check('feed (touch): the card footer shows a delete button', async () => {
+    const n = await page.evaluate((g) => [...document.querySelectorAll('*')]
+      .filter(e => e.offsetParent && e.innerText === g).length, TRASH_GLYPH)
+    return n > 0 ? null : 'no trash button rendered on a touch device'
+  })
+
+  await check('feed (touch): tapping it shows the undo-able deleted card', async () => {
+    // Scoped to THIS card's trash — every card has one, and a global click would
+    // delete an arbitrary row while the assertions below still passed.
+    const clicked = await page.evaluate((t, g) => {
+      const card = [...document.querySelectorAll('*')]
+        .filter(e => e.offsetParent && (e.innerText || '').includes(t))
+        .filter(e => [...e.querySelectorAll('*')].some(c => c.innerText === g))
+        .sort((a, b) => a.getBoundingClientRect().height - b.getBoundingClientRect().height)[0]
+      const btn = card && [...card.querySelectorAll('*')].find(c => c.innerText === g)
+      if (!btn) return false
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      return true
+    }, DELETE_HL_TITLE, TRASH_GLYPH)
+    if (!clicked) return 'no trash button inside the target card'
+    await sleep(500)
+    const body = await page.evaluate(() => document.body.innerText)
+    if (!/deleted/.test(body)) return 'no "deleted" state after tapping delete'
+    if (!/Undo/.test(body)) return 'no Undo affordance'
+    return null
+  })
+
+  await check('feed (touch): Undo cancels the delete before it reaches the server', async () => {
+    if (!await clickByText(page, (e) => e.innerText === 'Undo', 'Undo button')) return 'no Undo button'
+    await sleep(6000) // outlive the 5s delete timer — it must never fire
+    const body = await page.evaluate(() => document.body.innerText)
+    if (/deleted/.test(body)) return 'card is still in the deleted state after Undo'
+    if (!body.includes(DELETE_HL_TITLE)) return 'card did not come back after Undo'
+    const hl = await apiHighlight(page, DELETE_HL_ID)
+    return hl ? null : 'the highlight was deleted on the server despite Undo'
+  })
+
+  if (errors.length) fail('feed touch delete: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('feed touch delete: no console/HTTP errors')
+  await page.close()
+}
+
+// Read one highlight back through the API (the feed list endpoint hides archived
+// rows, so ask for both lists).
+async function apiHighlight(page, id) {
+  return page.evaluate(async (base, hlId) => {
+    const tok = JSON.parse(localStorage.getItem('samizdat_connection')).token
+    const h = { Authorization: `Bearer ${tok}` }
+    for (const path of ['/api/v1/highlights?limit=200', '/api/v1/highlights?archived=1&limit=200']) {
+      const r = await fetch(base + path, { headers: h })
+      if (!r.ok) continue
+      const rows = await r.json()
+      const hit = (rows || []).find(x => x.id === hlId)
+      if (hit) return hit
+    }
+    return null
+  }, BASE_URL, id)
 }
 
 // A PDF figure must read as one framed object with its text subordinate to it,
@@ -1430,6 +1582,8 @@ async function main() {
     seedTextDoc(SHORT_DOC)
     seedTextDoc(LONG_DOC)
     seedHighlight({ id: HL_ID, documentId: TEXT_DOC_ID, title: 'Go 1.21 Release', body: HL_BODY })
+    seedHighlight({ id: SWIPE_HL_ID, documentId: TEXT_DOC_ID, title: SWIPE_HL_TITLE, body: 'A card that must archive on swipe, never delete.' })
+    seedHighlight({ id: DELETE_HL_ID, documentId: TEXT_DOC_ID, title: DELETE_HL_TITLE, body: 'A card whose only delete path on a phone is the footer button.' })
     seedPipeline({ id: PIPE_ID, name: PIPE_NAME, filter: { source_feed_id: PIPE_FEED_ID }, steps: PIPE_STEPS })
 
     console.log('  launching browser...')
@@ -1437,6 +1591,8 @@ async function main() {
 
     await runPageChecks(token, deviceId)
     await runAddUrlSheet(token, deviceId)
+    await runFeedSwipeArchive(token, deviceId)
+    await runTouchDelete(token, deviceId)
     await runImageLightbox(token, deviceId)
     await runFigureRendering(token, deviceId)
     await runSelectionLifecycle(token, deviceId)

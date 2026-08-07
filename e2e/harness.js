@@ -142,8 +142,15 @@ export async function newConnectedPage(browser, token, deviceId) {
   const page = await browser.newPage()
   const conn = JSON.stringify({ token, deviceId, serverUrls: [BASE_URL] })
   await page.evaluateOnNewDocument((data, lastUrl) => {
-    localStorage.setItem('samizdat_connection', data)
-    localStorage.setItem('samizdat_last_url', lastUrl)
+    // Runs on EVERY document, including the initial about:blank — and an
+    // about:blank re-created by an emulation change (page.emulate with
+    // isMobile/hasTouch reloads) has an opaque origin where touching
+    // localStorage throws SecurityError. Swallow it: the real page load runs
+    // this again on the server's origin, where it matters.
+    try {
+      localStorage.setItem('samizdat_connection', data)
+      localStorage.setItem('samizdat_last_url', lastUrl)
+    } catch { /* opaque-origin document — nothing to seed */ }
   }, conn, BASE_URL)
 
   const errors = []

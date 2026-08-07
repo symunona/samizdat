@@ -118,7 +118,10 @@ export default function HighlightCard({
       )}
 
       <View style={s.cardFooter}>
-        {!touch && onDelete ? (
+        {/* Always rendered — on touch the swipe archives, so this is the ONLY delete
+            path there (and it mirrors the WebView card, which never gated it). Safe
+            without a confirm: the feed shows a 5s "deleted / Undo" card first. */}
+        {onDelete ? (
           <IconButton name="trash-outline" onPress={onDelete} hitSlop={6} hoverColor="#ef4444" />
         ) : null}
         {publishedLabel ? <Text style={s.dateText}>{publishedLabel}</Text> : null}

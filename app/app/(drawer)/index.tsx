@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, FlatList, StyleSheet, Pressable, Alert, Platform, useWindowDimensions } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useRouter, useNavigation } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
 import type { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import { useConnection } from '../../src/ConnectionContext'
@@ -220,6 +221,15 @@ export default function FeedScreen() {
     )
   }, [])
 
+  // Swipe-to-archive. Same state path as the scroll-past auto-archive in onScroll, so
+  // the card dims in place and keeps its Unread button — the reversible action gets the
+  // easy gesture; delete lives on the footer button.
+  const handleArchive = useCallback((id: string) => {
+    pendingArchiveRef.current.delete(id)
+    setArchivedIds(prev => new Set(prev).add(id))
+    mut.archiveHighlight(id, new Date().toISOString())
+  }, [])
+
   const initiateDelete = useCallback((item: HighlightWithDoc) => {
     setDeletingIds(prev => new Set(prev).add(item.id))
     const timer = setTimeout(() => {
@@ -285,11 +295,13 @@ export default function FeedScreen() {
 
     const isPinned = item.pinned === 1
 
+    // RNGH reports the DRAG direction, not the panel side: dragging the card right
+    // ('right') is what reveals renderLeftActions.
     const handleSwipeOpen = (direction: string) => {
       const ref = swipeRefs.current.get(item.id)
       ref?.close()
       if (direction === 'right') {
-        initiateDelete(item)
+        handleArchive(item.id)
       } else {
         handlePin(item)
       }
@@ -326,14 +338,14 @@ export default function FeedScreen() {
           }}
           containerStyle={[s.swipeContainer, isArchived && s.archivedContainer]}
           renderLeftActions={() => (
-            <View style={s.deleteAction}>
-              <Text style={s.swipeIcon}>🗑</Text>
-              <Text style={s.swipeLabel}>Delete</Text>
+            <View style={s.archiveAction}>
+              <Ionicons name="archive-outline" size={20} color="#fff" />
+              <Text style={s.swipeLabel}>Archive</Text>
             </View>
           )}
           renderRightActions={() => (
             <View style={[s.starAction, isPinned && s.starActionActive]}>
-              <Text style={s.swipeIcon}>{isPinned ? '★' : '☆'}</Text>
+              <Ionicons name={isPinned ? 'star' : 'star-outline'} size={20} color="#fff" />
               <Text style={s.swipeLabel}>{isPinned ? 'Unpin' : 'Star'}</Text>
             </View>
           )}
@@ -348,7 +360,7 @@ export default function FeedScreen() {
         {unarchiveBtn}
       </View>
     )
-  }, [archivedIds, deletingIds, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
+  }, [archivedIds, deletingIds, handleArchive, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
 
   // Show the skeleton (not the empty state) while anything might still produce
   // highlights: the persisted store hasn't hydrated yet, the connection is still
@@ -526,9 +538,9 @@ function buildStyles(t: Theme) {
       elevation: 4,
     },
     unreadAllText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-    deleteAction: {
+    archiveAction: {
       width: 80,
-      backgroundColor: '#ef4444',
+      backgroundColor: '#0ea5e9',
       alignItems: 'center',
       justifyContent: 'center',
       gap: 2,
@@ -541,7 +553,6 @@ function buildStyles(t: Theme) {
       gap: 2,
     },
     starActionActive: { backgroundColor: t.colors.accent },
-    swipeIcon: { fontSize: 20 },
     swipeLabel: { color: '#fff', fontSize: 11, fontWeight: '700' },
     deletedCard: {
       flexDirection: 'row',
