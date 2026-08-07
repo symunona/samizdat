@@ -28,6 +28,9 @@ const PIPELINE_DOC_ID = 'dddddddd-0000-4000-8000-000000000005'
 const MANUAL_DOC_ID = 'dddddddd-0000-4000-8000-000000000006'
 const PIPE_STEP_JOB_ID = 'bbbbbbbb-0000-4000-8000-000000000001'
 const ADDED_VIA_DEVICE = 'kitchen-laptop'
+const MANUAL_HL_ID = 'ffffffff-0000-4000-8000-000000000004'
+const MANUAL_HL_TITLE = 'Hand Added Card'
+const MANUAL_HL_BODY = 'A card whose document no feed produced.'
 const HL_ID = 'ffffffff-0000-4000-8000-000000000001'
 const SWIPE_HL_ID = 'ffffffff-0000-4000-8000-000000000002'
 const DELETE_HL_ID = 'ffffffff-0000-4000-8000-000000000003'
@@ -488,6 +491,24 @@ async function apiHighlight(page, id) {
 // must name the device. Reading the API would prove nothing about the panel.
 async function runAddedVia(token, deviceId) {
   const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction((t) => document.body.innerText.includes(t), { timeout: 10000 }, MANUAL_HL_TITLE)
+
+  // The feed badges a card with where its document came from. A feed document shows
+  // the feed; one added by hand must say so rather than showing nothing.
+  await check('feed: a hand-added document is badged "manual"', async () => {
+    // The smallest element containing the title is the title itself — match on the
+    // body too so the match is the whole card (badges included).
+    const cardText = await page.evaluate((t, b) => {
+      const card = [...document.querySelectorAll('*')]
+        .filter(e => e.offsetParent && (e.innerText || '').includes(t) && (e.innerText || '').includes(b))
+        .sort((a, b2) => a.getBoundingClientRect().height - b2.getBoundingClientRect().height)[0]
+      return card ? card.innerText : ''
+    }, MANUAL_HL_TITLE, MANUAL_HL_BODY)
+    if (!cardText) return 'the card never rendered'
+    return /manual/i.test(cardText) ? null : `card carries no provenance badge: "${cardText.slice(0, 160)}"`
+  })
+
   await page.goto(`${BASE_URL}/document/${PIPELINE_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
   await waitViewerReady(page)
 
@@ -1669,6 +1690,7 @@ async function main() {
       payload: { url: MANUAL_DOC.canonicalUrl, device_id: deviceId, device_name: ADDED_VIA_DEVICE },
       result: { document_id: MANUAL_DOC_ID },
     })
+    seedHighlight({ id: MANUAL_HL_ID, documentId: MANUAL_DOC_ID, title: MANUAL_HL_TITLE, body: MANUAL_HL_BODY })
 
     console.log('  launching browser...')
     browser = await launchBrowser()

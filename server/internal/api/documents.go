@@ -93,7 +93,7 @@ func (h *documentsHandler) get(w http.ResponseWriter, r *http.Request) {
 		store.Document
 		CaptureMs int64       `json:"capture_ms"`
 		AddedVia  docAddedVia `json:"added_via"`
-	}{Document: doc, CaptureMs: captureMs, AddedVia: h.addedVia(r.Context(), doc)})
+	}{Document: doc, CaptureMs: captureMs, AddedVia: addedVia(r.Context(), h.q, doc)})
 }
 
 // docAddedVia is how a Document got here. Kind is "feed" (a Subscription poll),
@@ -108,20 +108,36 @@ type docAddedVia struct {
 	DocumentTitle string `json:"document_title,omitempty"`
 }
 
+// addedViaBadge is the feed card's provenance chip — the counterpart of the source
+// feed badge, for the Documents no Feed produced. Empty for a feed document (that
+// badge already names the feed) and for one with no provenance on record.
+func addedViaBadge(v docAddedVia) string {
+	switch v.Kind {
+	case "manual":
+		return "manual"
+	case "pipeline":
+		if v.PipelineName != "" {
+			return v.PipelineName
+		}
+		return "pipeline"
+	}
+	return ""
+}
+
 // addedVia derives provenance from the scrape job that produced the Document:
 // a pipeline-spawned scrape carries the driving run_pipeline_step as its parent
 // job, a manual one carries the pushing device in its payload. A feed poll is
 // already on the Document itself.
-func (h *documentsHandler) addedVia(ctx context.Context, doc store.Document) docAddedVia {
+func addedVia(ctx context.Context, q *store.Queries, doc store.Document) docAddedVia {
 	if doc.SourceFeedID != nil && *doc.SourceFeedID != "" {
 		return docAddedVia{Kind: "feed"}
 	}
-	job, err := h.q.GetScrapeJobByDocument(ctx, doc.ID)
+	job, err := q.GetScrapeJobByDocument(ctx, doc.ID)
 	if err != nil {
 		return docAddedVia{Kind: "unknown"}
 	}
 	if job.ParentJobID != nil {
-		parent, err := h.q.GetJob(ctx, *job.ParentJobID)
+		parent, err := q.GetJob(ctx, *job.ParentJobID)
 		if err == nil && (parent.Kind == "run_pipeline_step" || parent.Kind == "run_pipeline") {
 			var p struct {
 				PipelineName  string `json:"pipeline_name"`

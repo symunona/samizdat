@@ -46,6 +46,7 @@ type highlightWithDoc struct {
 	DocumentURL         string            `json:"document_url"`
 	DocumentPublishedAt *string           `json:"document_published_at,omitempty"`
 	SourceFeedTitle     string            `json:"source_feed_title,omitempty"`
+	AddedVia            string            `json:"added_via,omitempty"`
 	BodyHTML            string            `json:"body_html"`
 	LinkedDocuments     map[string]string `json:"linked_documents,omitempty"`
 	Tags                []store.Tag       `json:"tags,omitempty"`
@@ -74,8 +75,9 @@ func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]highlightWithDoc, 0, len(rows))
 	docCache := map[string]store.Document{}
-	feedCache := map[string]string{} // feed id → title
-	urlCache := map[string]string{}  // canonical_url → document id ("" = not found)
+	feedCache := map[string]string{}     // feed id → title
+	urlCache := map[string]string{}      // canonical_url → document id ("" = not found)
+	addedViaCache := map[string]string{} // document id → provenance badge (2 queries each)
 	for _, hl := range rows {
 		doc, ok := docCache[hl.DocumentID]
 		if !ok {
@@ -114,10 +116,18 @@ func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
 				feedCache[*doc.SourceFeedID] = feedTitle
 			}
 		}
+		// A document no feed produced still has a provenance chip (manual add /
+		// pipeline), so the card never leaves "where is this from" blank.
+		badge, ok := addedViaCache[hl.DocumentID]
+		if !ok {
+			badge = addedViaBadge(addedVia(r.Context(), h.q, doc))
+			addedViaCache[hl.DocumentID] = badge
+		}
 		tags, _ := h.q.ListTagsByHighlight(r.Context(), hl.ID)
 		out = append(out, highlightWithDoc{
 			Highlight:           hl,
 			SourceFeedTitle:     feedTitle,
+			AddedVia:            badge,
 			DocumentTitle:       doc.Title,
 			DocumentURL:         doc.CanonicalUrl,
 			DocumentPublishedAt: doc.PublishedAt,

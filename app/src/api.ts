@@ -913,6 +913,9 @@ export type HighlightWithDoc = Highlight & {
   document_url: string
   document_published_at?: string | null
   source_feed_title?: string
+  // Provenance chip for a Document no Feed produced: 'manual' or the pipeline's
+  // name. Empty when the feed badge already says where it came from.
+  added_via?: string
   linked_documents?: Record<string, string>
   tags?: Tag[]
 }

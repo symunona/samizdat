@@ -44,6 +44,9 @@ export default function HighlightCard({
     if (isNaN(d.getTime())) return null
     return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
   }, [item.document_published_at])
+  // Where it came from: the feed, or — for a document no feed produced — how it was
+  // added (manual, or the pipeline that pulled it in).
+  const originLabel = item.source_feed_title || item.added_via || ''
   const isClipped = item.body.length > CLIP_CHAR_THRESHOLD || item.body.includes('![')
   // Stabilize by item.id: linked_documents are computed once per highlight and don't change.
   // Prevents new object refs from React Query refetches bypassing MarkdownBody memo.
@@ -56,9 +59,9 @@ export default function HighlightCard({
         <View style={[s.kindBadge, { backgroundColor: hashColor(item.kind) }]}>
           <Text style={s.kindText}>{item.kind}</Text>
         </View>
-        {item.source_feed_title ? (
-          <View style={[s.kindBadge, { backgroundColor: hashColor(item.source_feed_title) }]}>
-            <Text style={s.kindText}>{item.source_feed_title}</Text>
+        {originLabel ? (
+          <View style={[s.kindBadge, { backgroundColor: hashColor(originLabel) }]}>
+            <Text style={s.kindText}>{originLabel}</Text>
           </View>
         ) : null}
         <Pressable style={s.titlePress} onPress={onPress}>
