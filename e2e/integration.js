@@ -11,7 +11,7 @@
 //
 // Run via: just e2e-int   (requires server bin + web build in app/dist)
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
   newConnectedPage, seedTextDoc, seedVideoDoc, seedHighlight, seedLLMHealth, seedPipeline, seedJob,
@@ -1210,6 +1210,84 @@ async function settingsText(page) {
   return page.evaluate(() => document.body.innerText)
 }
 
+// ── the offline replica can no longer be saved ────────────────────────────────
+// The bug this guards: zustand's persist drops the promise setItem() returns, so a
+// device past AsyncStorage's 6MB whole-DB cap threw SQLiteFullException on every
+// write into total silence — the replica froze for six days and the only symptom was
+// a feed that stopped moving. Nothing is asserted from the store here; the point is
+// what the user can SEE, plus that the error really left the device.
+async function runPersistFailure(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  // Same shipped, localStorage-keyed seam as the offline simulator (src/offlineSim.ts):
+  // every persist write rejects with Android's real SQLiteFullException message.
+  await page.evaluateOnNewDocument(() => {
+    try { localStorage.setItem('samizdat_force_storage_full', '1') } catch { /* opaque origin */ }
+  })
+  await page.goto(`${BASE_URL}/settings`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForSelector('[data-testid="persist-failure-card"]', { timeout: 10000 }).catch(() => {})
+  await sleep(800)
+  let txt = await page.evaluate(() => document.body.innerText)
+
+  await check('storage full: Settings says the device storage is full', async () => {
+    if (!/Device Storage/.test(txt)) return `no Device Storage card on Settings: ${txt.slice(0, 400)}`
+    if (!/Full — offline data is stale/.test(txt)) return 'the card does not say the storage is full and the data stale'
+    if (!/SQLiteFullException/.test(txt)) return 'the underlying write error is not shown'
+    return null
+  })
+
+  await check('storage full: the card is honest about what still works', async () => {
+    if (!/still\s+sync to the server/.test(txt.replace(/\s+/g, ' '))) return 'the card does not say local changes still sync'
+    if (!/out of date/.test(txt)) return 'the card does not say offline reads may be stale'
+    return null
+  })
+
+  await check('storage full: the card sits in the Services group', async () => {
+    const up = txt.toUpperCase()
+    const svc = up.indexOf('SERVICES'), prefs = up.indexOf('PREFERENCES')
+    const at = txt.indexOf('Device Storage')
+    return at > svc && at < prefs ? null : `Device Storage is outside the Services group (at ${at}, group ${svc}..${prefs})`
+  })
+
+  await check('storage full: the drawer hamburger shows the degraded dot', async () => {
+    const dots = await page.$$('[data-testid="drawer-alert-dot"]')
+    return dots.length ? null : 'no drawer alert dot while the replica cannot be saved'
+  })
+
+  await check('storage full: an error-level log reached the device-log channel', async () => {
+    if (!errors.some(e => /persistHealth/.test(e))) return `nothing logged at error level: ${errors.slice(0, 3).join(' | ')}`
+    // debugLog flushes immediately on `error` — the line must reach the server file.
+    const f = `tmp/device-logs/integration-device-${deviceId.slice(0, 8)}.ndjson`
+    for (let i = 0; i < 20; i++) {
+      if (existsSync(f) && /device storage is FULL/.test(readFileSync(f, 'utf8'))) return null
+      await sleep(300)
+    }
+    return `no persist failure in ${f}`
+  })
+
+  // Recoverable: free the space, make one more write, and the alarm must clear itself.
+  // Clearing the local cache is exactly the remedy the card points at.
+  await check('storage recovered: a successful write clears the alert', async () => {
+    await page.evaluate(() => localStorage.removeItem('samizdat_force_storage_full'))
+    if (!await clickByText(page, e => e.innerText === 'Clear local cache', 'Clear local cache')) return 'no clear-cache button'
+    await sleep(400)
+    if (!await clickByText(page, e => e.innerText === 'Clear cache', 'confirm clear cache')) return 'confirm dialog did not open'
+    await page.waitForFunction(() => !document.querySelector('[data-testid="persist-failure-card"]'), { timeout: 8000 })
+      .catch(() => {})
+    txt = await page.evaluate(() => document.body.innerText)
+    if (/Device Storage/.test(txt)) return 'the Device Storage card is still up after a successful write'
+    const dots = await page.$$('[data-testid="drawer-alert-dot"]')
+    return dots.length ? 'the drawer dot survived a successful write' : null
+  })
+
+  await sleep(300)
+  // The persist error is the feature: assert on everything ELSE staying clean.
+  const unexpected = errors.filter(e => !/persistHealth/.test(e))
+  if (unexpected.length) fail('storage full: no unrelated console/HTTP errors', unexpected.slice(0, 4).join(' | '))
+  else pass('storage full: no unrelated console/HTTP errors')
+
+  await page.close()
+}
+
 async function runSettingsServices(token, deviceId) {
   const { page, errors } = await newConnectedPage(browser, token, deviceId)
   let txt = await settingsText(page)
@@ -1704,6 +1782,9 @@ async function main() {
     await runFigureRendering(token, deviceId)
     await runSelectionLifecycle(token, deviceId)
     await runHighlightSelectionLifecycle(token, deviceId)
+    // Before runSettingsServices: that one permanently seeds a broken LLM provider,
+    // which would keep the drawer dot lit for every check after it.
+    await runPersistFailure(token, deviceId)
     await runSettingsServices(token, deviceId)
     await runPipelineStepsUi(token, deviceId)
     // Last: the reading mode persists globally (AsyncStorage → shared localStorage),

@@ -24,6 +24,20 @@ export type KVBackend = {
 // can never hit the CursorWindow limit.
 const CHUNK_CHARS = 256 * 1024
 
+// Chunking bounds a single ROW; it cannot bound the whole DB. AsyncStorage's Android
+// backend also caps the entire SQLite file (`getDatabaseSize()`, 6MB by default), and
+// past that every write rejects with SQLiteFullException. zustand's persist calls
+// setItem() on every set() and never awaits the promise, so such a rejection is an
+// unhandled rejection and the snapshot silently stops advancing. isStorageFullError
+// separates that (the case worth naming to the user) from an ordinary write error.
+export function isStorageFullError(e: unknown): boolean {
+  const msg = e instanceof Error ? `${e.name} ${e.message}` : String(e)
+  return /SQLiteFull|disk is full|QuotaExceeded|quota/i.test(msg)
+}
+
+// Observer for one persist attempt: null on success, the error on failure.
+export type WriteObserver = (err: unknown | null) => void
+
 function chunkCount(meta: string | null): number {
   if (!meta) return 0
   try {
@@ -34,7 +48,9 @@ function chunkCount(meta: string | null): number {
   }
 }
 
-export function makeChunkedStorage(kv: KVBackend): KVBackend {
+// `onWrite` (optional so this module stays free of zustand/RN imports and unit-testable)
+// is called once per setItem — one logical "the snapshot was saved", not once per row.
+export function makeChunkedStorage(kv: KVBackend, onWrite?: WriteObserver): KVBackend {
   return {
     async getItem(name: string): Promise<string | null> {
       let meta: string | null
@@ -62,14 +78,22 @@ export function makeChunkedStorage(kv: KVBackend): KVBackend {
     },
 
     async setItem(name: string, value: string): Promise<void> {
-      const count = Math.max(1, Math.ceil(value.length / CHUNK_CHARS))
-      const prev = chunkCount(await kv.getItem(name).catch(() => null))
-      for (let i = 0; i < count; i++) {
-        await kv.setItem(`${name}.${i}`, value.slice(i * CHUNK_CHARS, (i + 1) * CHUNK_CHARS))
+      try {
+        const count = Math.max(1, Math.ceil(value.length / CHUNK_CHARS))
+        const prev = chunkCount(await kv.getItem(name).catch(() => null))
+        for (let i = 0; i < count; i++) {
+          await kv.setItem(`${name}.${i}`, value.slice(i * CHUNK_CHARS, (i + 1) * CHUNK_CHARS))
+        }
+        // Drop stale chunks left over from a previously larger value.
+        for (let i = count; i < prev; i++) await kv.removeItem(`${name}.${i}`)
+        await kv.setItem(name, JSON.stringify({ __chunks: count }))
+        onWrite?.(null)
+      } catch (e) {
+        // Swallow after reporting: zustand is the only caller and it already drops the
+        // promise, so re-throwing would just restore the silent unhandled rejection the
+        // observer exists to replace.
+        onWrite?.(e)
       }
-      // Drop stale chunks left over from a previously larger value.
-      for (let i = count; i < prev; i++) await kv.removeItem(`${name}.${i}`)
-      await kv.setItem(name, JSON.stringify({ __chunks: count }))
     },
 
     async removeItem(name: string): Promise<void> {

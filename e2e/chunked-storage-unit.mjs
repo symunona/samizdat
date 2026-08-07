@@ -7,6 +7,9 @@
 //   - a legacy single-blob value (no manifest) reads back as null (starts clean)
 //   - a backend that THROWS on the oversized legacy read is handled (returns null)
 //   - shrinking the value drops stale chunks; removeItem clears everything
+//   - a REJECTED write (the 6MB whole-DB cap, a different limit from CursorWindow) is
+//     reported to the observer instead of escaping as a silent unhandled rejection
+//   - isStorageFullError tells a full device from an ordinary write error
 
 import { execSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
@@ -19,18 +22,21 @@ const APP = join(__dir, '..', 'app')
 const ESBUILD = join(APP, 'node_modules', '.bin', 'esbuild')
 const out = join(mkdtempSync(join(tmpdir(), 'chunk-unit-')), 'chunked.mjs')
 execSync(`"${ESBUILD}" src/store/chunkedStorage.ts --bundle --format=esm --platform=node --log-level=error --outfile="${out}"`, { cwd: APP })
-const { makeChunkedStorage } = await import(out)
+const { makeChunkedStorage, isStorageFullError } = await import(out)
 
 let failed = 0
 const ok = (name, cond) => { if (cond) console.log(`  PASS ${name}`); else { console.error(`  FAIL ${name}`); failed++ } }
 
-// In-memory backend; `throwOver` simulates Android's CursorWindow throw on a big row.
-function backend({ throwOver = Infinity } = {}) {
+// In-memory backend. `throwOver` simulates Android's CursorWindow throw on a big row;
+// `writeError`, when set, simulates a backend that can no longer accept ANY write (the
+// SQLiteFullException a device past the 6MB whole-DB cap raises).
+function backend({ throwOver = Infinity, writeError = null } = {}) {
   const m = new Map()
   return {
     _m: m,
+    writeError,
     async getItem(k) { const v = m.has(k) ? m.get(k) : null; if (v != null && v.length > throwOver) throw new Error('Row too big to fit into CursorWindow'); return v },
-    async setItem(k, v) { m.set(k, v) },
+    async setItem(k, v) { if (this.writeError) throw this.writeError; m.set(k, v) },
     async removeItem(k) { m.delete(k) },
   }
 }
@@ -81,6 +87,37 @@ const big = 'x'.repeat(Math.floor(CHUNK * 3.5)) + '💾unicode✓' // ~3.5 chunk
   ok('stale chunks dropped on shrink', [...kv._m.keys()].filter(x => /^k\.\d+$/.test(x)).length === 1)
   await s.removeItem('k')
   ok('removeItem clears manifest + chunks', kv._m.size === 0)
+}
+
+// A write that rejects must be REPORTED, never swallowed into an unhandled rejection —
+// this is the bug that froze the replica for six days.
+{
+  const FULL = new Error('android.database.sqlite.SQLiteFullException: database or disk is full')
+  const kv = backend()
+  const seen = []
+  const s = makeChunkedStorage(kv, (err) => seen.push(err))
+  await s.setItem('k', 'small')
+  ok('a healthy write reports success (null)', seen.length === 1 && seen[0] === null)
+
+  kv.writeError = FULL
+  let threw = false
+  try { await s.setItem('k', 'bigger value') } catch { threw = true }
+  ok('a rejected write does not escape the adapter', !threw)
+  ok('a rejected write is reported to the observer', seen.length === 2 && seen[1] === FULL)
+  ok('the previous value survives a failed write', (await s.getItem('k')) === 'small')
+
+  kv.writeError = null
+  await s.setItem('k', 'bigger value')
+  ok('a recovered write reports success again', seen.length === 3 && seen[2] === null)
+  ok('the recovered write actually landed', (await s.getItem('k')) === 'bigger value')
+}
+
+// The discriminator behind the "device storage is full" copy.
+{
+  ok('SQLiteFullException reads as a full device', isStorageFullError(new Error('android.database.sqlite.SQLiteFullException: database or disk is full')))
+  ok('the sqlite message alone reads as a full device', isStorageFullError(new Error('database or disk is full (code 13)')))
+  ok('a browser QuotaExceededError reads as a full device', isStorageFullError(new DOMException('quota', 'QuotaExceededError')))
+  ok('an ordinary write error does not', !isStorageFullError(new Error('Row too big to fit into CursorWindow')))
 }
 
 if (failed) { console.error(`\n${failed} chunked-storage checks FAILED`); process.exit(1) }

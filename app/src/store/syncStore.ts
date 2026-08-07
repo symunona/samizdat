@@ -2,8 +2,12 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { makeChunkedStorage } from './chunkedStorage'
+import { reportPersistWrite } from './persistHealth'
+import { simulateFullStorage } from '../offlineSim'
 
-const chunkedAsyncStorage = makeChunkedStorage(AsyncStorage)
+// Every persist attempt reports its outcome to persistHealth — a rejected write used to
+// vanish into zustand's un-awaited setItem promise (see that module's header).
+const chunkedAsyncStorage = makeChunkedStorage(simulateFullStorage(AsyncStorage), reportPersistWrite)
 import { uuidv4 } from './uuid'
 import type { Document, Highlight, Annotation, Tag } from '../api'
 import {

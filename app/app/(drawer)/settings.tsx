@@ -18,6 +18,7 @@ import { useConnection } from '../../src/ConnectionContext'
 import { useConfirm } from '../../src/ConfirmContext'
 import { useToast } from '../../src/ToastContext'
 import { useSyncStore } from '../../src/store/syncStore'
+import { usePersistHealth } from '../../src/store/persistHealth'
 import { useDebugLogStore } from '../../src/store/debugLogStore'
 import { useReadingModeStore } from '../../src/store/readingModeStore'
 
@@ -107,6 +108,8 @@ export default function SettingsScreen() {
   const { data: proxyStatus, refetch: refetchProxy, isFetching: proxyFetching } = useProxyStatus()
   const { data: exportStats, refetch: refetchExport, isFetching: exportFetching } = useExportStats()
   const { data: llmStatus } = useLLMStatus()
+  // The one client-side service: the offline replica's write path (src/store/persistHealth.ts).
+  const persistFailure = usePersistHealth((st) => st.failure)
   // The LLM card is passive by default (status = the last real call's outcome, see
   // server/CLAUDE.md). This is the one place that ACTIVELY asks — on a tap, never
   // on a render, and shallow: no tokens are spent from a screen.
@@ -641,6 +644,33 @@ export default function SettingsScreen() {
       )}
 
       <Text style={s.sectionTitle}>Services</Text>
+
+      {/* Offline replica write path — shown only while broken. A device that can no
+          longer save the replica keeps reading an ever-staler copy, and before this
+          card said so the only symptom was a feed that quietly stopped moving. */}
+      {persistFailure && (
+        <View style={s.card} testID="persist-failure-card">
+          <View style={s.titleGroup}>
+            <Text style={s.cardTitle}>Device Storage</Text>
+            <Text style={s.cardSubtitle}>Where the offline copy of your library is saved</Text>
+          </View>
+          <View style={s.statusRow}>
+            <View style={[s.dot, { backgroundColor: theme.colors.error }]} />
+            <Text style={[s.statusText, { fontSize: 14, color: theme.colors.error }]}>
+              {persistFailure.full ? 'Full — offline data is stale' : 'Cannot save — offline data is stale'}
+            </Text>
+          </View>
+          <Text style={s.connectionDetail}>
+            {persistFailure.full
+              ? 'This device has no room left, so the offline copy stopped updating '
+              : 'Saving the offline copy failed, so it stopped updating '}
+            {formatRelative(persistFailure.firstAt)}. Your own changes (notes, tags, stars) still
+            sync to the server, but anything you read offline may be out of date. Free up space on
+            the device, or clear the local cache under Device below.
+          </Text>
+          <Text style={s.errorText} numberOfLines={3}>{persistFailure.message}</Text>
+        </View>
+      )}
 
       {/* YouTube proxy */}
       <View style={s.card}>

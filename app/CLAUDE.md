@@ -60,6 +60,44 @@ now work offline. Wiring:
 - **Creates are client-minted UUIDs** (`src/store/uuid.ts` — crypto when present, else Math.random; the `uuid` pkg's v4 crashes on bare Hermes). The server create endpoints (annotation, note, tag) honor an optional `id` idempotently, so a replayed offline create can't collide or duplicate. Never enqueue machine content (doc markdown, highlight body).
 - `TagSelectorModal` is fully store-driven (reads `syncStore.tags` + junction maps, mutates via `mut`) → works offline, no fetch. Follow the useShallow rule: raw slices + `useMemo`.
 
+## A failed persist write must be LOUD (`src/store/persistHealth.ts`)
+
+zustand's `persist` calls `storage.setItem()` on **every** `set()` and never awaits the
+promise it returns. So when a device's storage fills up, every write rejects and the
+rejection is an unhandled promise rejection: nothing thrown, nothing logged, no UI
+change. The replica froze at one snapshot for **six days** while hydration kept handing
+that snapshot back — `lastSyncedAt` never advanced, so the phone re-pulled an
+ever-growing delta on every launch. Do not re-introduce a silent write path.
+
+**Two different Android limits, two different fixes — don't confuse them:**
+- **~2MB per row** (SQLite CursorWindow) → `chunkedStorage.ts` splits the value. Solved.
+- **6MB whole DB** (`getDatabaseSize()` in async-storage's `config.gradle`, gradle
+  property `AsyncStorage_db_size_in_MB`) → **chunking does nothing**; past it every write
+  is `SQLiteFullException`. This is what visibility is for.
+
+Wiring:
+- `makeChunkedStorage(kv, onWrite?)` — the observer fires **once per persist attempt**
+  (not per chunk row): `null` = saved, the error = failed. The adapter reports and then
+  **swallows**; re-throwing would only restore the unhandled rejection. `chunkedStorage.ts`
+  stays free of zustand/RN imports so `e2e/chunked-storage-unit.mjs` can drive it.
+- `isStorageFullError(e)` — pure discriminator (`SQLiteFull` / `database or disk is full` /
+  `QuotaExceeded`). It only picks the wording; any write error still raises the alert.
+- `persistHealth.ts` — non-persisted zustand store (persisting "persist is broken" through
+  the broken writer would be absurd). Logs **once per outage** at `error` level, so it
+  rides `logger.ts` → `debugLog.ts` → `tmp/device-logs/<device>.ndjson` with an immediate
+  flush. A later successful write clears it — the state is recoverable, not sticky.
+- `useServiceAlert()` ORs it in: same red dot on the hamburger + drawer Settings row as a
+  broken server-side service. Settings shows a **Device Storage** card in the Services
+  group *only while broken*.
+- `src/offlineSim.ts` hosts both web-only e2e simulators:
+  `samizdat_force_offline` (every fetch rejects) and `samizdat_force_storage_full`
+  (every persist write rejects with the real SQLiteFullException text).
+
+Covered by `just e2e-offline` (adapter/observer + discriminator) and `just e2e-int`
+(`runPersistFailure` — the visible card + drawer dot, the NDJSON line, and the recovery).
+`runPersistFailure` must stay **before** `runSettingsServices`, which permanently seeds a
+broken LLM provider and would keep the drawer dot lit for every later check.
+
 ## Screen structure (plan/005)
 Bottom tabs: **Feed · Digest · Settings**. Add FAB center-bottom. Side drawers for filters.
 Feed: `Highlight` cards, swipe-triage (read/save/skip). Document viewer: gutter-anchored highlights.

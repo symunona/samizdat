@@ -4,6 +4,7 @@
 // two from double-fetching or disagreeing.
 import { useQuery } from '@tanstack/react-query'
 import { useConnection } from './ConnectionContext'
+import { usePersistHealth } from './store/persistHealth'
 import { fetchYtdlpProxyStatus } from './proxyStatus'
 import { fetchExportStats } from './exportStats'
 import { fetchLLMStatus } from './llmStatus'
@@ -53,11 +54,13 @@ export function useLLMStatus() {
 
 // useServiceAlert is true when a service the user relies on is degraded — the
 // signal behind the drawer dot. A provider dropped from config ("retired") is
-// history, not an alert.
+// history, not an alert. The one client-side member of the set is the offline
+// replica's write path: when it fails the app keeps working but stops saving.
 export function useServiceAlert(): boolean {
   const { data: proxy } = useProxyStatus()
   const { data: exp } = useExportStats()
   const { data: llm } = useLLMStatus()
+  const persistBroken = usePersistHealth((s) => s.failure !== null)
   const proxyDown = !!proxy?.configured && !proxy.ok
   const exportBroken = !!exp?.enabled && !!exp.last_error
   // Only the routing chain can break a pipeline: a 'retired' provider is history
@@ -66,5 +69,5 @@ export function useServiceAlert(): boolean {
   const llmBroken = !!llm?.providers.some(
     (p) => (p.role === 'primary' || p.role === 'fallback') && p.status === 'error',
   )
-  return proxyDown || exportBroken || llmBroken
+  return persistBroken || proxyDown || exportBroken || llmBroken
 }

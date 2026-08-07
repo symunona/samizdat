@@ -63,9 +63,13 @@ function DebugLogBridge() {
 
   useEffect(() => { void hydrate() }, [hydrate])
 
+  // The toggle and the target are passed SEPARATELY: "not connected yet" must leave
+  // the shipper listening (it buffers until a target appears) — folding the two into
+  // one flag silenced every boot-time log, including the one saying the offline
+  // replica can no longer be saved. Only the toggle silences the device.
   useEffect(() => {
-    const on = enabled && status === 'connected'
-    setDebugLogTarget(on ? activeUrl : null, on ? token : null, deviceId, on)
+    const connected = status === 'connected'
+    setDebugLogTarget(connected ? activeUrl : null, connected ? token : null, deviceId, enabled)
   }, [activeUrl, token, deviceId, status, enabled])
 
   // Route uncaught JS errors into the channel. On native, ErrorUtils is the

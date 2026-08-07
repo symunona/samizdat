@@ -26,7 +26,12 @@ const MAX_BATCH = 500        // lines per POST
 
 let queue: Entry[] = []
 let target: { url: string; token: string; deviceId: string | null } | null = null
-let enabled = false
+// Two separate conditions, deliberately: `allowed` is the Settings toggle (may this
+// device stream at all), `target` is where to. Buffering while allowed-but-targetless
+// is what lets a BOOT failure survive — the persisted replica fails to save during
+// hydration, long before DebugLogBridge knows the connection, and conflating the two
+// dropped exactly the error worth having (see src/store/persistHealth.ts).
+let allowed = true
 let timer: ReturnType<typeof setTimeout> | null = null
 let flushing = false
 
@@ -45,20 +50,24 @@ function now(): string {
 }
 
 function push(level: Level, module: string, args: unknown[]): void {
-  if (!enabled) return
+  if (!allowed) return
   queue.push({ ts: now(), level, module, msg: fmt(args) })
   if (queue.length > MAX_QUEUE) queue = queue.slice(queue.length - MAX_QUEUE)
   if (level === 'error') { void flush() }        // errors go out immediately
   else scheduleFlush()
 }
 
+// Listen from bundle load, not from the first connection: anything logged before
+// DebugLogBridge resolves the target is queued and goes out with the first flush.
+setLogSink(push)
+
 function scheduleFlush(): void {
-  if (timer || !enabled) return
+  if (timer || !allowed) return
   timer = setTimeout(() => { timer = null; void flush() }, FLUSH_MS)
 }
 
 async function flush(): Promise<void> {
-  if (flushing || !enabled || !target || queue.length === 0) return
+  if (flushing || !allowed || !target || queue.length === 0) return
   flushing = true
   const batch = queue.slice(0, MAX_BATCH)
   const body = batch.map((e) => JSON.stringify(e)).join('\n') + '\n'
@@ -89,26 +98,31 @@ async function flush(): Promise<void> {
   }
 }
 
-// Called by DebugLogBridge on connection/toggle changes. Registers (or clears)
-// the logger sink and, on enable, emits a session marker so each run is delimited.
+// Called by DebugLogBridge on connection/toggle changes. Points the shipper at a
+// server (or silences the device) and, when a target first appears, emits a session
+// marker so each run is delimited. Anything already buffered goes out with it.
 export function setDebugLogTarget(
   url: string | null,
   token: string | null,
   deviceId: string | null,
   on: boolean,
 ): void {
-  const wasEnabled = enabled
-  enabled = on && !!url && !!token
-  target = enabled ? { url: url as string, token: token as string, deviceId } : null
-  if (enabled) {
-    setLogSink(push)
-    if (!wasEnabled) {
-      push('log', 'debugLog', [`── session start · v${APP_VERSION} · ${Platform.OS} · ${now()} ──`])
-    }
-  } else {
+  const hadTarget = !!target
+  allowed = on
+  target = on && url && token ? { url, token, deviceId } : null
+  if (!on) {
+    // Toggled off: stop listening and drop what's buffered — the point of the
+    // switch is that this device says nothing.
     setLogSink(null)
+    queue = []
     if (timer) { clearTimeout(timer); timer = null }
+    return
   }
+  setLogSink(push)
+  if (target && !hadTarget) {
+    push('log', 'debugLog', [`── session start · v${APP_VERSION} · ${Platform.OS} · ${now()} ──`])
+  }
+  void flush()
 }
 
 // Direct entry point for uncaught errors / WebView-forwarded errors that don't
