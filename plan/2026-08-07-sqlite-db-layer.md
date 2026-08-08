@@ -2,7 +2,7 @@
 created: 2026-08-07
 topic: Replace zustand-persist replica with a real SQLite DB layer
 excerpt: One db layer own all storage. UI and sync both talk only to it. SQLite under, expo-sqlite on native, wa-sqlite on web. Linter guard the wall.
-status: planned — not started
+status: built on feat/sqlite-db-layer — steps 1-4 done, awaiting the on-device check (step 5's last line)
 ---
 
 # SQLite DB layer
@@ -37,12 +37,17 @@ ui   ──┘                                   └─> wa-sqlite   (web)
 | target | driver | why |
 |---|---|---|
 | native (android/ios) | `expo-sqlite` | first-party, SDK 56, system SQLite, no cap |
-| web | `wa-sqlite` + `OPFSCoopSyncVFS` | real SQL, **no COOP/COEP**, all modern browsers |
+| web | `@journeyapps/wa-sqlite` + `OPFSCoopSyncVFS` | real SQL, **no COOP/COEP**, all modern browsers |
 | node (tests only) | `node:sqlite` | built into node 22, zero dep, TDD runner |
 
 **Do NOT use expo-sqlite web target.** Docs say alpha, and it need COOP/COEP headers for
 SharedArrayBuffer. COEP is recursive → YouTube embed (`src/YtPlayer.web.tsx`) break.
 wa-sqlite VFSes need no such header. This is the whole reason for two drivers.
+
+**Use the `@journeyapps/wa-sqlite` fork, NOT upstream.** Upstream `rhashimoto/wa-sqlite`
+last released v1.1.1 in Apr 2024; the `wa-sqlite` npm package is a stale 1.0.0 stub from
+Jan 2024 with no exports map. `@journeyapps/wa-sqlite` (PowerSync) is v2.0.1, published
+2026-08-03, same VFS set, real npm package. Same code family, maintained.
 
 Web fallbacks to note (not build now): Safari incognito have no OPFS; wa-sqlite
 `IDBBatchAtomicVFS` is the escape hatch. Driver pick VFS at open, log which one.

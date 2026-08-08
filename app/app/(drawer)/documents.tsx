@@ -13,12 +13,13 @@ import {
 import { Link, useLocalSearchParams } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { submitScrapeJob, deleteDocument, fetchPipelineDocuments, fetchFeeds, fetchJobs, retryJob, deleteJob } from '../../src/api'
-import type { Document, Feed, Job } from '../../src/api'
+import type { Feed, Job } from '../../src/api'
+import type { DocumentMeta } from '../../src/db'
 import { useConnection } from '../../src/ConnectionContext'
 import { useToast } from '../../src/ToastContext'
 import { useFailedJobs, documentErrorText, orphanScrapeFailures } from '../../src/failedJobs'
 import type { FailedJob } from '../../src/failedJobs'
-import { useDocuments, useSyncStatus } from '../../src/store/hooks'
+import { useDocuments, useSyncStatus } from '../../src/db'
 import { useShareStore } from '../../src/store/shareStore'
 import { forceSync, requestSync } from '../../src/store/syncEngine'
 
@@ -52,7 +53,7 @@ export default function DocumentsScreen() {
   const allDocuments = useDocuments()
   const { status: syncStatus } = useSyncStatus()
   const [refreshing, setRefreshing] = useState(false)
-  const [pipelineDocs, setPipelineDocs] = useState<Document[] | null>(null)
+  const [pipelineDocs, setPipelineDocs] = useState<DocumentMeta[] | null>(null)
   const [pipelineDocsLoading, setPipelineDocsLoading] = useState(false)
 
   // Free keyword search + advanced source filter. Both seed from URL params
@@ -76,7 +77,7 @@ export default function DocumentsScreen() {
 
   // ids being deleted (optimistically hidden from list while waiting for server)
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set())
-  const [pendingDeletes, setPendingDeletes] = useState<Record<string, { doc: Document; countdown: number }>>({})
+  const [pendingDeletes, setPendingDeletes] = useState<Record<string, { doc: DocumentMeta; countdown: number }>>({})
   const pendingTimers = useRef<Record<string, ReturnType<typeof setInterval>>>({})
 
   // Load pipeline-filtered docs from server when pipeline_id param is set
@@ -111,7 +112,7 @@ export default function DocumentsScreen() {
   const sourceFeed = useMemo(() => feeds.find(f => f.id === sourceFilter) ?? null, [feeds, sourceFilter])
 
   const startDelete = useCallback(
-    (doc: Document) => {
+    (doc: DocumentMeta) => {
       // item stays visible as placeholder — pendingDeleteIds untouched until real delete fires
       setPendingDeletes((prev) => ({ ...prev, [doc.id]: { doc, countdown: 5 } }))
 
@@ -334,7 +335,7 @@ export default function DocumentsScreen() {
     )
   }
 
-  function renderItem({ item }: { item: Document }) {
+  function renderItem({ item }: { item: DocumentMeta }) {
     const displayTitle = item.title?.trim() ? item.title : item.canonical_url
     const pending = pendingDeletes[item.id]
     const errorText = documentErrorText(item, failed)
@@ -399,7 +400,10 @@ export default function DocumentsScreen() {
     )
   }
 
-  if (status === 'disconnected' && connError) {
+  // Offline-first: the list comes from the replica, so a dead connection is only worth a
+  // whole error screen when there is genuinely nothing cached to read. Otherwise show the
+  // library — that is the entire point of keeping a local copy.
+  if (status === 'disconnected' && connError && documents.length === 0) {
     return (
       <SafeAreaView style={s.screen}>
         <View style={s.centered}>

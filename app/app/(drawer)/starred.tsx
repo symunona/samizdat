@@ -1,12 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, FlatList, StyleSheet, Pressable, ActivityIndicator } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useRouter } from 'expo-router'
 import { useConnection } from '../../src/ConnectionContext'
 import { fetchHighlights, HighlightWithDoc } from '../../src/api'
-import * as mut from '../../src/store/mutations'
-import { useSyncStore } from '../../src/store/syncStore'
-import { highlightsFromStore } from '../../src/store/highlightsFromStore'
+import * as db from '../../src/db'
 import HighlightCard from '../../src/HighlightCard'
 
 export default function StarredScreen() {
@@ -19,10 +17,15 @@ export default function StarredScreen() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Offline-first: starred highlights are already in the local replica.
+  // Offline-first: starred highlights are already in the local replica. Read through a ref so
+  // `loadFromStore` keeps a stable identity — otherwise every replica write would
+  // re-trigger the network load it feeds.
+  const storeHighlights = db.useStarredHighlights()
+  const storeRef = useRef(storeHighlights)
+  storeRef.current = storeHighlights
   const loadFromStore = useCallback((): boolean => {
-    const hls = highlightsFromStore(h => h.pinned === 1)
-    if (hls.length > 0) setHighlights(hls) // don't wipe a populated list with an empty store
+    const hls = storeRef.current
+    if (hls.length > 0) setHighlights(hls) // don't wipe a populated list with an empty replica
     return hls.length > 0
   }, [])
 
@@ -44,13 +47,13 @@ export default function StarredScreen() {
     if (status === 'connected') load()
   }, [status, load])
 
-  const storeHlCount = useSyncStore(st => Object.keys(st.highlights).length)
+  const storeHlCount = db.useHighlightCount()
   useEffect(() => {
     if (status !== 'connected') loadFromStore()
   }, [status, storeHlCount, loadFromStore])
 
   const handleUnpin = useCallback((item: HighlightWithDoc) => {
-    mut.pinHighlight(item.id, false)
+    db.pinHighlight(item.id, false)
     setHighlights(prev => prev.filter(h => h.id !== item.id))
   }, [])
 

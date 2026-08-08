@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { AppState } from 'react-native'
 import { useConnection } from '../ConnectionContext'
-import { useSyncStore } from './syncStore'
+import { useOutboxCount } from '../db'
 import { requestPush } from './pushEngine'
 
 const POLL_INTERVAL_MS = 30_000
@@ -12,7 +12,7 @@ const POLL_INTERVAL_MS = 30_000
 // (offline) session are flushed the moment this mounts while connected.
 export function useOutboxPush() {
   const { status, activeUrl, token } = useConnection()
-  const pending = useSyncStore((s) => s.outbox.length)
+  const pending = useOutboxCount()
   const ref = useRef({ status, activeUrl, token })
   ref.current = { status, activeUrl, token }
 

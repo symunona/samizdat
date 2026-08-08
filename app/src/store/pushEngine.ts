@@ -14,7 +14,7 @@ import {
   createTag, saveReadingProgress, saveMediaPosition,
   ApiError,
 } from '../api'
-import { useSyncStore } from './syncStore'
+import * as db from '../db'
 import type { OutboxIntent } from './outbox'
 import { createLogger } from '../logger'
 
@@ -89,21 +89,31 @@ export async function drainOutbox(url: string, token: string): Promise<void> {
   if (draining) return
   draining = true
   try {
-    // Re-read the store each iteration — a mutation may append while we drain.
+    // Re-read the queue each iteration — a mutation may append while we drain.
+    // `settled` is the id we just removed: if the head hasn't moved on, the local
+    // delete failed (a broken DB), and replaying it forever would hammer the server
+    // with a request that already succeeded. Stop and let the next cycle retry.
+    let settled: string | null = null
     for (;;) {
-      const intent = useSyncStore.getState().outbox[0]
+      const [intent] = await db.listOutbox()
       if (!intent) break
+      if (intent.id === settled) {
+        log.error(`intent ${intent.kind} (${intent.id}) pushed but could not be dequeued locally — stopping drain`)
+        break
+      }
       try {
         const rev = await replay(intent, url, token)
-        useSyncStore.getState().onIntentSuccess(intent.id, rev)
+        await db.onIntentSuccess(intent.id, rev)
+        settled = intent.id
       } catch (e) {
         if (isPermanentFailure(e)) {
           log.error(`dropping intent ${intent.kind} (${intent.id}) — permanent failure`, e)
-          useSyncStore.getState().dropIntent(intent.id)
+          await db.dropIntent(intent.id)
+          settled = intent.id
           continue // a rejected intent shouldn't block the ones behind it
         }
         // Transient (offline / 5xx / 401): bump tries, stop draining, retry with backoff.
-        useSyncStore.getState().onIntentRetry(intent.id)
+        await db.onIntentRetry(intent.id)
         scheduleRetry(url, token, intent.tries + 1)
         break
       }

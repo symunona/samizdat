@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { findReachable, ApiError } from './api'
 import type { Me } from './api'
-import { loadConnection, clearConnection, loadLastSuccessfulUrl, saveLastSuccessfulUrl, saveUrlLastUsed } from './storage'
+import { loadConnection, clearConnection } from './storage'
+import { loadLastSuccessfulUrl, saveLastSuccessfulUrl, saveUrlLastUsed } from './prefs'
 import type { StoredConnection } from './storage'
 
 type ConnectionStatus = 'loading' | 'connected' | 'disconnected'

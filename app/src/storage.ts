@@ -1,3 +1,11 @@
+// The ONE thing still kept in AsyncStorage: the connection record.
+//
+// It has to outlive the local database. If the replica is corrupt, unopenable, or
+// wiped, this record is the only way back to the server — without it the app has no
+// URL and no token, and there is nothing to re-pull from. Every other preference lives
+// in the replica's `settings` table (src/prefs.ts); see app/CLAUDE.md, "DB layer is the
+// only storage".
+
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
 const KEY = 'samizdat_connection'
@@ -30,120 +38,4 @@ export async function removeServerUrl(url: string): Promise<void> {
   if (!conn) return
   const updated = { ...conn, serverUrls: conn.serverUrls.filter(u => u !== url) }
   await saveConnection(updated)
-}
-
-const LAST_URL_KEY = 'samizdat_last_url'
-const URL_LAST_USED_KEY = 'samizdat_url_last_used'
-
-export async function saveUrlLastUsed(url: string): Promise<void> {
-  try {
-    const raw = await AsyncStorage.getItem(URL_LAST_USED_KEY)
-    const map: Record<string, string> = raw ? JSON.parse(raw) : {}
-    map[url] = new Date().toISOString()
-    await AsyncStorage.setItem(URL_LAST_USED_KEY, JSON.stringify(map))
-  } catch { /* best-effort */ }
-}
-
-export async function loadUrlLastUsedMap(): Promise<Record<string, string>> {
-  try {
-    const raw = await AsyncStorage.getItem(URL_LAST_USED_KEY)
-    return raw ? JSON.parse(raw) : {}
-  } catch {
-    return {}
-  }
-}
-
-const THEME_KEY = 'samizdat_theme'
-const DEBUG_LOG_KEY = 'samizdat_debug_log_stream'
-
-export async function saveTheme(theme: 'dark' | 'light'): Promise<void> {
-  await AsyncStorage.setItem(THEME_KEY, theme)
-}
-
-export async function loadTheme(): Promise<'dark' | 'light'> {
-  try {
-    const raw = await AsyncStorage.getItem(THEME_KEY)
-    return raw === 'light' ? 'light' : 'dark'
-  } catch {
-    return 'dark'
-  }
-}
-
-// Debug-log streaming toggle. Defaults ON — this is a debug-oriented build; the
-// Settings switch lets the user silence it. See src/debugLog.ts.
-export async function saveDebugLogStream(on: boolean): Promise<void> {
-  await AsyncStorage.setItem(DEBUG_LOG_KEY, on ? '1' : '0')
-}
-
-export async function loadDebugLogStream(): Promise<boolean> {
-  try {
-    return (await AsyncStorage.getItem(DEBUG_LOG_KEY)) !== '0'
-  } catch {
-    return true
-  }
-}
-
-// ── Reading mode (document viewer) ────────────────────────────────────────────
-// A global reading preference, not a property of one article. `auto` paginates
-// only documents that would run past READING_PAGE_THRESHOLD pages — the viewer
-// resolves that itself (only it can measure). See src/store/readingModeStore.ts.
-
-export type ReadingMode = 'flow' | 'auto' | 'page'
-
-export const DEFAULT_READING_MODE: ReadingMode = 'auto'
-export const DEFAULT_PAGE_THRESHOLD = 20
-const MAX_PAGE_THRESHOLD = 999
-
-const READING_MODE_KEY = 'samizdat_reading_mode'
-const PAGE_THRESHOLD_KEY = 'samizdat_page_threshold'
-// Pre-three-way key: '1' = paginate everything, '0' = never. Migrated once, then
-// removed — a user who deliberately turned page mode off must land on `flow`, not
-// on the new `auto` default.
-const LEGACY_PAGE_MODE_KEY = 'samizdat_page_mode'
-
-// A junk threshold must not wedge the reader into a mode it can't leave.
-export function clampThreshold(n: number): number {
-  if (!Number.isFinite(n)) return DEFAULT_PAGE_THRESHOLD
-  return Math.min(MAX_PAGE_THRESHOLD, Math.max(1, Math.round(n)))
-}
-
-export async function loadReadingPrefs(): Promise<{ mode: ReadingMode; threshold: number }> {
-  let mode = DEFAULT_READING_MODE
-  let threshold = DEFAULT_PAGE_THRESHOLD
-  try {
-    const raw = await AsyncStorage.getItem(READING_MODE_KEY)
-    if (raw === 'flow' || raw === 'auto' || raw === 'page') {
-      mode = raw
-    } else {
-      const legacy = await AsyncStorage.getItem(LEGACY_PAGE_MODE_KEY)
-      if (legacy !== null) {
-        mode = legacy === '1' ? 'page' : 'flow'
-        await AsyncStorage.setItem(READING_MODE_KEY, mode)
-        await AsyncStorage.removeItem(LEGACY_PAGE_MODE_KEY)
-      }
-    }
-    const n = Number(await AsyncStorage.getItem(PAGE_THRESHOLD_KEY))
-    if (n > 0) threshold = clampThreshold(n)
-  } catch { /* defaults */ }
-  return { mode, threshold }
-}
-
-export async function saveReadingMode(mode: ReadingMode): Promise<void> {
-  await AsyncStorage.setItem(READING_MODE_KEY, mode)
-}
-
-export async function savePageThreshold(n: number): Promise<void> {
-  await AsyncStorage.setItem(PAGE_THRESHOLD_KEY, String(clampThreshold(n)))
-}
-
-export async function saveLastSuccessfulUrl(url: string): Promise<void> {
-  await AsyncStorage.setItem(LAST_URL_KEY, url)
-}
-
-export async function loadLastSuccessfulUrl(): Promise<string | null> {
-  try {
-    return await AsyncStorage.getItem(LAST_URL_KEY)
-  } catch {
-    return null
-  }
 }

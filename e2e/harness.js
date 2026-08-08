@@ -184,17 +184,28 @@ export async function newConnectedPage(browser, token, deviceId) {
 
 // Insert a text (article) Document straight into the test DB. There's no ingest in
 // the harness (scraping needs network), so we write the row the engine would.
-export function seedTextDoc({ id, title, markdown, canonicalUrl }) {
+function documentInsert({ id, title, markdown, canonicalUrl }) {
   const now = new Date().toISOString()
   const q = s => s.replace(/'/g, "''")
-  const sql = `
+  return `
 INSERT OR REPLACE INTO documents (id,canonical_url,title,markdown,fetched_at,excerpt,hero_image_url,author,published_at,source_feed_id,content_hash,media_type,media_metadata,transcript,created_at,updated_at,rev,deleted_at)
-VALUES ('${q(id)}','${q(canonicalUrl)}','${q(title)}','${q(markdown)}','${now}','','','Test',NULL,NULL,'${q(id)}hash','article',NULL,NULL,'${now}','${now}',1,NULL);
-`
+VALUES ('${q(id)}','${q(canonicalUrl)}','${q(title)}','${q(markdown)}','${now}','','','Test',NULL,NULL,'${q(id)}hash','article',NULL,NULL,'${now}','${now}',1,NULL);`
+}
+
+export function seedTextDoc(doc) {
+  seedTextDocs([doc])
+  console.log('  seeded text document', doc.id)
+}
+
+// Bulk variant: ONE sqlite3 invocation for the whole batch. Row-at-a-time seeding of a
+// large corpus loses the race against the running server's own writes — `database is
+// locked (5)` — and the retry window is what `.timeout` buys. One statement per row
+// inside one transaction is also an order of magnitude faster.
+export function seedTextDocs(docs) {
+  const sql = ['.timeout 10000', 'BEGIN;', ...docs.map(documentInsert), 'COMMIT;'].join('\n')
   const sqlFile = '/tmp/samizdat-test/seed-text.sql'
   fs.writeFileSync(sqlFile, sql)
   execSync(`sqlite3 ${TEST_DB} < ${sqlFile}`)
-  console.log('  seeded text document', id)
 }
 
 // Seed the persisted LLM provider-health snapshot — the shape llm.Record leaves

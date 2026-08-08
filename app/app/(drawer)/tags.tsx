@@ -12,8 +12,8 @@ import {
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { useConnection } from '../../src/ConnectionContext'
-import { useTagsWithCounts, useSyncStatus } from '../../src/store/hooks'
-import type { TagWithCounts } from '../../src/store/hooks'
+import { useTagsWithCounts, useSyncStatus } from '../../src/db'
+import type { TagWithCounts } from '../../src/db'
 import { forceSync } from '../../src/store/syncEngine'
 
 function tagDotColor(color: string): string {

@@ -210,7 +210,9 @@ export function parseTranscript(doc: Document, lang?: string): TranscriptSegment
 }
 
 // parseMediaMetadata safely parses the Document.media_metadata JSON string.
-export function parseMediaMetadata(doc: Document): MediaMetadata {
+// Takes the field rather than the whole row: the metadata travels on the list
+// projection too (DocumentMeta), which has no body.
+export function parseMediaMetadata(doc: Pick<Document, 'media_metadata'>): MediaMetadata {
   if (!doc.media_metadata) return {}
   try { return JSON.parse(doc.media_metadata) as MediaMetadata } catch { return {} }
 }

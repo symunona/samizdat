@@ -1,9 +1,9 @@
 import { create } from 'zustand'
-import { loadDebugLogStream, saveDebugLogStream } from '../storage'
+import { loadDebugLogStream, saveDebugLogStream } from '../prefs'
 
 // Shared toggle for the device debug-log channel so the Settings switch and the
-// DebugLogBridge (app/_layout.tsx) stay in sync. Persisted via storage.ts;
-// defaults ON for this debug build. See src/debugLog.ts.
+// DebugLogBridge (app/_layout.tsx) stay in sync. Persisted in the replica's
+// `settings` table via src/prefs.ts; defaults ON for this debug build. See src/debugLog.ts.
 interface DebugLogState {
   enabled: boolean
   hydrated: boolean

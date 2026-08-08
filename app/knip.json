@@ -6,7 +6,8 @@
     "@expo/metro-config",
     "react-native-worklets",
     "babel-preset-expo",
-    "esbuild"
+    "esbuild",
+    "@journeyapps/wa-sqlite"
   ],
   "ignoreFiles": [
     "babel.config.js",
@@ -14,7 +15,12 @@
     "src/YtPlayer.web.tsx",
     "src/ServerVideoPlayer.web.tsx",
     "src/ShareIntentBridge.web.tsx",
-    "src/webview/document-viewer.ts"
+    "src/webview/document-viewer.ts",
+    "src/db/driverImpl.web.ts",
+    "src/db/driverImpl.node.ts"
   ],
-  "ignoreExportsUsedInFile": true
+  "ignoreExportsUsedInFile": true,
+  "entry": [
+    "src/db/index.ts"
+  ]
 }

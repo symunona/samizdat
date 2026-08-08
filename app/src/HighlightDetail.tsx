@@ -5,8 +5,7 @@ import WebView from 'react-native-webview'
 import type { WebViewMessageEvent } from 'react-native-webview'
 import type { Annotation, HighlightWithDoc } from './api'
 import { buildDocumentHtml } from './markdownToHtml'
-import { useSyncStore } from './store/syncStore'
-import * as mut from './store/mutations'
+import * as db from './db'
 import { useConnection } from './ConnectionContext'
 import IconButton from './IconButton'
 import AnnotationPanel from './AnnotationPanel'
@@ -47,15 +46,9 @@ export default function HighlightDetail({
   const iframeRef = useRef<any>(null)
   const isLoadedRef = useRef(false)
 
-  // Marks come straight from the store (offline-first): pick the raw slice (stable ref)
-  // and filter in a useMemo — mapping to fresh objects inside a selector would spin a
-  // render loop (React #185). Reactive: a mut.* create/edit/delete re-renders here and
-  // the setAnnotations effect re-syncs the marks.
-  const annById = useSyncStore(state => state.annotations)
-  const annotations = useMemo<Annotation[]>(
-    () => Object.values(annById).filter(a => a.highlight_id === item.id && !a.deleted_at),
-    [annById, item.id],
-  )
+  // Marks come straight from the replica (offline-first) and stay reactive: a create /
+  // edit / delete re-renders here and the setAnnotations effect re-syncs the marks.
+  const annotations: Annotation[] = db.useAnnotationsFor({ highlightId: item.id })
   const annotationsRef = useRef(annotations)
   annotationsRef.current = annotations
 
@@ -149,25 +142,25 @@ export default function HighlightDetail({
     return () => window.removeEventListener('message', handler)
   }, [handleParsedMessage])
 
-  // Local-first: write to the store + outbox (no network). Store reactivity re-syncs marks.
+  // Local-first: write to the replica + outbox (no network); reactivity re-syncs marks.
   const handleAnnSave = useCallback((data: { note: string; color: string }) => {
     setAnnVisible(false)
     if (annMode === 'create') {
       const sel = pendingSelection ?? { exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 }
-      mut.createAnnotation({
+      db.createAnnotation({
         documentId: item.document_id, highlightId: item.id,
         exact: sel.exact, prefix: sel.prefix, suffix: sel.suffix,
         posStart: sel.pos_start, posEnd: sel.pos_end, note: data.note, color: data.color,
       })
     } else if (annMode === 'edit' && existingAnnotation) {
-      mut.updateAnnotation(existingAnnotation.id, data.note, data.color)
+      db.updateAnnotation(existingAnnotation.id, data.note, data.color)
     }
   }, [annMode, pendingSelection, existingAnnotation, item.document_id, item.id])
 
   const handleAnnDelete = useCallback(() => {
     if (!existingAnnotation) return
     setAnnVisible(false)
-    mut.deleteAnnotation(existingAnnotation.id)
+    db.deleteAnnotation(existingAnnotation.id)
   }, [existingAnnotation])
 
   if (!visible) return null

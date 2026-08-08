@@ -2,13 +2,14 @@ import { create } from 'zustand'
 import {
   loadReadingPrefs, saveReadingMode, savePageThreshold, clampThreshold,
   DEFAULT_READING_MODE, DEFAULT_PAGE_THRESHOLD,
-} from '../storage'
-import type { ReadingMode } from '../storage'
+} from '../prefs'
+import type { ReadingMode } from '../prefs'
 
 // The ONE reading preference: the document viewer's 3-way control and the
 // Settings "Auto page mode" card both read and write this store (the Settings
-// switch is `mode === 'auto'`, not a second flag). Persisted via storage.ts,
-// which also migrates the old boolean `samizdat_page_mode` key.
+// switch is `mode === 'auto'`, not a second flag). Persisted in the replica's
+// `settings` table via src/prefs.ts; the pre-three-way boolean `samizdat_page_mode`
+// key is resolved once during db.open() (src/db/legacy.ts).
 interface ReadingModeState {
   mode: ReadingMode
   threshold: number

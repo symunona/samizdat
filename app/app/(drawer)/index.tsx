@@ -7,9 +7,7 @@ import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeabl
 import type { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import { useConnection } from '../../src/ConnectionContext'
 import { fetchHighlights, fetchSettings, updateSettings, HighlightWithDoc } from '../../src/api'
-import * as mut from '../../src/store/mutations'
-import { useSyncStore } from '../../src/store/syncStore'
-import { highlightsFromStore } from '../../src/store/highlightsFromStore'
+import * as db from '../../src/db'
 import HighlightCard from '../../src/HighlightCard'
 import IconButton from '../../src/IconButton'
 import TagSelectorModal from '../../src/TagSelectorModal'
@@ -17,7 +15,6 @@ import AnnotationPanel from '../../src/AnnotationPanel'
 import LinkActionSheet from '../../src/LinkActionSheet'
 import AddUrlSheet from '../../src/AddUrlSheet'
 import { useScrapeQueue } from '../../src/ScrapeQueueContext'
-import { useSyncStatus } from '../../src/store/hooks'
 import FeedSkeleton from '../../src/FeedSkeleton'
 
 // Horizontal travel (px) before a left/right swipe activates. RNGH's default is 10,
@@ -33,7 +30,7 @@ export default function FeedScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { activeUrl, token, status } = useConnection()
-  const { status: syncStatus, lastSyncedAt } = useSyncStatus()
+  const { status: syncStatus, lastSyncedAt } = db.useSyncStatus()
   const { height: windowHeight } = useWindowDimensions()
   const { startScrape, resolvedDocs } = useScrapeQueue()
 
@@ -94,13 +91,13 @@ export default function FeedScreen() {
 
   const handleUnarchive = useCallback((id: string) => {
     setArchivedIds(prev => { const s = new Set(prev); s.delete(id); return s })
-    mut.archiveHighlight(id, null)
+    db.archiveHighlight(id, null)
   }, [])
 
   const handleUnreadAll = useCallback(() => {
     setShowUnreadAll(false)
     setArchivedIds(prev => {
-      prev.forEach(id => mut.archiveHighlight(id, null))
+      prev.forEach(id => db.archiveHighlight(id, null))
       return new Set()
     })
   }, [])
@@ -150,11 +147,18 @@ export default function FeedScreen() {
   }, [])
 
   // Offline fallback: the feed IS the highlights we already synced into the local
-  // replica, so render it from the store when the network is unavailable. Returns
+  // replica, so render it from the DB layer when the network is unavailable. Returns
   // false when the cache is empty.
+  //
+  // Read through a ref, not the hook value directly: `loadFromStore` feeds `load`, and a
+  // callback that changed identity on every replica write would re-fetch the feed over
+  // the network on every star/archive.
+  const storeHighlights = db.useFeedHighlights()
+  const storeRef = useRef(storeHighlights)
+  storeRef.current = storeHighlights
   const loadFromStore = useCallback((): boolean => {
-    const hls = highlightsFromStore(h => !h.archived_at)
-    // Never wipe a populated feed with an empty result (e.g. store not yet hydrated) —
+    const hls = storeRef.current
+    // Never wipe a populated feed with an empty result (e.g. replica not yet open) —
     // that's the "feed resets to zero" flash.
     if (hls.length > 0) setHighlights(hls)
     return hls.length > 0
@@ -181,8 +185,8 @@ export default function FeedScreen() {
 
   // Offline / not-yet-connected: render the cached feed, and re-render it as the
   // persisted store finishes hydrating or a background sync lands more highlights.
-  const hasHydrated = useSyncStore(st => st.hasHydrated)
-  const storeHlCount = useSyncStore(st => Object.keys(st.highlights).length)
+  const hasHydrated = db.useHydrated()
+  const storeHlCount = db.useHighlightCount()
   useEffect(() => {
     if (status !== 'connected') loadFromStore()
   }, [status, storeHlCount, loadFromStore])
@@ -215,7 +219,7 @@ export default function FeedScreen() {
   // Local-first: patch our list + the store immediately (no await), pusher syncs later.
   const handlePin = useCallback((item: HighlightWithDoc) => {
     const next = item.pinned === 1 ? false : true
-    mut.pinHighlight(item.id, next)
+    db.pinHighlight(item.id, next)
     setHighlights(prev =>
       prev.map(h => h.id === item.id ? { ...h, pinned: next ? 1 : 0 } : h)
     )
@@ -227,14 +231,14 @@ export default function FeedScreen() {
   const handleArchive = useCallback((id: string) => {
     pendingArchiveRef.current.delete(id)
     setArchivedIds(prev => new Set(prev).add(id))
-    mut.archiveHighlight(id, new Date().toISOString())
+    db.archiveHighlight(id, new Date().toISOString())
   }, [])
 
   const initiateDelete = useCallback((item: HighlightWithDoc) => {
     setDeletingIds(prev => new Set(prev).add(item.id))
     const timer = setTimeout(() => {
       deleteTimers.current.delete(item.id)
-      mut.deleteHighlight(item.id)
+      db.deleteHighlight(item.id)
       setHighlights(prev => prev.filter(h => h.id !== item.id))
       setDeletingIds(prev => { const s = new Set(prev); s.delete(item.id); return s })
     }, 5000)
@@ -250,7 +254,7 @@ export default function FeedScreen() {
 
   const handleAnnotateSave = useCallback(({ note, color }: { note: string; color: string }) => {
     if (!annotateItem) return
-    mut.createAnnotation({
+    db.createAnnotation({
       documentId: annotateItem.document_id,
       highlightId: annotateItem.id,
       exact: annotateItem.body.slice(0, 300),
@@ -429,7 +433,7 @@ export default function FeedScreen() {
               if (y - exitY > 300) {
                 pendingArchiveRef.current.delete(id)
                 setArchivedIds(prev => new Set(prev).add(id))
-                mut.archiveHighlight(id, new Date().toISOString())
+                db.archiveHighlight(id, new Date().toISOString())
               }
             })
           }}

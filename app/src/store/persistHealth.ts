@@ -1,20 +1,27 @@
 import { create } from 'zustand'
 import { createLogger } from '../logger'
-import { isStorageFullError } from './chunkedStorage'
 
-// Health of the OFFLINE REPLICA'S WRITE PATH (see plan/2026-08-07-persist-failure-visibility.md).
+// Health of the LOCAL DATABASE'S WRITE PATH (see plan/2026-08-07-persist-failure-visibility.md).
 //
-// zustand's persist fires setItem() on every set() and never awaits it, so a device
-// whose storage filled up dropped every snapshot in total silence — the replica froze
-// for six days while the app looked fine. chunkedStorage reports each write attempt
-// here; this store turns that into the two channels we already have: an error-level log
-// (logger → debugLog → tmp/device-logs/<device>.ndjson) and the degraded dot +
-// Settings row (useServiceAlert).
+// The blob-replica era failed silently: zustand's persist fired setItem() on every
+// set() and never awaited it, so a device whose storage filled up dropped every
+// snapshot without a word — the replica froze for six days while the app looked fine.
+// Every write in src/db/repo.ts now reports its outcome here, and this store turns that
+// into the two channels we already have: an error-level log (logger → debugLog →
+// tmp/device-logs/<device>.ndjson) and the degraded dot + Settings row (useServiceAlert).
 //
 // Deliberately NOT persisted: writing "writes are failing" through the failing writer
 // is pointless, and a fresh session re-derives the state from its first write anyway.
 
 const log = createLogger('persistHealth')
+
+// Separates "the device is out of space" — the case worth naming to the user, and the
+// one they can act on — from any other write error. It only picks the wording; every
+// failure raises the alert either way.
+export function isStorageFullError(e: unknown): boolean {
+  const msg = e instanceof Error ? `${e.name} ${e.message}` : String(e)
+  return /SQLiteFull|disk is full|QuotaExceeded|quota/i.test(msg)
+}
 
 export interface PersistFailure {
   // True when the backend said it is out of space, as opposed to any other write error.
@@ -26,7 +33,7 @@ export interface PersistFailure {
 
 interface PersistHealthState {
   failure: PersistFailure | null
-  // The observer handed to makeChunkedStorage: null = the snapshot was saved.
+  // The observer the DB layer calls after every write: null = it landed.
   reportWrite: (err: unknown | null) => void
 }
 
@@ -38,11 +45,11 @@ export const usePersistHealth = create<PersistHealthState>((set, get) => ({
     if (!err) {
       if (!prev) return
       set({ failure: null })
-      log.log(`offline replica is saving again (was failing since ${prev.firstAt})`)
+      log.log(`the local database is saving again (was failing since ${prev.firstAt})`)
       return
     }
     const message = err instanceof Error ? err.message : String(err)
-    // One line per outage, not per set() — a full device fails on every keystroke.
+    // One line per outage, not per write — a full device fails on every keystroke.
     if (prev) {
       set({ failure: { ...prev, message, lastAt: at } })
       return
@@ -52,13 +59,13 @@ export const usePersistHealth = create<PersistHealthState>((set, get) => ({
     log.error(
       full
         ? `device storage is FULL — the offline replica can no longer be saved and is frozen as of ${at}: ${message}`
-        : `offline replica write failed — the persisted snapshot is frozen as of ${at}: ${message}`,
+        : `local database write failed — the offline replica is frozen as of ${at}: ${message}`,
     )
   },
 }))
 
-// Module-level entry point for the storage adapter, which is built once at import time
-// (outside React) and must not hold a hook reference.
+// Module-level entry point for the DB layer, which runs outside React and must not
+// hold a hook reference.
 export function reportPersistWrite(err: unknown | null): void {
   usePersistHealth.getState().reportWrite(err)
 }

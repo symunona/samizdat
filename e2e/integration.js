@@ -14,7 +14,8 @@
 import { readFileSync, existsSync } from 'node:fs'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
-  newConnectedPage, seedTextDoc, seedVideoDoc, seedHighlight, seedLLMHealth, seedPipeline, seedJob,
+  newConnectedPage, seedTextDoc, seedTextDocs, seedVideoDoc, seedHighlight, seedLLMHealth,
+  seedPipeline, seedJob,
   startStubLLM, STUB_LLM_MODELS,
   makeCleanup,
 } from './harness.js'
@@ -1210,16 +1211,178 @@ async function settingsText(page) {
   return page.evaluate(() => document.body.innerText)
 }
 
-// ── the offline replica can no longer be saved ────────────────────────────────
-// The bug this guards: zustand's persist drops the promise setItem() returns, so a
-// device past AsyncStorage's 6MB whole-DB cap threw SQLiteFullException on every
-// write into total silence — the replica froze for six days and the only symptom was
-// a feed that stopped moving. Nothing is asserted from the store here; the point is
-// what the user can SEE, plus that the error really left the device.
+// ── the replica is a real database, not a snapshot ────────────────────────────
+// The blob store's defining failure: a write that never reached disk looked fine until
+// the next launch, and the frozen cursor made the phone re-pull the same delta forever.
+// So this drives the whole loop through the UI — pull, RELOAD with the network cut,
+// mutate offline, RELOAD again — because the only proof a row reached SQLite is that a
+// cold start finds it. Every assertion below is on what renders, with no network at all.
+const DB_LAYER_NOTE = 'note written with the network cut'
+
+async function runDbLayer(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+
+  // Online once — the pull is what fills the replica. The list itself comes off the
+  // network here, so it proves nothing yet; the wait after it is for the sync delta to
+  // land in SQLite, which is what every offline assertion below actually reads.
+  await page.goto(`${BASE_URL}/documents`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction(t => document.body.innerText.includes(t), { timeout: 15000 }, TEXT_DOC.title)
+    .catch(() => {})
+  await sleep(5000)
+
+  // Cut the network and RELOAD. Nothing below can come from the server.
+  await page.evaluate(() => localStorage.setItem('samizdat_force_offline', '1'))
+  await page.goto(`${BASE_URL}/documents`, { waitUntil: 'domcontentloaded', timeout: 20000 })
+
+  await check('db layer: the documents list renders from SQLite with no network', async () => {
+    try {
+      await page.waitForFunction(t => document.body.innerText.includes(t), { timeout: 12000 }, TEXT_DOC.title)
+    } catch {
+      const txt = await page.evaluate(() => document.body.innerText)
+      return `seeded document not listed offline: ${txt.slice(0, 300)}`
+    }
+    return null
+  })
+
+  await check('db layer: a note written offline shows up at once', async () => {
+    await page.goto(`${BASE_URL}/notes`, { waitUntil: 'domcontentloaded', timeout: 20000 })
+    await sleep(800)
+    if (!await clickByText(page, e => e.getAttribute('aria-label') === 'New note', 'new-note FAB')) {
+      return 'no new-note button on Notes'
+    }
+    await page.waitForSelector('textarea', { timeout: 6000 })
+    await page.type('textarea', DB_LAYER_NOTE)
+    if (!await clickByText(page, e => e.innerText === 'Save', 'save note')) return 'no Save button'
+    try {
+      await page.waitForFunction(t => document.body.innerText.includes(t), { timeout: 8000 }, DB_LAYER_NOTE)
+    } catch { return 'the note never appeared in the list' }
+    return null
+  })
+
+  await check('db layer: the offline note survives a reload (it really reached SQLite)', async () => {
+    await page.goto(`${BASE_URL}/notes`, { waitUntil: 'domcontentloaded', timeout: 20000 })
+    try {
+      await page.waitForFunction(t => document.body.innerText.includes(t), { timeout: 12000 }, DB_LAYER_NOTE)
+    } catch {
+      const txt = await page.evaluate(() => document.body.innerText)
+      return `the note vanished on reload — it was never written: ${txt.slice(0, 300)}`
+    }
+    return null
+  })
+
+  // Back online: the queued intent must reach the server, which is the other half of
+  // durability — a lost outbox row means the note only ever existed on this device.
+  await page.evaluate(() => localStorage.removeItem('samizdat_force_offline'))
+  await page.reload({ waitUntil: 'networkidle2', timeout: 20000 })
+
+  await check('db layer: the queued note is pushed once the network is back', async () => {
+    // A standalone note has no parent document, so the sync feed is where it shows up.
+    const since = encodeURIComponent('1970-01-01T00:00:00Z')
+    for (let i = 0; i < 30; i++) {
+      const res = await fetch(`${BASE_URL}/api/v1/sync?since=${since}`, { headers: { Authorization: `Bearer ${token}` } })
+      if (res.ok) {
+        const { annotations = [] } = await res.json()
+        const mine = annotations.filter(a => a.note === DB_LAYER_NOTE)
+        if (mine.length === 1) return null
+        if (mine.length > 1) return `${mine.length} copies of the note on the server, expected 1`
+      }
+      await sleep(500)
+    }
+    return 'the offline note never reached the server'
+  })
+
+  const unexpected = errors.filter(e => !/Failed to fetch|simulated offline/i.test(e))
+  if (unexpected.length) fail('db layer: no unrelated console/HTTP errors', unexpected.slice(0, 4).join(' | '))
+  else pass('db layer: no unrelated console/HTTP errors')
+
+  await page.close()
+}
+
+// ── a replica far bigger than the old blob cap ────────────────────────────────
+// Android's AsyncStorage caps the whole database at 6MB; past it every write rejected.
+// Rows in SQLite have no such ceiling, so the guard is simply: pull a corpus that would
+// have blown the old store, and assert nothing broke — no write-failure card, and the
+// list still renders every document.
+const BULK_DOCS = 50
+const BULK_TITLE = i => `Bulk Document ${String(i).padStart(2, '0')}`
+
+async function runLargeReplica(token, deviceId) {
+  // ~60KB of body each, ~3MB of markdown across the corpus: far past the ~2MB per-row
+  // limit that used to need chunking, and squarely inside the 6MB whole-DB cap that used
+  // to freeze every write once the blob crossed it.
+  seedTextDocs(Array.from({ length: BULK_DOCS }, (_, i) => ({
+    id: `dddddddd-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`,
+    title: BULK_TITLE(i),
+    canonicalUrl: `https://example.com/bulk/${i}`,
+    markdown: `# ${BULK_TITLE(i)}\n\n` + FILLER_SECTION(i).repeat(42),
+  })))
+  console.log(`  seeded ${BULK_DOCS} bulk documents`)
+
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+
+  // Clear the local cache first: the replica's cursor has long since passed these rows'
+  // timestamps, and — more to the point — a wiped replica re-pulling the WHOLE library
+  // in one request is exactly the case the plan flags as the expensive one.
+  await page.goto(`${BASE_URL}/settings`, { waitUntil: 'networkidle2', timeout: 20000 })
+  await sleep(1500) // the service queries settle before the Device section is laid out
+  if (await clickByText(page, e => e.innerText === 'Clear local cache', 'clear local cache')) {
+    await sleep(400)
+    await clickByText(page, e => e.innerText === 'Clear cache', 'confirm clear cache')
+    await sleep(1500)
+  }
+
+  // The list virtualizes, so scrolling to the 50th row proves nothing about the other 49.
+  // The search box filters the REPLICA (documents.tsx derives its list from useDocuments),
+  // so finding a row by name is a real query against SQLite and dodges the viewport.
+  async function findInReplica(title) {
+    await page.goto(`${BASE_URL}/documents`, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForSelector('[data-testid="doc-search"]', { timeout: 25000 })
+    await page.type('[data-testid="doc-search"]', title)
+    try {
+      await page.waitForFunction(t => document.body.innerText.includes(t), { timeout: 20000 }, title)
+      return true
+    } catch { return false }
+  }
+
+  await check('large replica: the whole corpus pulls without a write failure', async () => {
+    // First, last and middle: a partial apply would drop a contiguous run of them.
+    for (const i of [0, Math.floor(BULK_DOCS / 2), BULK_DOCS - 1]) {
+      if (!await findInReplica(BULK_TITLE(i))) return `${BULK_TITLE(i)} is not in the replica after the pull`
+    }
+    return null
+  })
+
+  await check('large replica: Settings reports no storage problem', async () => {
+    await page.goto(`${BASE_URL}/settings`, { waitUntil: 'networkidle2', timeout: 20000 })
+    await sleep(1200)
+    const card = await page.$$('[data-testid="persist-failure-card"]')
+    return card.length ? 'the Device Storage failure card is up after a large pull' : null
+  })
+
+  await check('large replica: a cold start reads it all back from SQLite', async () => {
+    await page.evaluate(() => localStorage.setItem('samizdat_force_offline', '1'))
+    const found = await findInReplica(BULK_TITLE(BULK_DOCS - 1))
+    await page.evaluate(() => localStorage.removeItem('samizdat_force_offline'))
+    return found ? null : 'the corpus did not survive a reload with no network'
+  })
+
+  const unexpected = errors.filter(e => !/Failed to fetch|simulated offline/i.test(e))
+  if (unexpected.length) fail('large replica: no unrelated console/HTTP errors', unexpected.slice(0, 4).join(' | '))
+  else pass('large replica: no unrelated console/HTTP errors')
+
+  await page.close()
+}
+
+// ── the local database can no longer be written ───────────────────────────────
+// The bug this guards: zustand's persist dropped the promise setItem() returned, so a
+// device past AsyncStorage's 6MB whole-DB cap threw SQLiteFullException on every write
+// into total silence — the replica froze for six days and the only symptom was a feed
+// that stopped moving. Nothing is asserted from the replica here; the point is what the
+// user can SEE, plus that the error really left the device.
 async function runPersistFailure(token, deviceId) {
   const { page, errors } = await newConnectedPage(browser, token, deviceId)
   // Same shipped, localStorage-keyed seam as the offline simulator (src/offlineSim.ts):
-  // every persist write rejects with Android's real SQLiteFullException message.
+  // every SQL write rejects with SQLITE_FULL, which is what a full disk really raises.
   await page.evaluateOnNewDocument(() => {
     try { localStorage.setItem('samizdat_force_storage_full', '1') } catch { /* opaque origin */ }
   })
@@ -1231,7 +1394,7 @@ async function runPersistFailure(token, deviceId) {
   await check('storage full: Settings says the device storage is full', async () => {
     if (!/Device Storage/.test(txt)) return `no Device Storage card on Settings: ${txt.slice(0, 400)}`
     if (!/Full — offline data is stale/.test(txt)) return 'the card does not say the storage is full and the data stale'
-    if (!/SQLiteFullException/.test(txt)) return 'the underlying write error is not shown'
+    if (!/disk is full/.test(txt)) return 'the underlying write error is not shown'
     return null
   })
 
@@ -1280,8 +1443,9 @@ async function runPersistFailure(token, deviceId) {
   })
 
   await sleep(300)
-  // The persist error is the feature: assert on everything ELSE staying clean.
-  const unexpected = errors.filter(e => !/persistHealth/.test(e))
+  // The write failure is the feature — both the persistHealth alert and the DB layer's
+  // own line about it. Assert on everything ELSE staying clean.
+  const unexpected = errors.filter(e => !/persistHealth|local write failed|could not open the local replica/.test(e))
   if (unexpected.length) fail('storage full: no unrelated console/HTTP errors', unexpected.slice(0, 4).join(' | '))
   else pass('storage full: no unrelated console/HTTP errors')
 
@@ -1784,6 +1948,9 @@ async function main() {
     await runHighlightSelectionLifecycle(token, deviceId)
     // Before runSettingsServices: that one permanently seeds a broken LLM provider,
     // which would keep the drawer dot lit for every check after it.
+    // Before runSettingsServices for the same reason as runPersistFailure: both read a
+    // clean error state.
+    await runDbLayer(token, deviceId)
     await runPersistFailure(token, deviceId)
     await runSettingsServices(token, deviceId)
     await runPipelineStepsUi(token, deviceId)
@@ -1791,6 +1958,8 @@ async function main() {
     // so leaving it on Page would silently paginate every earlier check's viewer.
     await runPageMode(token, deviceId)
     await runReadingMode(token, deviceId)
+    // Last: it seeds 50 documents, and every check after it would pay for the pull.
+    await runLargeReplica(token, deviceId)
 
     const failed = results.filter(r => !r.ok)
     if (failed.length) {

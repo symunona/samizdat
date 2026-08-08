@@ -4,8 +4,9 @@
 // pull in react-native-unistyles here — keep the WebView bundle lean.
 import { iconButtonSpec as IB } from '../iconButtonSpec'
 import { tagColor } from '../tagColor'
-// Type-only — esbuild strips it, so storage.ts (AsyncStorage) never enters the bundle.
-import type { ReadingMode } from '../storage'
+// Type-only — esbuild strips it, so prefs.ts (and the DB layer behind it) never enters
+// the bundle.
+import type { ReadingMode } from '../prefs'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

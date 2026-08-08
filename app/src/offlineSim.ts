@@ -3,7 +3,7 @@
 // e2e run can flip them on a warm, already-loaded app.
 //
 //   localStorage.setItem('samizdat_force_offline', '1')      // every fetch rejects
-//   localStorage.setItem('samizdat_force_storage_full', '1') // every persist write rejects
+//   localStorage.setItem('samizdat_force_storage_full', '1') // every SQL write rejects
 //   localStorage.removeItem(…)                               // back to normal
 //
 // The offline half exists instead of page.setOfflineMode, which also blocks loading the
@@ -11,7 +11,7 @@
 //
 // No-op on native (no localStorage) — use airplane mode / a genuinely full device.
 
-import type { KVBackend } from './store/chunkedStorage'
+import type { SqlDriver, SqlRow, SqlValue } from './db/driver'
 
 const KEY = 'samizdat_force_offline'
 const FULL_KEY = 'samizdat_force_storage_full'
@@ -29,6 +29,13 @@ export function isForcedOffline(): boolean {
   return flagged(KEY)
 }
 
+// The SQLite wasm binary is part of the RUNTIME, not the server: on native it is a
+// linked library and on web the browser serves it from cache, so an outage never takes
+// it away. Cutting it would simulate "the app doesn't exist" rather than "the server is
+// unreachable" — and the whole point of an offline test is that the local replica still
+// answers. Everything else on the origin is API traffic and stays cut.
+const RUNTIME_ASSET = /\/wasm\//
+
 // Monkey-patch the global fetch once so EVERY caller (api.ts, the connection probe,
 // the sync pull, the outbox pusher) sees the simulated outage — no per-call-site wiring.
 export function installOfflineSim(): void {
@@ -37,21 +44,32 @@ export function installOfflineSim(): void {
   installed = true
   const real = globalThis.fetch.bind(globalThis)
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    if (isForcedOffline()) {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (isForcedOffline() && !RUNTIME_ASSET.test(url)) {
       return Promise.reject(new TypeError('Failed to fetch (simulated offline)'))
     }
     return real(input, init)
   }) as typeof fetch
 }
 
-// Wrap a persist backend so writes reject the way a full Android AsyncStorage does
-// (message copied from the real SQLiteFullException, which is what the app classifies on).
-export function simulateFullStorage(kv: KVBackend): KVBackend {
+// Wrap the SQL driver so every WRITE rejects the way a device with no room left does —
+// SQLITE_FULL is literally what SQLite raises then, and it is what persistHealth
+// classifies on. Reads keep working, which is the real shape of the failure: the app
+// goes on showing an ever-staler replica while nothing new can be saved.
+//
+// `run` and `tx` are gated, `exec` is not: opening and migrating the schema must still
+// succeed so a reload with the flag already set lands in the broken-write state rather
+// than in a no-database state.
+export function simulateFailedWrites(driver: SqlDriver): SqlDriver {
+  const full = () => Promise.reject(
+    new Error('SQLITE_FULL: database or disk is full (simulated full device)'))
   return {
-    getItem: (k) => kv.getItem(k),
-    setItem: (k, v) => flagged(FULL_KEY)
-      ? Promise.reject(new Error('android.database.sqlite.SQLiteFullException: database or disk is full (code 13 SQLITE_FULL)'))
-      : kv.setItem(k, v),
-    removeItem: (k) => kv.removeItem(k),
+    exec: (sql: string) => driver.exec(sql),
+    all<T = SqlRow>(sql: string, params?: SqlValue[]): Promise<T[]> {
+      return driver.all<T>(sql, params)
+    },
+    run: (sql: string, params?: SqlValue[]) => (flagged(FULL_KEY) ? full() : driver.run(sql, params)),
+    tx: (fn: () => Promise<void>) => (flagged(FULL_KEY) ? full() : driver.tx(fn)),
+    close: () => driver.close(),
   }
 }

@@ -13,9 +13,9 @@ import { Ionicons } from '@expo/vector-icons'
 import { router } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { useConnection } from '../../src/ConnectionContext'
-import { useAnnotations, useSyncStatus, type AnnotationWithContext } from '../../src/store/hooks'
+import * as db from '../../src/db'
+import type { AnnotationWithContext } from '../../src/db'
 import { forceSync } from '../../src/store/syncEngine'
-import * as mut from '../../src/store/mutations'
 import AnnotationPanel, { type ExistingAnnotation } from '../../src/AnnotationPanel'
 import TagSelectorModal from '../../src/TagSelectorModal'
 
@@ -37,8 +37,8 @@ export default function NotesScreen() {
   const s = useMemo(() => buildStyles(theme), [theme])
   const { activeUrl, token, status } = useConnection()
 
-  const notes = useAnnotations()
-  const { status: syncStatus, error: syncError } = useSyncStatus()
+  const notes = db.useAnnotations()
+  const { status: syncStatus, error: syncError } = db.useSyncStatus()
   const [refreshing, setRefreshing] = useState(false)
 
   // Editor state: panel for create/edit, plus the tag modal target.
@@ -74,21 +74,21 @@ export default function NotesScreen() {
     setPanelOpen(true)
   }
 
-  // Local-first: the list reads from the store (useAnnotations), so a store mutation
+  // Local-first: the list reads from the replica (db.useAnnotations), so a mutation
   // reflects instantly with no network; the outbox pusher syncs it when online.
   function handleSave(data: { note: string; color: string }) {
     setPanelOpen(false)
     if (editing) {
-      mut.updateAnnotation(editing.id, data.note, data.color)
+      db.updateAnnotation(editing.id, data.note, data.color)
     } else {
-      mut.createAnnotation({ documentId: null, note: data.note, color: data.color })
+      db.createAnnotation({ documentId: null, note: data.note, color: data.color })
     }
   }
 
   function handleDelete() {
     if (!editing) return
     setPanelOpen(false)
-    mut.deleteAnnotation(editing.id)
+    db.deleteAnnotation(editing.id)
   }
 
   function handleTag(annotationId: string) {

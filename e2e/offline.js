@@ -53,31 +53,30 @@ async function check(name, fn) {
 }
 
 // Wait for the article webview + its highlight cards to render.
-async function waitViewer(page) {
-  await page.waitForFunction(() => {
+async function waitViewer(page, minCards = 2) {
+  await page.waitForFunction((n) => {
     const ifr = document.querySelector('iframe')
     return ifr && ifr.contentDocument &&
       ifr.contentDocument.getElementById('sam-article') &&
-      ifr.contentDocument.querySelectorAll('.hl-card').length >= 2
-  }, { timeout: 15000 })
+      ifr.contentDocument.querySelectorAll('.hl-card').length >= n
+  }, { timeout: 15000 }, minCards)
 }
 
-// Read the persisted zustand store out of AsyncStorage (localStorage on web),
-// reassembling the chunked value (see app/src/store/chunkedStorage.ts).
-async function readStore(page) {
-  return page.evaluate(() => {
-    const name = 'samizdat_sync_store'
-    const meta = localStorage.getItem(name)
-    if (meta == null) return null
-    let count
-    try { count = JSON.parse(meta).__chunks } catch { return null }
-    if (typeof count !== 'number') { // legacy unchunked value
-      try { return JSON.parse(meta).state } catch { return null }
+// What one highlight card in the article webview currently shows. The replica is a real
+// database now, so nothing can be read out of localStorage — the rendered card IS the
+// assertion surface, which is the stronger test anyway.
+async function readCard(page, id) {
+  return page.evaluate((hlId) => {
+    const d = document.querySelector('iframe').contentDocument
+    const card = [...d.querySelectorAll('.hl-card')].find(c => c.querySelector(`[data-id="${hlId}"]`))
+    if (!card) return null
+    const pin = card.querySelector(`.hl-pin-btn[data-id="${hlId}"]`)
+    return {
+      pinned: !!pin && pin.className.includes('pinned'),
+      // The chip renders as `#name` (mirrors the RN card) — compare on the name.
+      tags: [...card.querySelectorAll('.hl-tag-chip')].map(c => c.textContent.trim().replace(/^#/, '')),
     }
-    let s = ''
-    for (let i = 0; i < count; i++) { const p = localStorage.getItem(`${name}.${i}`); if (p == null) return null; s += p }
-    try { return JSON.parse(s).state } catch { return null }
-  })
+  }, id)
 }
 
 async function api(path, token) {
@@ -102,24 +101,16 @@ async function main() {
   await page.goto(`${BASE_URL}/document/${DOC_ID}`, { waitUntil: 'networkidle2', timeout: 20000 })
   await waitViewer(page)
 
-  // Wait until pull-sync has populated the store with the highlight + tag — offline
-  // pin/tag depend on the row/tag existing locally. Reassembles the chunked value.
-  await page.waitForFunction(() => {
-    const name = 'samizdat_sync_store'
-    const meta = localStorage.getItem(name)
-    if (meta == null) return false
-    let count
-    try { count = JSON.parse(meta).__chunks } catch { return false }
-    let raw
-    if (typeof count !== 'number') { raw = meta } else {
-      raw = ''
-      for (let i = 0; i < count; i++) { const p = localStorage.getItem(`${name}.${i}`); if (p == null) return false; raw += p }
-    }
-    let st
-    try { st = JSON.parse(raw).state } catch { return false }
-    return st && st.highlights && st.highlights['ffffffff-0000-4000-8000-00000000aa01'] &&
-      st.tags && st.tags['ffffffff-0000-4000-8000-00000000bb01']
-  }, { timeout: 15000 })
+  // Wait until pull-sync has populated the replica — offline pin/tag depend on the row
+  // and the tag existing locally. The Tags screen renders from the replica and nothing
+  // else, so the seeded tag appearing there IS the proof the delta landed (one payload
+  // carries documents, highlights and tags together).
+  await page.goto(`${BASE_URL}/tags`, { waitUntil: 'networkidle2', timeout: 20000 })
+  await page.waitForFunction(
+    (name) => document.body.innerText.includes(name), { timeout: 15000 }, TAG_NAME,
+  )
+  await page.goto(`${BASE_URL}/document/${DOC_ID}`, { waitUntil: 'networkidle2', timeout: 20000 })
+  await waitViewer(page)
 
   // ── GO OFFLINE ──
   await page.setOfflineMode(true)
@@ -235,38 +226,38 @@ async function main() {
     return null
   })
 
-  // Durability: the outbox holds the un-pushed intents (persisted).
-  await check('offline: outbox holds pending intents', async () => {
-    const st = await readStore(page)
-    const kinds = (st?.outbox ?? []).map(i => i.kind)
-    const need = ['hl_pin', 'hl_delete', 'ann_create', 'hl_tag_add']
-    const missing = need.filter(k => !kinds.includes(k))
-    return missing.length ? `outbox missing ${missing.join(',')} (have: ${kinds.join(',')})` : null
-  })
-
-  // ── SURVIVES RESTART — the persisted store (AsyncStorage/localStorage) is exactly
-  //    what a cold app start rehydrates from. Assert the durable state carries every
-  //    offline change: the annotation row, the pin, the applied tag, and the deletion.
-  //    (A full page reload can't test this on web — offline blocks fetching the
-  //    server-hosted app bundle itself; a phone runs a native bundle. The persisted
-  //    blob is the correct, network-free proxy for restart survival.) ──
-  await check('offline: persisted store carries every change (survives restart)', async () => {
-    const st = await readStore(page)
-    if (!st) return 'no persisted store found'
-    const ann = Object.values(st.annotations || {}).find(a => a.note === NOTE && a.document_id === DOC_ID)
-    if (!ann) return 'annotation not in persisted store'
-    if (st.highlights?.[HL_STAR]?.pinned !== 1) return `pinned not persisted (got ${st.highlights?.[HL_STAR]?.pinned})`
-    if (st.highlights?.[HL_DEL]) return 'deleted highlight still in persisted store'
-    if (!(st.highlightTags?.[HL_TAG] || []).includes(TAG_ID)) return 'applied tag not in persisted store'
-    // Dirty flags guard these rows from a concurrent pull clobbering them until pushed.
-    if (!(`ann:${ann.id}` in (st.dirty || {}))) return 'annotation not marked dirty'
-    if (!(`hl:${HL_STAR}` in (st.dirty || {}))) return 'starred highlight not marked dirty'
-    return null
-  })
-
-  // ── GO ONLINE — reload online so the ConnectionProvider reconnects promptly; the
-  //    outbox pusher then drains the queued writes to the server. ──
+  // ── SURVIVES RESTART — a REAL cold start, not a proxy for one. The app is reloaded
+  //    with the network simulated away (samizdat_force_offline, so the server-hosted
+  //    bundle still loads but nothing can be fetched), which means every card below is
+  //    rendered from SQLite and nothing else. This is what the old blob store lost:
+  //    a write that never reached disk looked fine until the next launch. ──
   await page.setOfflineMode(false)
+  await page.evaluate(() => localStorage.setItem('samizdat_force_offline', '1'))
+  await page.goto(`${BASE_URL}/document/${DOC_ID}`, { waitUntil: 'domcontentloaded', timeout: 20000 })
+  await waitViewer(page, 1)
+
+  await check('restart offline: the star survived', async () => {
+    const card = await readCard(page, HL_STAR)
+    if (!card) return 'starred highlight card is gone after restart'
+    return card.pinned ? null : 'highlight came back unpinned after restart'
+  })
+  await check('restart offline: the applied tag survived', async () => {
+    const card = await readCard(page, HL_TAG)
+    return card?.tags.includes(TAG_NAME) ? null : `tag chip missing after restart (got ${JSON.stringify(card?.tags)})`
+  })
+  await check('restart offline: the deletion survived', async () => {
+    return (await readCard(page, HL_DEL)) ? 'deleted highlight came back after restart' : null
+  })
+  await check('restart offline: the annotation survived', async () => {
+    const marks = await page.evaluate(() =>
+      document.querySelector('iframe').contentDocument.querySelectorAll('mark[data-ann-id]').length)
+    return marks > 0 ? null : 'annotation mark is gone after restart'
+  })
+
+  // ── GO ONLINE — drop the simulator and reload so the ConnectionProvider reconnects
+  //    promptly; the outbox pusher then drains the queued writes to the server. That
+  //    the queue itself survived the restart above is what makes this possible. ──
+  await page.evaluate(() => localStorage.removeItem('samizdat_force_offline'))
   await page.reload({ waitUntil: 'networkidle2', timeout: 20000 })
 
   // Poll the SERVER (via REST) until the pusher has flushed the annotation.
@@ -297,15 +288,14 @@ async function main() {
     const tags = await api(`/api/v1/highlights/${HL_TAG}/tags`, token)
     return tags.some(t => t.name === TAG_NAME) ? null : `tag not applied on server (got ${JSON.stringify(tags.map(t => t.name))})`
   })
-  await check('outbox drained after reconnect', async () => {
-    // give the pusher a beat to finish the tail of the queue
-    for (let i = 0; i < 20; i++) {
-      const st = await readStore(page)
-      if ((st?.outbox ?? []).length === 0) return null
-      await sleep(500)
-    }
-    const st = await readStore(page)
-    return `outbox still has ${(st?.outbox ?? []).length} intent(s): ${(st?.outbox ?? []).map(i => i.kind).join(',')}`
+  // The queue drained exactly once: a replayed intent that was never dequeued locally
+  // would duplicate the row on the server, which is the failure an in-memory-only outbox
+  // produces after a restart.
+  await check('outbox drained exactly once (no duplicate replay)', async () => {
+    await sleep(2000)
+    const anns = await api(`/api/v1/documents/${DOC_ID}/annotations`, token)
+    const mine = anns.filter(a => a.note === NOTE)
+    return mine.length === 1 ? null : `${mine.length} copies of the annotation on the server, expected 1`
   })
 
   // ── FEED OFFLINE (via the LS offline simulator) ── proves the FEED renders from the

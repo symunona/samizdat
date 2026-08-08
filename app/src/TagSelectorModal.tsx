@@ -12,10 +12,8 @@ import {
   View,
 } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
-import { useSyncStore } from './store/syncStore'
-import * as mut from './store/mutations'
-import type { JunctionType } from './store/outbox'
-import type { Tag } from './api'
+import * as db from './db'
+import type { JunctionType, Tag } from './db'
 import { TAG_COLORS, tagColor } from './tagColor'
 
 type Props = {
@@ -31,21 +29,16 @@ type Props = {
 const TYPE_MAP: Record<Props['objectType'], JunctionType> = {
   document: 'doc', annotation: 'ann', highlight: 'hl',
 }
-const SLICE: Record<Props['objectType'], 'documentTags' | 'annotationTags' | 'highlightTags'> = {
-  document: 'documentTags', annotation: 'annotationTags', highlight: 'highlightTags',
-}
 
-// Store-driven + local-first: tags and their applications are read straight from the
-// synced store and mutated through the outbox, so tagging works offline and the UI
-// reacts instantly (no network, no spinners). Selectors follow the CLAUDE.md rule —
-// select raw store slices (stable refs) and derive in useMemo, never map fresh objects
-// inside a useShallow selector (React #185 crash).
+// Replica-driven + local-first: tags and their applications are read straight from the
+// DB layer and mutated through the outbox, so tagging works offline and the UI reacts
+// instantly (no network, no spinners).
 export default function TagSelectorModal({ visible, objectId, objectType, onClose, onChanged }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
 
-  const tagsMap = useSyncStore((st) => st.tags)
-  const junctionMap = useSyncStore((st) => st[SLICE[objectType]])
+  const allTags = db.useTags()
+  const appliedTagIds = db.useTagLinks(TYPE_MAP[objectType], objectId)
 
   const [newTagName, setNewTagName] = useState('')
   const [newTagColor, setNewTagColor] = useState('default')
@@ -54,36 +47,32 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
     if (visible) { setNewTagName(''); setNewTagColor('default') }
   }, [visible])
 
-  const allTags = useMemo(
-    () => Object.values(tagsMap).filter((t) => !t.deleted_at).sort((a, b) => a.name.localeCompare(b.name)),
-    [tagsMap],
-  )
-  const appliedIds = useMemo(() => new Set(junctionMap[objectId] ?? []), [junctionMap, objectId])
+  const appliedIds = useMemo(() => new Set(appliedTagIds), [appliedTagIds])
+  const appliedTags = useMemo(() => allTags.filter((t) => appliedIds.has(t.id)), [allTags, appliedIds])
 
-  // Resolve the object's current applied tags from the store and notify the caller.
-  const emitChanged = useCallback(() => {
-    if (!onChanged) return
-    const st = useSyncStore.getState()
-    const ids = st[SLICE[objectType]][objectId] ?? []
-    const tags = ids.map((tid) => st.tags[tid]).filter((t): t is Tag => !!t && !t.deleted_at)
-    onChanged(objectId, tags)
-  }, [onChanged, objectId, objectType])
+  // The caller patches its own list from this, so it gets the tags the object will have
+  // once the write lands — computed here rather than re-read afterwards, because a
+  // freshly created tag isn't in this render's `allTags` yet.
+  const emitChanged = useCallback((tags: Tag[]) => {
+    onChanged?.(objectId, tags)
+  }, [onChanged, objectId])
 
-  const toggleTag = useCallback((tag: Tag) => {
+  const toggleTag = useCallback(async (tag: Tag) => {
     const type = TYPE_MAP[objectType]
-    if (appliedIds.has(tag.id)) mut.removeTag(type, objectId, tag.id)
-    else mut.addTag(type, objectId, tag.id)
-    emitChanged()
-  }, [appliedIds, objectId, objectType, emitChanged])
+    const applied = appliedIds.has(tag.id)
+    if (applied) await db.removeTag(type, objectId, tag.id)
+    else await db.addTag(type, objectId, tag.id)
+    emitChanged(applied ? appliedTags.filter((t) => t.id !== tag.id) : [...appliedTags, tag])
+  }, [appliedIds, appliedTags, objectId, objectType, emitChanged])
 
-  const handleCreateTag = useCallback(() => {
+  const handleCreateTag = useCallback(async () => {
     const name = newTagName.trim()
     if (!name) return
-    const tag = mut.createTag({ name, color: newTagColor })
-    mut.addTag(TYPE_MAP[objectType], objectId, tag.id)
     setNewTagName('')
-    emitChanged()
-  }, [newTagName, newTagColor, objectId, objectType, emitChanged])
+    const tag = await db.createTag({ name, color: newTagColor })
+    await db.addTag(TYPE_MAP[objectType], objectId, tag.id)
+    emitChanged([...appliedTags, tag])
+  }, [newTagName, newTagColor, appliedTags, objectId, objectType, emitChanged])
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>

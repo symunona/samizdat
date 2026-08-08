@@ -3,14 +3,16 @@ import { installOfflineSim } from '../src/offlineSim'
 // Patch fetch before anything probes the network, so the LS offline switch is honored
 // from the very first request.
 installOfflineSim()
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Platform } from 'react-native'
 import { setAudioModeAsync } from 'expo-audio'
 import { Slot, useRouter, usePathname } from 'expo-router'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { UnistylesRuntime } from 'react-native-unistyles'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { loadTheme } from '../src/storage'
+import * as db from '../src/db'
+import { createLogger } from '../src/logger'
+import { loadTheme } from '../src/prefs'
 import { ConnectionProvider, useConnection } from '../src/ConnectionContext'
 import { ToastProvider } from '../src/ToastContext'
 import { ConfirmProvider } from '../src/ConfirmContext'
@@ -21,6 +23,8 @@ import { useSyncEffect } from '../src/store/useSyncEffect'
 import { useOutboxPush } from '../src/store/useOutboxPush'
 import { useDebugLogStore } from '../src/store/debugLogStore'
 import { setDebugLogTarget, logToServer } from '../src/debugLog'
+
+const log = createLogger('app')
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -100,9 +104,22 @@ function DebugLogBridge() {
 }
 
 export default function RootLayout() {
+  // The local replica backs every read in the app, including the theme and the other
+  // preferences, so nothing renders until it is open. A failure is NOT fatal: the
+  // connection record lives outside the DB (src/storage.ts), so the screens still come
+  // up, reads are empty and every rejected write is reported to persistHealth — which
+  // is how the user learns about it instead of staring at a frozen replica.
+  const [dbReady, setDbReady] = useState(false)
   useEffect(() => {
-    loadTheme().then((t) => UnistylesRuntime.setTheme(t))
+    db.open()
+      .catch((e) => log.error('local database failed to open:', e))
+      .finally(() => setDbReady(true))
   }, [])
+
+  useEffect(() => {
+    if (!dbReady) return
+    loadTheme().then((t) => UnistylesRuntime.setTheme(t))
+  }, [dbReady])
 
   // Keep audio playing when the app is backgrounded/locked and surface lock-screen
   // controls. `doNotMix` is required for those controls; the expo-audio config plugin
@@ -112,6 +129,8 @@ export default function RootLayout() {
     setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' })
       .catch(() => {})
   }, [])
+
+  if (!dbReady) return <GestureHandlerRootView style={{ flex: 1 }} />
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

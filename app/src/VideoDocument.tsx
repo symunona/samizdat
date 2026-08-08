@@ -23,7 +23,6 @@ import { useMediaTimeline } from './useMediaTimeline'
 import YtPlayer from './YtPlayer'
 import ServerVideoPlayer from './ServerVideoPlayer'
 import * as FileSystem from 'expo-file-system/legacy'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   fetchAnnotations,
   fetchDocumentHighlights,
@@ -37,7 +36,7 @@ import {
   fetchReadingProgress,
 } from './api'
 import type { Document, Annotation, HighlightWithDoc } from './api'
-import * as mut from './store/mutations'
+import * as db from './db'
 import { useConnection } from './ConnectionContext'
 import { useToast } from './ToastContext'
 import AnnotationPanel from './AnnotationPanel'
@@ -266,7 +265,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
   // Restore a previously synced local file.
   useEffect(() => {
-    AsyncStorage.getItem(`video_audio_${doc.id}`).then(uri => {
+    db.getMediaFile(doc.id).then(uri => {
       if (uri) setLocalUri(uri)
     }).catch(() => {})
   }, [doc.id])
@@ -293,7 +292,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       if (ms - anchor >= JUMP_GRACE_MS) graceAnchorRef.current = null
       else return
     }
-    if (ms > 0) mut.saveMediaPos(doc.id, ms)
+    if (ms > 0) db.saveMediaPos(doc.id, ms)
   }, [doc.id])
 
   // Read the saved point once on mount (feeds both the resume seek and the marker).
@@ -432,22 +431,22 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     sendToWebView({ type: 'setAnnotations', annotations })
   }, [annotations, sendToWebView])
 
-  // Local-first: write to the store + outbox (no network); the setAnnotations effect
+  // Local-first: write to the replica + outbox (no network); the setAnnotations effect
   // re-syncs the transcript marks/badges.
-  const handleAnnSave = useCallback((data: { note: string; color: string }) => {
+  const handleAnnSave = useCallback(async (data: { note: string; color: string }) => {
     setAnnVisible(false)
     if (annMode === 'create') {
       const sel: Selection = pendingSelection ?? { exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0, media_ts_ms: positionMs }
       // A generic (unanchored) note needs a body — nothing to anchor it to otherwise.
       if (!sel.exact && !data.note.trim()) return
-      const ann = mut.createAnnotation({
+      const ann = await db.createAnnotation({
         documentId: doc.id, exact: sel.exact, prefix: sel.prefix, suffix: sel.suffix,
         posStart: sel.pos_start, posEnd: sel.pos_end, mediaTsMs: sel.media_ts_ms ?? 0,
         note: data.note, color: data.color,
       })
       setAnnotations(prev => [...prev, ann])
     } else if (annMode === 'edit' && existingAnnotation) {
-      mut.updateAnnotation(existingAnnotation.id, data.note, data.color)
+      db.updateAnnotation(existingAnnotation.id, data.note, data.color)
       setAnnotations(prev => prev.map(a =>
         a.id === existingAnnotation.id ? { ...a, note: data.note, color: data.color } : a))
     }
@@ -456,7 +455,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const handleAnnDelete = useCallback(() => {
     if (!existingAnnotation) return
     setAnnVisible(false)
-    mut.deleteAnnotation(existingAnnotation.id)
+    db.deleteAnnotation(existingAnnotation.id)
     setAnnotations(prev => prev.filter(a => a.id !== existingAnnotation.id))
   }, [existingAnnotation])
 
@@ -659,7 +658,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       const dest = `${FileSystem.documentDirectory}video-audio-${doc.id}.m4a`
       const res = await FileSystem.downloadAsync(remoteUrl, dest)
       setLocalUri(res.uri)
-      await AsyncStorage.setItem(`video_audio_${doc.id}`, res.uri)
+      await db.setMediaFile(doc.id, res.uri)
       toast('Synced to device', 'success')
     } catch (e) {
       log.error('sync failed', e)

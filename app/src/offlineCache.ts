@@ -1,16 +1,14 @@
 import { Platform } from 'react-native'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as FileSystem from 'expo-file-system/legacy'
+import * as db from './db'
 
 // Offline media cache management. Mirrors the sync path in VideoDocument.tsx:
 // audio assets are downloaded to FileSystem.documentDirectory and their local URI
-// is persisted in AsyncStorage under `video_audio_<docId>`. This module enumerates
-// and deletes those cached files so the user can reclaim space.
+// is recorded in the replica's `media_files` table. This module enumerates and
+// deletes those cached files so the user can reclaim space.
 //
 // `expo-file-system` is native-only. On web the module still imports cleanly, but
 // every function is a safe no-op / empty result so a web build never crashes.
-
-const OFFLINE_AUDIO_PREFIX = 'video_audio_'
 
 // Capability guard: FileSystem has no real filesystem on web (documentDirectory
 // is null there). Treat that as "no offline cache available".
@@ -23,52 +21,43 @@ export interface OfflineMediaItem {
   exists: boolean
 }
 
-// listOfflineMedia enumerates every synced audio file. Stale AsyncStorage keys
-// (file gone from disk) are repaired: the key is removed and the entry skipped,
-// so the returned list only ever reflects real, on-disk media.
+// listOfflineMedia enumerates every synced audio file. Stale rows (file gone from
+// disk) are repaired: the row is dropped and the entry skipped, so the returned list
+// only ever reflects real, on-disk media.
 export async function listOfflineMedia(): Promise<OfflineMediaItem[]> {
   if (!NATIVE_FS) return []
-  const keys = await AsyncStorage.getAllKeys()
-  const audioKeys = keys.filter((k) => k.startsWith(OFFLINE_AUDIO_PREFIX))
   const items: OfflineMediaItem[] = []
-  for (const key of audioKeys) {
-    const docId = key.slice(OFFLINE_AUDIO_PREFIX.length)
-    const uri = await AsyncStorage.getItem(key)
-    if (!uri) {
-      await AsyncStorage.removeItem(key).catch(() => {})
-      continue
-    }
+  for (const { documentId, uri } of await db.listMediaFiles()) {
     try {
       const info = await FileSystem.getInfoAsync(uri)
       if (!info.exists) {
-        // Stale key — the file was deleted out from under us. Repair and skip.
-        await AsyncStorage.removeItem(key).catch(() => {})
+        // Stale row — the file was deleted out from under us. Repair and skip.
+        await db.setMediaFile(documentId, null)
         continue
       }
       items.push({
-        docId,
+        docId: documentId,
         uri,
         sizeBytes: typeof info.size === 'number' ? info.size : 0,
         exists: true,
       })
     } catch {
       // Unreadable entry — treat as stale.
-      await AsyncStorage.removeItem(key).catch(() => {})
+      await db.setMediaFile(documentId, null)
     }
   }
   return items
 }
 
-// deleteOfflineMedia removes the on-disk file and its AsyncStorage pointer. The
-// `video_pos_<docId>` resume position is intentionally left intact.
+// deleteOfflineMedia removes the on-disk file and its `media_files` row. The
+// server-side resume position is intentionally left intact.
 export async function deleteOfflineMedia(docId: string): Promise<void> {
   if (!NATIVE_FS) return
-  const key = OFFLINE_AUDIO_PREFIX + docId
-  const uri = await AsyncStorage.getItem(key)
+  const uri = await db.getMediaFile(docId)
   if (uri) {
     await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {})
   }
-  await AsyncStorage.removeItem(key)
+  await db.setMediaFile(docId, null)
 }
 
 export function totalOfflineBytes(items: OfflineMediaItem[]): number {

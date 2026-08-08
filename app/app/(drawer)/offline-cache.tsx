@@ -6,7 +6,7 @@ import { useUnistyles } from 'react-native-unistyles'
 import IconButton from '../../src/IconButton'
 import { useConfirm } from '../../src/ConfirmContext'
 import { useToast } from '../../src/ToastContext'
-import { useSyncStore } from '../../src/store/syncStore'
+import { useDocuments } from '../../src/db'
 import { parseMediaMetadata } from '../../src/api'
 import {
   listOfflineMedia,
@@ -33,7 +33,11 @@ export default function OfflineCacheScreen() {
   const router = useRouter()
   const { confirm } = useConfirm()
   const { toast } = useToast()
-  const documents = useSyncStore((state) => state.documents)
+  const documentList = useDocuments()
+  const documents = useMemo(
+    () => Object.fromEntries(documentList.map((d) => [d.id, d])),
+    [documentList],
+  )
 
   const [items, setItems] = useState<OfflineMediaItem[]>([])
   const [loading, setLoading] = useState(true)

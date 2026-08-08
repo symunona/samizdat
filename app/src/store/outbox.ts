@@ -1,6 +1,6 @@
 // Offline-first write path — the outbox + dirty-tracking + dirty-aware pull-merge,
 // as PURE functions (no zustand, no network, no clock) so they unit-test in a plain
-// node harness (see e2e/outbox-unit.mjs). syncStore wires these into the persisted
+// node harness (see e2e/outbox-unit.mjs). src/db/repo.ts wires these into the SQLite
 // store; pushEngine drains the outbox by replaying the REST client.
 //
 // Principle: every user mutation (1) patches the local store immediately, (2) enqueues

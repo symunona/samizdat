@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchJobs } from './api'
-import type { Document, Job } from './api'
+import type { Job } from './api'
+import type { DocumentMeta } from './db'
 import { useConnection } from './ConnectionContext'
 
 // A permanently-failed (dead) Job reduced to what the UI shows. The server keeps
@@ -78,7 +79,7 @@ export function useFailedJobs() {
 // the Document in their payload (and a finished scrape in its result), while a
 // re-scrape that died never recorded one — it only knows the URL. Most recent
 // wins: the feed is ordered updated_at DESC.
-export function failureForDocument(doc: Document, failed: FailedJob[]): FailedJob | undefined {
+export function failureForDocument(doc: DocumentMeta, failed: FailedJob[]): FailedJob | undefined {
   const url = normalizeUrl(doc.canonical_url)
   return failed.find(f => (f.documentId ? f.documentId === doc.id : !!f.url && normalizeUrl(f.url) === url))
 }
@@ -87,7 +88,7 @@ export function failureForDocument(doc: Document, failed: FailedJob[]): FailedJo
 // used by the list badge and the viewer banner so both say the same thing. The
 // Document's own flag (a curated false-parse reason) wins over a dead job, which
 // otherwise carries the detail. '' = healthy.
-export function documentErrorText(doc: Document | null | undefined, failed: FailedJob[]): string {
+export function documentErrorText(doc: DocumentMeta | null | undefined, failed: FailedJob[]): string {
   if (!doc) return ''
   if (doc.error_reason) return `${doc.error_reason} — no summary generated`
   const f = failureForDocument(doc, failed)
@@ -98,7 +99,7 @@ export function documentErrorText(doc: Document | null | undefined, failed: Fail
 // nothing in the list represents them — they need their own row. A failure whose
 // URL did land a Document (e.g. a flagged false-parse) is dropped here: that
 // Document already carries the badge.
-export function orphanScrapeFailures(failed: FailedJob[], documents: Document[]): FailedJob[] {
+export function orphanScrapeFailures(failed: FailedJob[], documents: DocumentMeta[]): FailedJob[] {
   const known = new Set(documents.map(d => normalizeUrl(d.canonical_url)))
   return failed.filter(f => f.job.kind === 'scrape_url' && !f.documentId && !known.has(normalizeUrl(f.url)))
 }

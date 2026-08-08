@@ -48,55 +48,54 @@ Never block UI on network. Server is authoritative; broken replica → wipe + re
 
 ## Local-first writes (outbox) — NEVER call a mutating api.ts fn from a screen
 Every user mutation (tag / star / archive / annotate / read-progress / delete) MUST go
-through `src/store/mutations.ts` (`import * as mut`), never the inline `api.ts` client.
-A mutation (1) optimistically patches the persisted `syncStore`, so the UI reacts with
-**no network**, and (2) enqueues an ordered `outbox` intent that `pushEngine.drainOutbox`
-replays against the SAME `api.ts` endpoints when connected. This is why tagging/starring
-now work offline. Wiring:
+through the DB layer (`import * as db from '../src/db'`), never the inline `api.ts`
+client. A mutation (1) writes the row to SQLite and patches the memory index, so the UI
+reacts with **no network**, and (2) enqueues an ordered `outbox` intent that
+`pushEngine.drainOutbox` replays against the SAME `api.ts` endpoints when connected.
+This is why tagging/starring work offline. Wiring:
 - `src/store/outbox.ts` — PURE reducers + dirty-tracking + dirty-aware pull-merge (unit-tested by `e2e/outbox-unit.mjs`; run via `just e2e-offline`). No zustand/network/clock here.
-- `src/store/syncStore.ts` — the `mut*` actions (optimistic patch + `enqueue` + mark row `dirty`) and a **dirty-aware `applySync`**: a locally-dirty row is NOT clobbered by an older server pull until its intent is pushed. `base_rev` is tracked per dirty row (Phase 2 note-conflict seam).
+- `src/db/repo.ts` — the mutations (row + intent + dirty key in ONE transaction, then the index) and a **dirty-aware `applySync`**: a locally-dirty row is NOT clobbered by an older server pull until its intent is pushed. `base_rev` is tracked per dirty row (Phase 2 note-conflict seam).
 - `src/store/pushEngine.ts` — drains the outbox in FIFO order (dependencies hold: a create lands before edits that reference it); a transient failure (offline/5xx/401) stops the drain + retries with backoff, a 4xx is dropped so it can't wedge the queue.
-- `src/store/useOutboxPush.ts` — mounted in `_layout` `SyncEffects`; drains on new intent, reconnect, foreground, interval. Outbox is persisted → survives restart.
+- `src/store/useOutboxPush.ts` — mounted in `_layout` `SyncEffects`; drains on new intent, reconnect, foreground, interval. The outbox is a table → survives restart in FIFO order.
 - **Creates are client-minted UUIDs** (`src/store/uuid.ts` — crypto when present, else Math.random; the `uuid` pkg's v4 crashes on bare Hermes). The server create endpoints (annotation, note, tag) honor an optional `id` idempotently, so a replayed offline create can't collide or duplicate. Never enqueue machine content (doc markdown, highlight body).
-- `TagSelectorModal` is fully store-driven (reads `syncStore.tags` + junction maps, mutates via `mut`) → works offline, no fetch. Follow the useShallow rule: raw slices + `useMemo`.
+- **Mutations are async** — they are real I/O. `createTag`/`createAnnotation` return a Promise of the new row; `await` them if you need the id.
+- `TagSelectorModal` is fully replica-driven (`db.useTags()` + `db.useTagLinks()`, mutates via `db.*`) → works offline, no fetch. Follow the useShallow rule: raw slices + `useMemo`.
 
-## A failed persist write must be LOUD (`src/store/persistHealth.ts`)
+## A failed local write must be LOUD (`src/store/persistHealth.ts`)
 
-zustand's `persist` calls `storage.setItem()` on **every** `set()` and never awaits the
-promise it returns. So when a device's storage fills up, every write rejects and the
-rejection is an unhandled promise rejection: nothing thrown, nothing logged, no UI
-change. The replica froze at one snapshot for **six days** while hydration kept handing
-that snapshot back — `lastSyncedAt` never advanced, so the phone re-pulled an
-ever-growing delta on every launch. Do not re-introduce a silent write path.
+The blob-replica era failed in total silence: zustand's `persist` called
+`storage.setItem()` on **every** `set()` and never awaited the promise, so once a device's
+storage filled up every write rejected as an unhandled promise rejection — nothing thrown,
+nothing logged, no UI change. The replica froze at one snapshot for **six days** while
+hydration kept handing that snapshot back; `lastSyncedAt` never advanced, so the phone
+re-pulled an ever-growing delta on every launch. Do not re-introduce a silent write path.
 
-**Two different Android limits, two different fixes — don't confuse them:**
-- **~2MB per row** (SQLite CursorWindow) → `chunkedStorage.ts` splits the value. Solved.
-- **6MB whole DB** (`getDatabaseSize()` in async-storage's `config.gradle`, gradle
-  property `AsyncStorage_db_size_in_MB`) → **chunking does nothing**; past it every write
-  is `SQLiteFullException`. This is what visibility is for.
-
-Wiring:
-- `makeChunkedStorage(kv, onWrite?)` — the observer fires **once per persist attempt**
-  (not per chunk row): `null` = saved, the error = failed. The adapter reports and then
-  **swallows**; re-throwing would only restore the unhandled rejection. `chunkedStorage.ts`
-  stays free of zustand/RN imports so `e2e/chunked-storage-unit.mjs` can drive it.
-- `isStorageFullError(e)` — pure discriminator (`SQLiteFull` / `database or disk is full` /
+SQLite removed the cause (rows have no 6MB whole-DB cap), but a write can still fail — a
+genuinely full disk, a corrupt file — so the visibility stays. Wiring:
+- `repo.ts`'s write gate reports **once per write**: `null` = it landed, the error = it
+  didn't. A failed write leaves the memory index untouched, so the UI cannot show a change
+  that was not saved, and the mutation swallows the error after reporting (re-throwing
+  would only restore the unhandled rejection). `applySync` is the exception: it rethrows,
+  because the sync engine owns the retry and must not advance its cursor.
+- `isStorageFullError(e)` — pure discriminator (`SQLiteFull` / `disk is full` /
   `QuotaExceeded`). It only picks the wording; any write error still raises the alert.
-- `persistHealth.ts` — non-persisted zustand store (persisting "persist is broken" through
+- `persistHealth.ts` — non-persisted zustand store (persisting "writes are broken" through
   the broken writer would be absurd). Logs **once per outage** at `error` level, so it
   rides `logger.ts` → `debugLog.ts` → `tmp/device-logs/<device>.ndjson` with an immediate
   flush. A later successful write clears it — the state is recoverable, not sticky.
+- A replica that cannot even OPEN reports here too, and marks the index hydrated anyway —
+  otherwise every screen sits on a skeleton forever with nothing saying why.
 - `useServiceAlert()` ORs it in: same red dot on the hamburger + drawer Settings row as a
   broken server-side service. Settings shows a **Device Storage** card in the Services
   group *only while broken*.
-- `src/offlineSim.ts` hosts both web-only e2e simulators:
-  `samizdat_force_offline` (every fetch rejects) and `samizdat_force_storage_full`
-  (every persist write rejects with the real SQLiteFullException text).
+- `src/offlineSim.ts` hosts both web-only e2e simulators: `samizdat_force_offline` (every
+  fetch rejects — except the SQLite `.wasm`, which is runtime, not server) and
+  `samizdat_force_storage_full` (every SQL write rejects with `SQLITE_FULL`).
 
-Covered by `just e2e-offline` (adapter/observer + discriminator) and `just e2e-int`
-(`runPersistFailure` — the visible card + drawer dot, the NDJSON line, and the recovery).
-`runPersistFailure` must stay **before** `runSettingsServices`, which permanently seeds a
-broken LLM provider and would keep the drawer dot lit for every later check.
+Covered by `just e2e-int` (`runPersistFailure` — the visible card + drawer dot, the NDJSON
+line, and the recovery). `runPersistFailure` and `runDbLayer` must stay **before**
+`runSettingsServices`, which permanently seeds a broken LLM provider and would keep the
+drawer dot lit for every later check.
 
 ## Screen structure (plan/005)
 Bottom tabs: **Feed · Digest · Settings**. Add FAB center-bottom. Side drawers for filters.
@@ -619,6 +618,61 @@ smoke tests and only breaks with real rows). `useDocuments` is safe because it o
 `.filter().sort()`s raw store refs. For derived shapes (counts, joined tags), select
 the **raw store slices** (`s => s.tags`, `s => s.annotationTags`, … — stable refs) and
 build the derived array in a `useMemo`. See `useAnnotations`/`useTagsWithCounts` in
-`src/store/hooks.ts`.
+`src/db/hooks.ts`.
 
 Native-only — the share flow can't be exercised headless; test on a device after build.
+
+## DB layer is the only storage
+
+All app state lives in ONE local SQLite database, behind `app/src/db/`. Screens, the sync
+engine and the pusher import `src/db` and nothing else — no driver, no query, no memory
+index. The layer replaced a zustand-persist replica that serialized the WHOLE library into
+a single AsyncStorage value on every `set()`; past Android's 6MB whole-DB cap every write
+threw, silently, and the replica froze for six days.
+
+### The three rules — enforced by `just lint` (`tooling/check-db-layer.mjs`)
+1. Only `app/src/db/**` may import a SQLite engine (`expo-sqlite` / `wa-sqlite` / `node:sqlite`).
+2. Only `app/src/db/queries.ts` may contain SQL text — DDL included, so the schema has one
+   place to change. (`BEGIN`/`COMMIT`/`PRAGMA` are exempt: they are per-engine transaction
+   and connection control and belong to the driver that wraps them.)
+3. Only `app/src/db/**` and `app/src/storage.ts` may import AsyncStorage. **`storage.ts`
+   keeps the connection record ALONE** — it must survive a corrupt or unopenable database,
+   because it is the only way back to the server. Every other preference is a row in the
+   `settings` table, reached through `src/prefs.ts`.
+
+### One engine per runtime (`driver.ts` is the contract, `driverImpl*.ts` the backends)
+| target | driver | why |
+|---|---|---|
+| native | `expo-sqlite` | first-party, system SQLite, no cap |
+| web | `@journeyapps/wa-sqlite` | real SQL with **no COOP/COEP** |
+| node (tests) | `node:sqlite` | built in, zero dep, drives `e2e/db-unit.mjs` |
+
+Metro resolves `driverImpl.web.ts` on its own; nothing outside the folder names a backend.
+**Do NOT use expo-sqlite's web target**: it needs SharedArrayBuffer, hence cross-origin
+isolation, and COEP is recursive — it would break the YouTube embed in `YtPlayer.web.tsx`.
+Every wa-sqlite VFS works without those headers, which is the whole reason for two drivers.
+The `.wasm` is served from `app/public/wasm/` by `just sync-wasm` (Metro does not bundle
+`.wasm`, and asking it to would buy nothing — the file is fetched by URL either way).
+
+### Reactivity contract
+- SQLite is the truth. `src/db/memoryIndex.ts` is a **body-less** read cache (a plain
+  zustand store, deliberately NOT persisted — persisting it would recreate the exact bug
+  this layer replaced). `open()` warms it with one SELECT per table.
+- **SQLite first, then the index.** A failed write leaves the index untouched, so the UI
+  can never show a change that did not persist.
+- **Writes are serialized** (`repo.ts`'s queue). One connection means two overlapping
+  transactions are not two transactions — the second `BEGIN` lands inside the first and
+  the engine rejects it. Merges and queue reads happen INSIDE the write, so a delta can
+  never be computed against a snapshot that a concurrent mutation has already moved past.
+- Bodies (`markdown`, `transcript`) never enter the index — `useDocuments()` returns
+  `DocumentMeta`. Read a body with `useDocument(id)` / `db.getDocument(id)`, never from a list.
+- Hooks feed screens; a screen that needs a *stable* callback (`loadFromStore` feeding a
+  network `load`) must read the hook value through a ref, or every local write re-triggers
+  a fetch.
+- `db.open()` also retires the pre-SQLite era once (`src/db/legacy.ts`): it deletes the
+  `samizdat_sync_store*` blob **and all its chunk keys**, and carries the loose preference /
+  offline-audio keys into `settings` / `media_files`.
+
+Tests: `just e2e-db` (the layer on `node:sqlite`, no server, no browser) · `just e2e-offline`
+(the offline walkthrough now asserts a **real** reload-from-SQLite restart) · `just e2e-int`
+(`runDbLayer`, `runLargeReplica`).

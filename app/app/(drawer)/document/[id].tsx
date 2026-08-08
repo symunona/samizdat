@@ -19,7 +19,6 @@ import { useUnistyles, UnistylesRuntime } from 'react-native-unistyles'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import WebView from 'react-native-webview'
 import type { WebViewMessageEvent } from 'react-native-webview'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
   fetchDocument,
   fetchReadingProgress,
@@ -31,23 +30,22 @@ import {
   fetchDocumentTags,
 } from '../../../src/api'
 import type { Document, Annotation, HighlightWithDoc, Feed, Tag } from '../../../src/api'
-import * as mut from '../../../src/store/mutations'
+import * as db from '../../../src/db'
 import { tagColor } from '../../../src/tagColor'
 import { openExternal, isWebUrl } from '../../../src/openExternal'
 import { useConnection } from '../../../src/ConnectionContext'
 import { useFailedJobs, documentErrorText } from '../../../src/failedJobs'
 import { useToast } from '../../../src/ToastContext'
-import { saveTheme } from '../../../src/storage'
+import { saveTheme } from '../../../src/prefs'
 import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
 import TagSelectorModal from '../../../src/TagSelectorModal'
 import LinkActionSheet from '../../../src/LinkActionSheet'
 import { useScrapeQueue } from '../../../src/ScrapeQueueContext'
 import { buildDocumentHtml, mdToHtml } from '../../../src/markdownToHtml'
-import { useSyncStore } from '../../../src/store/syncStore'
 import VideoDocument from '../../../src/VideoDocument'
 import { useReadingModeStore } from '../../../src/store/readingModeStore'
-import type { ReadingMode } from '../../../src/storage'
+import type { ReadingMode } from '../../../src/prefs'
 import { ImageLightbox } from '../../../src/ImageViewer'
 import PendingPipelineBanner from '../../../src/PendingPipelineBanner'
 
@@ -145,7 +143,7 @@ export default function DocumentViewer() {
   const [hlExpanded, setHlExpanded] = useState(true)
 
   useEffect(() => {
-    AsyncStorage.getItem(`doc_hl_exp_${id}`).then(val => {
+    db.getSetting(`doc_hl_exp_${id}`).then(val => {
       if (val !== null) setHlExpanded(val === '1')
     }).catch(() => {})
   }, [id])
@@ -273,36 +271,38 @@ export default function DocumentViewer() {
     setAnnVisible(true)
   }, [])
 
-  // Offline fallback: the sync replica pulls the FULL document set (markdown,
-  // highlights, annotations, tags) down on every sync and persists it in
-  // AsyncStorage, so a cached article reads without the network. Rebuilds the whole
-  // view from the store; returns false when this document isn't in the local cache.
-  const loadFromStore = useCallback((): boolean => {
-    const st = useSyncStore.getState()
-    const d = st.documents[id]
+  // Offline fallback: the replica holds the FULL document set (markdown, highlights,
+  // annotations, tags), so a cached article reads without the network. Rebuilds the
+  // whole view from the DB layer; returns false when this document isn't cached.
+  //
+  // The joins come from the reactive hooks, read through a ref so `loadFromStore` keeps
+  // a stable identity: it feeds `load`, and a callback that changed on every replica
+  // write would re-fetch the document over the network on every star or annotation.
+  // Only the BODY is a real query — it never enters the in-memory index.
+  const storeDocs = db.useDocuments()
+  const storeHighlights = db.useFeedHighlights()
+  const storeAnnotations = db.useAnnotationsFor({ documentId: id })
+  const storeTags = db.useTags()
+  const storeDocTagIds = db.useTagLinks('doc', id)
+  const storeRef = useRef({ storeDocs, storeHighlights, storeAnnotations, storeTags, storeDocTagIds })
+  storeRef.current = { storeDocs, storeHighlights, storeAnnotations, storeTags, storeDocTagIds }
+
+  const loadFromStore = useCallback(async (): Promise<boolean> => {
+    const d = await db.getDocument(id)
     if (!d || d.deleted_at) return false
+    const st = storeRef.current
     const docsByUrl: Record<string, string> = {}
-    for (const doc of Object.values(st.documents)) {
-      if (!doc.deleted_at) docsByUrl[doc.canonical_url] = doc.id
-    }
-    const tagsFrom = (ids?: string[]): Tag[] =>
-      (ids ?? []).map(tid => st.tags[tid]).filter((t): t is Tag => !!t)
-    const anns = Object.values(st.annotations).filter(a => a.document_id === id && !a.deleted_at)
-    const hls: HighlightWithDoc[] = Object.values(st.highlights)
-      .filter(h => h.document_id === id && !h.deleted_at && !h.archived_at)
-      .map(h => ({
-        ...h,
-        // Synced store rows have no server-rendered body_html — render it so the WebView
-        // highlight cards show formatted markdown, not raw source.
-        body_html: h.body_html ?? mdToHtml(h.body),
-        document_title: d.title,
-        document_url: d.canonical_url,
-        tags: tagsFrom(st.highlightTags[h.id]),
-      }))
+    for (const doc of st.storeDocs) docsByUrl[doc.canonical_url] = doc.id
+    const tagById = new Map(st.storeTags.map(t => [t.id, t]))
+    const hls: HighlightWithDoc[] = st.storeHighlights
+      .filter(h => h.document_id === id)
+      // Synced rows have no server-rendered body_html — render it so the WebView
+      // highlight cards show formatted markdown, not raw source.
+      .map(h => ({ ...h, body_html: h.body_html ?? mdToHtml(h.body) }))
     setDoc(d)
-    setDocTags(tagsFrom(st.documentTags[id]))
+    setDocTags(st.storeDocTagIds.map(tid => tagById.get(tid)).filter((t): t is Tag => !!t))
     applyHtml(d.media_type === 'video' ? null : buildDocumentHtml(d.markdown, d.title || d.canonical_url, docsByUrl, activeUrl ?? ''))
-    setAnnotations(anns)
+    setAnnotations(st.storeAnnotations)
     setHighlights(hls)
     setSourceFeed(null)
     return true
@@ -314,11 +314,8 @@ export default function DocumentViewer() {
     if (!background) setLoading(true)
     setError(null)
     try {
-      const storeDocs = useSyncStore.getState().documents
       const docsByUrl: Record<string, string> = {}
-      for (const d of Object.values(storeDocs)) {
-        if (!d.deleted_at) docsByUrl[d.canonical_url] = d.id
-      }
+      for (const d of storeRef.current.storeDocs) docsByUrl[d.canonical_url] = d.id
       const [d, progress, anns, hl, dtags] = await Promise.all([
         fetchDocument(activeUrl, token, id),
         fetchReadingProgress(activeUrl, token, id),
@@ -345,7 +342,7 @@ export default function DocumentViewer() {
       }
     } catch (e: unknown) {
       // Network hiccup / offline — fall back to the cached copy before erroring.
-      if (loadFromStore()) setError(null)
+      if (await loadFromStore()) setError(null)
       else if (!background) setError(e instanceof Error ? e.message : 'Failed to load document')
     } finally {
       setLoading(false)
@@ -355,14 +352,19 @@ export default function DocumentViewer() {
   useEffect(() => {
     // Store-first: render the cached copy instantly (snappy, offline-ready, and no flash
     // of the previously-open article), then refresh from the network in the background.
-    const cached = loadFromStore()
-    if (status === 'connected') {
-      load(cached) // silent refresh when we already showed cache; spinner only if not cached
-    } else if (status === 'disconnected') {
-      setLoading(false)
-      setError(cached ? null : 'Not connected — this document isn’t saved offline')
-    }
+    // The cache read is a real query now, so the follow-up waits on it.
+    let alive = true
+    loadFromStore().then(cached => {
+      if (!alive) return
+      if (status === 'connected') {
+        load(cached) // silent refresh when we already showed cache; spinner only if not cached
+      } else if (status === 'disconnected') {
+        setLoading(false)
+        setError(cached ? null : 'Not connected — this document isn’t saved offline')
+      }
+    })
     return () => {
+      alive = false
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     }
   }, [id, status, load, loadFromStore])
@@ -432,7 +434,7 @@ export default function DocumentViewer() {
       }
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       saveTimerRef.current = setTimeout(() => {
-        mut.saveProgress(id, frac)
+        db.saveProgress(id, frac)
       }, DEBOUNCE_MS)
     } else if (msg.type === 'selection' && msg.data) {
       setPendingSelection(msg.data)
@@ -459,14 +461,14 @@ export default function DocumentViewer() {
       const hlItem = highlights.find(h => h.id === msg.id)
       if (!hlItem) return
       const next = hlItem.pinned !== 1
-      mut.pinHighlight(msg.id, next) // local-first: store + outbox, no await
+      db.pinHighlight(msg.id, next) // local-first: replica + outbox, no await
       setHighlights(prev => {
         const updated = prev.map(h => h.id === msg.id ? { ...h, pinned: (next ? 1 : 0) as 0 | 1 } : h)
         sendToWebView({ type: 'setHighlights', highlights: toHlData(updated), expanded: hlExpanded })
         return updated
       })
     } else if (msg.type === 'hl_delete' && msg.id) {
-      mut.deleteHighlight(msg.id)
+      db.deleteHighlight(msg.id)
       setHighlights(prev => {
         const updated = prev.filter(h => h.id !== msg.id)
         sendToWebView({ type: 'setHighlights', highlights: toHlData(updated), expanded: hlExpanded })
@@ -484,7 +486,7 @@ export default function DocumentViewer() {
     } else if (msg.type === 'hl_toggle_section') {
       setHlExpanded(prev => {
         const next = !prev
-        AsyncStorage.setItem(`doc_hl_exp_${id}`, next ? '1' : '0').catch(() => {})
+        db.setSetting(`doc_hl_exp_${id}`, next ? '1' : '0').catch(() => {})
         sendToWebView({ type: 'setHighlights', highlights: toHlData(highlights), expanded: next })
         return next
       })
@@ -514,18 +516,18 @@ export default function DocumentViewer() {
     return () => window.removeEventListener('message', handler)
   }, [handleParsedMessage])
 
-  // Local-first: write to the store + outbox (no network), patch the local marks list.
-  const handleAnnSave = useCallback((data: { note: string; color: string }) => {
+  // Local-first: write to the replica + outbox (no network), patch the local marks list.
+  const handleAnnSave = useCallback(async (data: { note: string; color: string }) => {
     setAnnVisible(false)
     if (annMode === 'create') {
       const sel = pendingSelection ?? { exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 }
-      const ann = mut.createAnnotation({
+      const ann = await db.createAnnotation({
         documentId: id, exact: sel.exact, prefix: sel.prefix, suffix: sel.suffix,
         posStart: sel.pos_start, posEnd: sel.pos_end, note: data.note, color: data.color,
       })
       setAnnotations(prev => [...prev, ann]) // marks re-sync via the annotations effect
     } else if (annMode === 'edit' && existingAnnotation) {
-      mut.updateAnnotation(existingAnnotation.id, data.note, data.color)
+      db.updateAnnotation(existingAnnotation.id, data.note, data.color)
       setAnnotations(prev => prev.map(a =>
         a.id === existingAnnotation.id ? { ...a, note: data.note, color: data.color } : a))
     }
@@ -534,7 +536,7 @@ export default function DocumentViewer() {
   const handleAnnDelete = useCallback(() => {
     if (!existingAnnotation) return
     setAnnVisible(false)
-    mut.deleteAnnotation(existingAnnotation.id)
+    db.deleteAnnotation(existingAnnotation.id)
     setAnnotations(prev => prev.filter(a => a.id !== existingAnnotation.id)) // effect removes the mark
   }, [existingAnnotation])
 

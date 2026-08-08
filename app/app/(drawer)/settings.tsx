@@ -13,11 +13,12 @@ import { llmErrorLabel, llmProviderLabel } from '../../src/llmStatus'
 import type { LLMProvider } from '../../src/llmStatus'
 import { probeLLMProviders, probeSummary } from '../../src/llmModels'
 import type { LLMProbeResult } from '../../src/llmModels'
-import { clearConnection, removeServerUrl, loadUrlLastUsedMap } from '../../src/storage'
+import { clearConnection, removeServerUrl } from '../../src/storage'
+import { loadUrlLastUsedMap } from '../../src/prefs'
 import { useConnection } from '../../src/ConnectionContext'
 import { useConfirm } from '../../src/ConfirmContext'
 import { useToast } from '../../src/ToastContext'
-import { useSyncStore } from '../../src/store/syncStore'
+import * as db from '../../src/db'
 import { usePersistHealth } from '../../src/store/persistHealth'
 import { useDebugLogStore } from '../../src/store/debugLogStore'
 import { useReadingModeStore } from '../../src/store/readingModeStore'
@@ -108,7 +109,7 @@ export default function SettingsScreen() {
   const { data: proxyStatus, refetch: refetchProxy, isFetching: proxyFetching } = useProxyStatus()
   const { data: exportStats, refetch: refetchExport, isFetching: exportFetching } = useExportStats()
   const { data: llmStatus } = useLLMStatus()
-  // The one client-side service: the offline replica's write path (src/store/persistHealth.ts).
+  // The one client-side service: the local database's write path (src/store/persistHealth.ts).
   const persistFailure = usePersistHealth((st) => st.failure)
   // The LLM card is passive by default (status = the last real call's outcome, see
   // server/CLAUDE.md). This is the one place that ACTIVELY asks — on a tap, never
@@ -314,8 +315,6 @@ export default function SettingsScreen() {
     router.replace('/connect')
   }
 
-  const clearStore = useSyncStore((state) => state.clearStore)
-
   async function handleClearLocalCache() {
     const ok = await confirm({
       title: 'Clear local cache',
@@ -324,7 +323,7 @@ export default function SettingsScreen() {
       destructive: true,
     })
     if (!ok) return
-    clearStore()
+    await db.wipe()
     toast('Local cache cleared. Syncing from server…', 'success')
   }
 
@@ -645,9 +644,9 @@ export default function SettingsScreen() {
 
       <Text style={s.sectionTitle}>Services</Text>
 
-      {/* Offline replica write path — shown only while broken. A device that can no
-          longer save the replica keeps reading an ever-staler copy, and before this
-          card said so the only symptom was a feed that quietly stopped moving. */}
+      {/* The local database's write path — shown only while broken. A device that can
+          no longer save keeps reading an ever-staler copy, and before this card said so
+          the only symptom was a feed that quietly stopped moving. */}
       {persistFailure && (
         <View style={s.card} testID="persist-failure-card">
           <View style={s.titleGroup}>
@@ -657,13 +656,13 @@ export default function SettingsScreen() {
           <View style={s.statusRow}>
             <View style={[s.dot, { backgroundColor: theme.colors.error }]} />
             <Text style={[s.statusText, { fontSize: 14, color: theme.colors.error }]}>
-              {persistFailure.full ? 'Full — offline data is stale' : 'Cannot save — offline data is stale'}
+              {persistFailure.full ? 'Full — offline data is stale' : 'Cannot save locally — offline data is stale'}
             </Text>
           </View>
           <Text style={s.connectionDetail}>
             {persistFailure.full
               ? 'This device has no room left, so the offline copy stopped updating '
-              : 'Saving the offline copy failed, so it stopped updating '}
+              : 'Writing to the local database failed, so the offline copy stopped updating '}
             {formatRelative(persistFailure.firstAt)}. Your own changes (notes, tags, stars) still
             sync to the server, but anything you read offline may be out of date. Free up space on
             the device, or clear the local cache under Device below.

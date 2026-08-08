@@ -1,5 +1,5 @@
 import { fetchSync } from '../api'
-import { useSyncStore } from './syncStore'
+import * as db from '../db'
 
 const DEBOUNCE_MS = 5_000
 
@@ -11,15 +11,19 @@ async function doSync(serverUrl: string, token: string): Promise<void> {
   syncInProgress = true
   lastSyncAt = Date.now()
 
-  const store = useSyncStore.getState()
-  const since = store.lastSyncedAt ?? '1970-01-01T00:00:00Z'
-  store.setSyncStatus('syncing')
+  // The cursor is read from the DB, never from a cached copy: it advances in the SAME
+  // transaction that writes the delta, so a failed write leaves it where it was and the
+  // next pull re-requests exactly what was lost.
+  const since = (await db.getCursor()) ?? '1970-01-01T00:00:00Z'
+  db.setSyncStatus('syncing')
 
   try {
     const payload = await fetchSync(serverUrl, token, since)
-    useSyncStore.getState().applySync(payload)
+    // Rethrows if the local write failed — the delta was fetched but not stored, which
+    // is a sync error, not a silent success. Retry is this engine's job.
+    await db.applySync(payload)
   } catch (e) {
-    useSyncStore.getState().setSyncStatus('error', e instanceof Error ? e.message : 'sync failed')
+    db.setSyncStatus('error', e instanceof Error ? e.message : 'sync failed')
     throw e
   } finally {
     syncInProgress = false

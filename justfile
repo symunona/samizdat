@@ -330,7 +330,7 @@ list-models *args: build-cli
 
 [group('dev')]
 [doc('Run the Expo app (native/Expo Go)')]
-app:
+app: sync-wasm
     cd app && npx expo start 2>/dev/null || echo "app/ not initialized yet"
 
 [group('dev')]
@@ -379,8 +379,20 @@ build-cli:
     cd cli && CGO_ENABLED=0 go build -o bin/sam .
 
 [group('build')]
+[doc('Copy the wa-sqlite wasm into app/public/wasm — the web SQLite engine, served as a plain same-origin static asset (Metro does not bundle .wasm; no COOP/COEP header is involved)')]
+sync-wasm:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Copied from node_modules on every build rather than committed, so the binary can
+    # never drift from the @journeyapps/wa-sqlite version that is actually installed.
+    src="{{justfile_directory()}}/app/node_modules/@journeyapps/wa-sqlite/dist/wa-sqlite-async.wasm"
+    dst="{{justfile_directory()}}/app/public/wasm"
+    mkdir -p "$dst"
+    cp "$src" "$dst/"
+
+[group('build')]
 [doc('Export the Expo web build (served by the server)')]
-build-app-web:
+build-app-web: sync-wasm
     #!/usr/bin/env bash
     set -euo pipefail
     # Expo content-hashes the entry bundle (index-<hash>.js); an open web tab detects
@@ -696,12 +708,16 @@ e2e-int: build-server build-app-web
 [group('quality')]
 [doc('E2E offline test: outbox unit tests + offline→reconnect→server-synced walkthrough')]
 e2e-offline: build-server build-app-web
-    @echo "Running chunked-storage unit tests (Android CursorWindow guard)..."
-    node e2e/chunked-storage-unit.mjs
     @echo "Running outbox unit tests (pure, no network)..."
     node e2e/outbox-unit.mjs
     @echo "Running offline walkthrough (port 8766, fresh /tmp/samizdat-test DB)..."
     cd e2e && node offline.js
+
+[group('quality')]
+[doc('DB-layer unit tests: the SQLite replica (app/src/db) driven headlessly on node:sqlite')]
+e2e-db:
+    @echo "Running db-layer unit tests (node:sqlite, no server, no browser)..."
+    node e2e/db-unit.mjs
 
 [group('quality')]
 [doc('Run all tests')]
@@ -719,7 +735,12 @@ test-clipper:
 
 [group('quality')]
 [doc('Lint all code (go vet + golangci-lint + eslint)')]
-lint: lint-go lint-app check-native-log check-safe-area check-modal-focus check-offline-screens lint-parity
+lint: lint-go lint-app check-native-log check-safe-area check-modal-focus check-offline-screens check-db-layer lint-parity
+
+[group('quality')]
+[doc('Fail if anything outside app/src/db opens a database, writes SQL, or touches AsyncStorage')]
+check-db-layer:
+    node tooling/check-db-layer.mjs
 
 [group('quality')]
 [doc('Check paired-renderer files (Highlight card: RN feed vs WebView DOM) stay in sync vs main')]
@@ -821,13 +842,12 @@ check-offline-screens:
     #!/usr/bin/env bash
     set -euo pipefail
     # Offline-first (app/CLAUDE.md): all reads come from the local SQLite replica; sync
-    # runs in the background. These read screens MUST render from the synced store so
-    # they work with no connection — a network-only load() (fetchX(activeUrl,...) with
-    # no fallback) shows an error screen offline, which regresses silently. Each guarded
-    # screen must reference a store read: useSyncStore / highlightsFromStore, or a store
-    # hook (useDocuments / useAnnotations / useTagsWithCounts). See loadFromStore() in
-    # index.tsx / document/[id].tsx for the fallback pattern.
-    store_read='useSyncStore|highlightsFromStore|useDocuments|useAnnotations|useTagsWithCounts'
+    # runs in the background. These read screens MUST render from the replica so they
+    # work with no connection — a network-only load() (fetchX(activeUrl,...) with no
+    # fallback) shows an error screen offline, which regresses silently. Each guarded
+    # screen must reference a src/db read hook. See loadFromStore() in index.tsx /
+    # document/[id].tsx for the fallback pattern.
+    store_read='useFeedHighlights|useStarredHighlights|useArchivedHighlights|useDocuments|useDocument|useAnnotations|useTagsWithCounts'
     declare -A screens=(
       ["app/app/(drawer)/index.tsx"]="feed"
       ["app/app/(drawer)/documents.tsx"]="documents"
@@ -847,7 +867,7 @@ check-offline-screens:
       if ! grep -qE "$store_read" "$f"; then
         echo "ERROR: ${screens[$f]} screen ($f) has no local-store read ($store_read)."
         echo "  Offline-first: read screens must render from the synced replica, not network-only."
-        echo "  Add a loadFromStore()/highlightsFromStore() fallback or a store hook."
+        echo "  Add a loadFromStore() fallback built on a src/db read hook."
         fail=1
       fi
     done

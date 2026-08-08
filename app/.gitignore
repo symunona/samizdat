@@ -43,3 +43,7 @@ yarn-error.*
 
 # auto-generated webview bundle
 src/webview/document-viewer-bundle.ts
+
+# Generated: the wa-sqlite wasm is copied from node_modules by `just sync-wasm`
+# so the served binary always matches the installed package version.
+public/wasm/
