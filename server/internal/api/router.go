@@ -198,11 +198,13 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 		logAPI.Printf("serving extension bundle from %s", extensionZip)
 	}
 
-	if apkPath != "" {
-		mux.HandleFunc("GET /download/samizdat.apk", appDownloadHandler(apkPath))
-		mux.HandleFunc("GET /api/v1/app/android/version", appVersionHandler(apkPath))
-		logAPI.Printf("serving Android APK from %s", apkPath)
-	}
+	// Registered unconditionally — config always resolves an apk_path (default
+	// dist/samizdat.apk). A conditional registration is what made a missing APK
+	// silent: the version request fell through to the SPA catch-all and answered
+	// HTML. Now a build that hasn't happened yet answers a plain 404.
+	mux.HandleFunc("GET /download/samizdat.apk", appDownloadHandler(apkPath))
+	mux.HandleFunc("GET /api/v1/app/android/version", appVersionHandler(apkPath))
+	logAPI.Printf("serving Android APK from %s", apkPath)
 
 	if webDir != "" {
 		if _, err := os.Stat(webDir); err == nil {

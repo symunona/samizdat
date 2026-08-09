@@ -7,11 +7,16 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 
 # [server]
 # port     = 8765                 # listen port
-# apk_path = "dist/samizdat.apk"  # self-hosted Android APK served at /download/samizdat.apk
-#                                 # and /api/v1/app/android/version (the in-app updater reads it).
-#                                 # `just build-android` writes it; `just deploy-android` (auto-run
-#                                 # at the end of the build) picks it up. Path is relative to the
-#                                 # service WorkingDirectory (repo root). Omit to disable the routes.
+# apk_path = "dist/samizdat.apk"  # THE location of the self-hosted Android APK, served at
+#                                 # /download/samizdat.apk + /api/v1/app/android/version (the
+#                                 # in-app updater reads it). This one setting is also what the
+#                                 # build writes to: `just build-android` asks the server binary
+#                                 # for it (`just _apk-path`), so the two cannot disagree.
+#                                 # OPTIONAL — unset means dist/samizdat.apk. A relative value
+#                                 # resolves against THIS FILE's directory, not the process cwd,
+#                                 # so it means the same thing to a `just` recipe and to the
+#                                 # systemd unit. The routes are always registered; before a
+#                                 # build exists they answer 404, never the SPA's HTML.
 
 # Paywalled scraping: per-domain login lives in extractors/<domain>/feed.yaml
 # (auth block: login_url + form selectors + success/paywall markers). Secrets are

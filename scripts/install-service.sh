@@ -40,6 +40,16 @@ else
   echo "  (no clipper/dist/sam-chrome.zip — run 'just build-clipper'; extension download disabled)"
 fi
 
+# The Android APK needs NO unit flag: the server resolves it from config.toml
+# ([server] apk_path, default dist/samizdat.apk) and always registers the routes.
+# A flag here — passed by `just dev` but not by the unit — is exactly what left the
+# service serving no /download/samizdat.apk. Report the resolved path so a missing
+# build is visible at install time instead of at download time.
+APK="$("$BIN" config apk-path --config "$CFG" 2>/dev/null || true)"
+if [[ -n "$APK" && ! -f "$APK" ]]; then
+  echo "  (no APK at $APK — run 'just build-android'; /download/samizdat.apk 404s until then)"
+fi
+
 # Render the unit from the template.
 unit="$(sed \
   -e "s|@REPO@|$REPO_ROOT|g" \

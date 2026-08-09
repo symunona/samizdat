@@ -48,7 +48,12 @@ type ServerSection struct {
 	Port         int    `toml:"port"`
 	WebDir       string `toml:"web_dir"`
 	ExtensionZip string `toml:"extension_zip"`
-	APKPath      string `toml:"apk_path"` // debug Android APK served at /download/samizdat.apk
+	// APKPath is THE location of the self-hosted Android APK, served at
+	// /download/samizdat.apk with its sidecar at /api/v1/app/android/version.
+	// Load() resolves it to an absolute path (see resolveAPKPath), so every
+	// reader — the server, `samizdat config apk-path`, and through that every
+	// build/deploy recipe — derives from this one setting.
+	APKPath string `toml:"apk_path"`
 }
 
 type LLMSection struct {
@@ -94,14 +99,40 @@ func Defaults() *Config {
 	}
 }
 
+// DefaultAPKRelPath is where `just build-android` puts the APK, relative to the
+// instance root. Used when apk_path is unset — a fresh clone with no config still
+// serves the build it just made.
+const DefaultAPKRelPath = "dist/samizdat.apk"
+
+// resolveAPKPath makes the served APK location independent of the working
+// directory: a relative apk_path (and the default) resolves against the config
+// file's own directory, which is the instance root. The systemd unit has no cwd
+// guarantee the way a `just` recipe does, and the flag that used to paper over
+// that is gone — this is the only place the path is decided.
+func resolveAPKPath(p, cfgPath string) string {
+	if p == "" {
+		p = DefaultAPKRelPath
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	base := filepath.Dir(cfgPath)
+	if abs, err := filepath.Abs(base); err == nil {
+		base = abs
+	}
+	return filepath.Join(base, p)
+}
+
 func Load(path string) (*Config, error) {
 	cfg := Defaults()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
+		cfg.Server.APKPath = resolveAPKPath(cfg.Server.APKPath, path)
 		return cfg, nil
 	}
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
+	cfg.Server.APKPath = resolveAPKPath(cfg.Server.APKPath, path)
 	switch cfg.Export.Grouping {
 	case "", "none", "daily", "weekly", "monthly":
 		// "" means: user set no value but also wrote [export] — keep default.

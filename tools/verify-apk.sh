@@ -7,7 +7,10 @@
 # install-over on a phone carrying the other host's build. Comparing the signer
 # against the previous APK is the only cheap way to catch that before the phone does.
 #
-# Usage: tools/verify-apk.sh <apk> [--against <old-apk>] [--sidecar <json>] [--served <url>]
+# Usage: tools/verify-apk.sh [apk] [--against <old-apk>] [--sidecar <json>] [--served <url>]
+#   apk       defaults to the configured one (`just _apk-path` → [server] apk_path)
+#   --against defaults to <apk>.prev, --sidecar to <apk>.json — the siblings the
+#             build path writes, so all four derive from that one setting.
 set -euo pipefail
 
 APK=""; AGAINST=""; SIDECAR=""; SERVED=""
@@ -16,14 +19,16 @@ while [ $# -gt 0 ]; do
     --against) AGAINST="$2"; shift 2 ;;
     --sidecar) SIDECAR="$2"; shift 2 ;;
     --served)  SERVED="$2";  shift 2 ;;
-    -h|--help) sed -n '1,12p' "$0"; exit 0 ;;
+    -h|--help) sed -n '1,15p' "$0"; exit 0 ;;
     *) APK="$1"; shift ;;
   esac
 done
-[ -n "$APK" ] && [ -f "$APK" ] || { echo "usage: $0 <apk> [--against <old-apk>] [--sidecar <json>] [--served <url>]"; exit 2; }
-: "${SIDECAR:=${APK}.json}"
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+[ -n "$APK" ] || APK="$(just --justfile "$REPO/justfile" --working-directory "$REPO" _apk-path)"
+[ -f "$APK" ] || { echo "✗ no APK at $APK — build one first ('just build-android')"; exit 2; }
+: "${SIDECAR:=${APK}.json}"
+: "${AGAINST:=${APK}.prev}"
 ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
 
 # Newest build-tools that actually carries both tools we need.
@@ -64,7 +69,7 @@ if [ -n "$AGAINST" ] && [ -f "$AGAINST" ]; then
     echo "      to the build host (just setup-build-node) instead of letting prebuild mint one."
   fi
 else
-  warn "no --against baseline — signer ${NEW_SIGNER:0:16}… unchecked"
+  warn "no baseline at $(basename "$AGAINST") — signer ${NEW_SIGNER:0:16}… unchecked"
 fi
 
 # 2 — manifest version matches app.json.

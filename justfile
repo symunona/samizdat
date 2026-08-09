@@ -251,7 +251,10 @@ dev: _check-no-service webview-build build-server build-cli build-app-web build-
       kill "${old}" 2>/dev/null || true
       for i in $(seq 1 20); do ss -tlnp 2>/dev/null | grep -q ":${PORT} " || break; sleep 0.3; done
     fi
-    nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist --extension-zip clipper/dist/sam-chrome.zip --apk dist/samizdat.apk > /tmp/samizdat-${PORT}.log 2>&1 &
+    # No --apk flag: the APK's location comes from config.toml [server] apk_path
+    # (default dist/samizdat.apk) so dev and the systemd service cannot disagree —
+    # a flag only dev passed is what left prod serving no /download/samizdat.apk.
+    nohup server/bin/samizdat serve {{_config_flag}} --webdir app/dist --extension-zip clipper/dist/sam-chrome.zip > /tmp/samizdat-${PORT}.log 2>&1 &
     newpid=$!
     for i in $(seq 1 20); do ss -tlnp 2>/dev/null | grep -q ":${PORT} " && break || true; sleep 0.5; done
     # Verify OUR process is alive AND is the one bound — not a survivor on the port.
@@ -423,6 +426,18 @@ gen-icons:
 bump level="patch":
     node "{{justfile_directory()}}/tools/bump-version.mjs" {{level}}
 
+# THE resolver for the APK's location: config.toml [server] apk_path (default
+# dist/samizdat.apk, resolved against the config file's directory). It asks the
+# server binary, i.e. the exact code that serves the file — so a build can never
+# write where the server isn't looking. Every recipe and script that needs the
+# path calls this; none spells it out.
+_apk-path:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    [ -x server/bin/samizdat ] || just build-server >&2
+    server/bin/samizdat {{_config_flag}} config apk-path
+
 [group('build')]
 [doc('Build the Android APK — on the configured build node (~4 min) if one is set, else says so (level=patch|minor|major)')]
 build-android level="patch":
@@ -493,19 +508,9 @@ build-android-remote level="patch":
     export NODE_OPTIONS=--max-old-space-size=6144   # the node has RAM; let Metro use it
     just _apk-gradle
     REMOTE
-    mkdir -p dist
-    # Keep the outgoing APK as the signature/versionCode baseline for verify-apk.sh.
-    if [ -f dist/samizdat.apk ]; then
-      cp dist/samizdat.apk dist/samizdat.apk.prev
-      [ -f dist/samizdat.apk.json ] && cp dist/samizdat.apk.json dist/samizdat.apk.prev.json || true
-    fi
-    rsync -q "${BUILD_NODE_DEST}:${BUILD_NODE_WS}/app/android/app/build/outputs/apk/release/app-release.apk" dist/samizdat.apk
-    # Sidecar is written HERE from the local app.json — nothing about the version comes
-    # back from the node, so the served metadata can't drift from the repo.
-    node tools/write-apk-sidecar.mjs
+    just _apk-collect "${BUILD_NODE_DEST}:${BUILD_NODE_WS}/app/android/app/build/outputs/apk/release/app-release.apk"
     node tools/build-times.mjs log build-android-remote "$((SECONDS-t0))" "$BUILD_NODE_DEST"
-    echo "APK → dist/samizdat.apk ($(du -h dist/samizdat.apk | cut -f1)) in $((SECONDS-t0))s"
-    tools/verify-apk.sh dist/samizdat.apk --against dist/samizdat.apk.prev
+    echo "built in $((SECONDS-t0))s"
     just deploy-android
     # A daemon holding ~8GB on someone's desktop is worth naming out loud.
     daemons=$(ssh "$BUILD_NODE_DEST" 'pgrep -c -f GradleDaemon || true')
@@ -531,18 +536,32 @@ build-android-local level="patch":
     # Memory caps live in ~/.gradle/gradle.properties (one JVM, in-process Kotlin,
     # small heap) — this VPS has 4GB RAM and also serves live sites.
     NODE_OPTIONS="--max-old-space-size=1536" just _apk-gradle
-    mkdir -p dist
-    if [ -f dist/samizdat.apk ]; then
-      cp dist/samizdat.apk dist/samizdat.apk.prev
-      [ -f dist/samizdat.apk.json ] && cp dist/samizdat.apk.json dist/samizdat.apk.prev.json || true
-    fi
-    cp app/android/app/build/outputs/apk/release/app-release.apk dist/samizdat.apk
-    node tools/write-apk-sidecar.mjs
+    just _apk-collect app/android/app/build/outputs/apk/release/app-release.apk
     node tools/build-times.mjs log build-android-local "$((SECONDS-t0))" local
-    echo "APK → dist/samizdat.apk ($(du -h dist/samizdat.apk | cut -f1)) in $((SECONDS-t0))s"
-    tools/verify-apk.sh dist/samizdat.apk --against dist/samizdat.apk.prev
+    echo "built in $((SECONDS-t0))s"
     # Auto-deploy so the fresh build is what the live server (and in-app updater) sees.
     just deploy-android
+
+# Take the freshly built APK (src = a local path or an rsync host:path), rotate the
+# outgoing one aside as the verify baseline, write the sidecar, verify. Shared by
+# the local and remote build paths so neither can drift — and the destination is
+# whatever `_apk-path` resolves, never a literal dist/samizdat.apk.
+_apk-collect src:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    APK="$(just _apk-path)"
+    mkdir -p "$(dirname "$APK")"
+    if [ -f "$APK" ]; then
+      cp "$APK" "${APK}.prev"
+      [ -f "${APK}.json" ] && cp "${APK}.json" "${APK}.prev.json" || true
+    fi
+    rsync -q "{{src}}" "$APK"
+    # Sidecar is written HERE from the local app.json — nothing about the version comes
+    # back from a build host, so the served metadata can't drift from the repo.
+    node tools/write-apk-sidecar.mjs "$APK"
+    echo "APK → ${APK} ($(du -h "$APK" | cut -f1))"
+    tools/verify-apk.sh "$APK"
 
 # Shared APK build steps, so the local and remote paths cannot drift. Everything
 # host-specific comes from the environment: ANDROID_HOME, JAVA_HOME, GRADLE_USER_HOME
@@ -631,11 +650,11 @@ deploy-android:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{justfile_directory()}}"
-    test -f dist/samizdat.apk && test -f dist/samizdat.apk.json || { echo "✗ no APK in dist/ — run 'just build-android' first"; exit 1; }
+    APK="$(just _apk-path)"
+    test -f "$APK" && test -f "${APK}.json" || { echo "✗ no APK at ${APK} — run 'just build-android' first"; exit 1; }
     # The server reads the APK + its sidecar per request, so a running instance serves
-    # the fresh build with no copy step. The one thing that needs a restart is ROUTE
-    # registration: the /download + version routes are only wired at startup when
-    # apk_path is set — so restart the installed service if it's active to (re)register.
+    # the fresh build with no copy step — the routes themselves are always registered.
+    # Restart the service anyway so it also picks up a fresh binary in the same step.
     if systemctl --user is-active --quiet samizdat-{{_instance}}; then
       systemctl --user restart samizdat-{{_instance}} && echo "↻ restarted samizdat-{{_instance}} service (re-registers /download routes)"
     elif ss -tlnp 2>/dev/null | grep -q ":{{_dev_port}} "; then
@@ -669,7 +688,8 @@ deploy-android:
     elif [ -n "$resp" ]; then
       echo "⚠ the server is serving an OLDER apk ($got) than app.json ($want) — rebuild: 'just build-android'."
     else
-      echo "⚠ the server isn't serving an apk. Set apk_path in config.toml [server] (or run with --apk) and restart it (just dev)."
+      echo "⚠ no answer from the server on :{{_dev_port}} — start it ('just restart' for the service, 'just dev' for dev)."
+      echo "  It reads the APK from ${APK} (config.toml [server] apk_path)."
     fi
 
 # ── Quality ───────────────────────────────────────────────────────────────────

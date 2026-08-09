@@ -29,7 +29,6 @@ var (
 	flagPort         int
 	flagWebDir       string
 	flagExtensionZip string
-	flagAPK          string
 )
 
 var rootCmd = &cobra.Command{
@@ -44,14 +43,36 @@ var serveCmd = &cobra.Command{
 	RunE:  runServe,
 }
 
+var configCmd = &cobra.Command{
+	Use:   "config",
+	Short: "Report resolved configuration values",
+}
+
+// The build/deploy side (justfile recipes, tools/verify-apk.sh) must write the APK
+// exactly where the server reads it. Rather than re-implement the resolution in
+// shell, they ask the server binary — `just _apk-path` wraps this — so there is
+// one resolver and nothing to keep in sync.
+var configAPKPathCmd = &cobra.Command{
+	Use:   "apk-path",
+	Short: "Print the absolute path of the served Android APK ([server] apk_path)",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		c, err := cfg.Load(flagConfig)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		fmt.Println(c.Server.APKPath)
+		return nil
+	},
+}
+
 func init() {
 	defaultCfg, _ := cfg.DefaultPath()
 	rootCmd.PersistentFlags().StringVar(&flagConfig, "config", defaultCfg, "config file")
 	rootCmd.PersistentFlags().IntVar(&flagPort, "port", 0, "override listen port")
 	rootCmd.PersistentFlags().StringVar(&flagWebDir, "webdir", "", "path to Expo web build")
 	rootCmd.PersistentFlags().StringVar(&flagExtensionZip, "extension-zip", "", "path to built Chrome extension zip (served at /extension/sam-chrome.zip)")
-	rootCmd.PersistentFlags().StringVar(&flagAPK, "apk", "", "path to built Android APK (served at /download/samizdat.apk)")
-	rootCmd.AddCommand(serveCmd)
+	configCmd.AddCommand(configAPKPathCmd)
+	rootCmd.AddCommand(serveCmd, configCmd)
 }
 
 func runServe(_ *cobra.Command, _ []string) error {
@@ -72,11 +93,6 @@ func runServe(_ *cobra.Command, _ []string) error {
 	if flagExtensionZip != "" {
 		extensionZip = flagExtensionZip
 	}
-	apkPath := c.Server.APKPath
-	if flagAPK != "" {
-		apkPath = flagAPK
-	}
-
 	db, err := store.Open(c.DBPath)
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
@@ -97,7 +113,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 	urls := network.DetectURLs(port)
 
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	handler := api.New(context.Background(), db, webDir, extensionZip, apkPath, urls, c.DataDir, c.CacheDir, c.ExtractorsDir, c.YTDLP, c.Export, c.LLM)
+	handler := api.New(context.Background(), db, webDir, extensionZip, c.Server.APKPath, urls, c.DataDir, c.CacheDir, c.ExtractorsDir, c.YTDLP, c.Export, c.LLM)
 
 	logServer.Printf("samizdat %s (%s) listening on %s", api.Version(), api.Build(), addr)
 	logServer.Printf("reachable at:\n  %s", strings.Join(urls, "\n  "))

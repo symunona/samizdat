@@ -95,6 +95,11 @@ The handoff is built in and one-directional-per-command:
 - `just status` → reports which mode holds the port (dev nohup vs systemd) + build staleness.
 - `just service-logs` → follow the service journal.
 
+Dev and the service must be configured by the SAME file, not by flags one of them passes:
+anything a `just dev` flag turns on and the unit omits is off in prod, silently. That is how
+the APK download stayed dead under systemd (see "Android APK") — its path now lives in
+`config.toml` only.
+
 **The one gap to remember:** while you're in `just dev`, prod's service is STOPPED. If the dev
 nohup dies (or the session closes) and you forget to hand back, prod stays down with nothing to
 restart it (a dev nohup has no auto-restart). **Always end a dev session with `just restart`.**
@@ -128,8 +133,20 @@ silently costing 35 min. **This box keeps only a partial SDK** — `build-tools/
 (~2GB), `cmake`, `platform-tools` and the generated `app/android/` tree were reclaimed when
 xayah took over; AGP re-downloads the NDK on the first local build (the accepted licenses
 are what let it), so the fallback costs a couple of GB before it costs 35 minutes. `just build-times` shows history; `just status` reports node
-reachability. Both paths share `_apk-gradle`, so flags can't drift.
+reachability. Both paths share `_apk-gradle` (build) and `_apk-collect` (fetch → rotate the
+outgoing APK to `.prev` → sidecar → verify), so neither flags nor paths can drift.
 
+- **The APK's location has exactly ONE source: `config.toml` `[server] apk_path`.** It is
+  optional — unset means `dist/samizdat.apk`, and a relative value resolves against the
+  **config file's own directory**, not the process cwd (a systemd unit has no cwd guarantee
+  the way a `just` recipe does). The server always registers `GET /download/samizdat.apk` +
+  `GET /api/v1/app/android/version` and serves from that path; before a build exists they
+  answer a plain 404. **There is no `--apk` flag** — a flag only `just dev` passed, with the
+  systemd unit silently omitting it, is what left prod registering neither route: the version
+  request fell through to the SPA catch-all and returned *HTML*, so the APK was undownloadable
+  and the in-app updater blind for as long as the service ran. The build side asks the server
+  binary for the same value (`just _apk-path` → `samizdat config apk-path`), so a build can
+  never write where the server isn't looking. Nothing else may spell out `dist/samizdat.apk`.
 - **Transport is `git push` over ssh** (`build-node` remote), not rsync and not GitHub —
   the node needs no GitHub credentials. Consequence: **the node builds `HEAD`, so the tree
   must be committed**; the version bump is committed automatically for that reason (and
@@ -153,7 +170,8 @@ reachability. Both paths share `_apk-gradle`, so flags can't drift.
   sidecar (`tools/write-apk-sidecar.mjs`) are all produced here.
 - `tools/verify-apk.sh` gates every build (signer identity, versionCode monotonic, bundled
   `assets/app.config` freshness, single arm64 ABI, sidecar↔buildEpoch, served version).
-  Run it on any APK: `tools/verify-apk.sh dist/samizdat.apk --against dist/samizdat.apk.prev`.
+  Run it with no arguments to verify the configured APK; `--against` and `--sidecar` default
+  to its `.prev` / `.json` siblings. Pass a path to check some other APK.
 - `app/src/webview/document-viewer-bundle.ts` is generated + gitignored, so `_apk-gradle`
   runs `just webview-build` every build — otherwise a build host has none, and this box
   ships whatever stale copy was last left on disk.

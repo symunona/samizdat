@@ -1,5 +1,9 @@
-// Write dist/samizdat.apk.json — the version manifest the server hands to the in-app
-// updater. Shared by the local and remote Android build paths so they cannot drift.
+// Write <apk>.json — the version manifest the server hands to the in-app updater.
+// Shared by the local and remote Android build paths so they cannot drift.
+//
+// The APK path is REQUIRED, not defaulted: it comes from `just _apk-path`
+// (config.toml [server] apk_path), the same value the server serves from. A default
+// here would be a second place that decides where the APK lives.
 //
 // built_at MUST derive from expo.extra.buildEpoch, never `new Date()`: at equal
 // versionCode `isUpdateAvailable` (app/src/appVersion.ts) compares
@@ -11,7 +15,12 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const apk = process.argv[2] ?? resolve(repo, 'dist/samizdat.apk')
+const apk = process.argv[2]
+if (!apk) {
+  console.error('usage: node tools/write-apk-sidecar.mjs <apk> [sidecar.json]')
+  console.error('  the apk path comes from `just _apk-path` (config.toml [server] apk_path)')
+  process.exit(2)
+}
 const out = process.argv[3] ?? `${apk}.json`
 
 const { expo } = JSON.parse(readFileSync(resolve(repo, 'app/app.json'), 'utf8'))

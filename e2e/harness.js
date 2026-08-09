@@ -154,10 +154,21 @@ export async function newConnectedPage(browser, token, deviceId) {
   }, conn, BASE_URL)
 
   const errors = []
+  // The APK version route is always registered, and answers 404 when no APK has
+  // been built — which is the case in the test env (config-test.toml resolves an
+  // apk_path nothing ever writes to). A clean 404 IS the correct answer here; it
+  // replaced the old silent fall-through to the SPA catch-all, which answered HTML
+  // with a 200 and hid a prod outage for as long as the service ran. The app polls
+  // it from every screen (useLatestBuild), so it lands in BOTH nets below.
+  const expectedMiss = (url, status) =>
+    status === 404 && url.endsWith('/api/v1/app/android/version')
+
   page.on('console', msg => {
     if (msg.type() === 'error') {
       const text = msg.text()
       if (text.includes('favicon.ico')) return
+      // A failed fetch is logged by the browser itself; the URL is only in the location.
+      if (/status of 404/.test(text) && expectedMiss(msg.location()?.url ?? '', 404)) return
       errors.push(text)
     }
   })
@@ -175,7 +186,7 @@ export async function newConnectedPage(browser, token, deviceId) {
   })
   page.on('response', res => {
     const url = res.url()
-    if (url.startsWith(BASE_URL + '/api/') && res.status() >= 400) {
+    if (url.startsWith(BASE_URL + '/api/') && res.status() >= 400 && !expectedMiss(url, res.status())) {
       errors.push(`HTTP ${res.status()}: ${res.request().method()} ${url}`)
     }
   })
