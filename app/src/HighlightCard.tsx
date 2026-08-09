@@ -10,6 +10,7 @@ import NoteEditButton from './NoteEditButton'
 import IconButton from './IconButton'
 import DateStamp from './DateStamp'
 import { isTouchDevice } from './touch'
+import { useDragGuard } from './dragGuard'
 import { tagColor } from './tagColor'
 import { hashColor } from './hashColor'
 
@@ -38,6 +39,8 @@ export default function HighlightCard({
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const touch = isTouchDevice()
+  // The card lives inside a swipeable — a drag must not count as a tap.
+  const guard = useDragGuard()
 
   const [modalOpen, setModalOpen] = useState(false)
   // Popout navigates to the document at the right place (highlight deep-link); only ✕ closes.
@@ -62,7 +65,7 @@ export default function HighlightCard({
             <Text style={s.kindText}>{originLabel}</Text>
           </View>
         ) : null}
-        <Pressable style={s.titlePress} onPress={onPress}>
+        <Pressable style={s.titlePress} {...guard(onPress)}>
           <Text style={s.hlTitle} numberOfLines={1}>{item.title}</Text>
         </Pressable>
         {/* Affordance: the header opens the source document. */}
@@ -70,7 +73,7 @@ export default function HighlightCard({
         {busy
           ? <ActivityIndicator size="small" color={theme.colors.accent} />
           : onPin && !touch
-            ? <Pressable style={s.starBtn} onPress={onPin} hitSlop={8}>
+            ? <Pressable style={s.starBtn} {...guard(onPin)} hitSlop={8}>
                 <Text style={[s.starIcon, pinned && s.starIconActive]}>
                   {pinned ? '★' : '☆'}
                 </Text>
@@ -78,14 +81,14 @@ export default function HighlightCard({
             : null}
       </View>
 
-      <Pressable style={s.bodyClipMax} onPress={() => setModalOpen(true)}>
+      <Pressable style={s.bodyClipMax} {...guard(() => setModalOpen(true))}>
         <View>
           <MarkdownBody linkedDocuments={stableLinkedDocs} onDocumentPress={onDocumentPress} onLinkAction={onLinkAction}>
             {item.body}
           </MarkdownBody>
         </View>
         {isClipped && (
-          <Pressable style={s.expandOverlay} onPress={() => setModalOpen(true)}>
+          <Pressable style={s.expandOverlay} {...guard(() => setModalOpen(true))}>
             <Text style={s.expandText}>More…</Text>
           </Pressable>
         )}
@@ -109,7 +112,7 @@ export default function HighlightCard({
             <Pressable
               key={tag.id}
               style={[s.tagChip, { borderColor: tagColor(tag.color) }]}
-              onPress={onTags}
+              {...guard(onTags)}
               hitSlop={4}
             >
               <Text style={[s.tagText, { color: tagColor(tag.color) }]}>#{tag.name}</Text>

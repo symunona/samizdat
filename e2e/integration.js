@@ -426,6 +426,9 @@ async function dragX(page, rect, dx) {
   await sleep(500)
 }
 
+// The popout (HighlightDetail Modal) is the feed's only iframe.
+const popoutOpen = (page) => page.evaluate(() => !!document.querySelector('iframe'))
+
 async function runFeedSwipeArchive(token, deviceId) {
   const { page, errors } = await newConnectedPage(browser, token, deviceId)
   await page.setViewport({ width: 900, height: 800 })
@@ -433,10 +436,24 @@ async function runFeedSwipeArchive(token, deviceId) {
   await page.waitForFunction((t) => document.body.innerText.includes(t), { timeout: 10000 }, SWIPE_HL_TITLE)
   await sleep(600)
 
+  // RNGH's pan runs outside the RN responder system on web, so a drag that starts on
+  // the card body used to end as a press on it — every swipe (and every text selection)
+  // opened the popout. Both a short drag (under the swipe threshold) and a full swipe
+  // must leave it closed.
+  await check('feed: a short horizontal drag on a card does not open the popout', async () => {
+    const rect = await cardRect(page, SWIPE_HL_TITLE)
+    if (!rect) return 'swipe card not found in the feed'
+    await dragX(page, rect, 30)
+    if (await popoutOpen(page)) return 'a 30px drag opened the highlight popout'
+    const hl = await apiHighlight(page, SWIPE_HL_ID)
+    return hl && hl.archived_at ? 'a 30px drag archived the card' : null
+  })
+
   await check('feed: swiping a card right archives it (not deletes)', async () => {
     const rect = await cardRect(page, SWIPE_HL_TITLE)
     if (!rect) return 'swipe card not found in the feed'
     await dragX(page, rect, 220)
+    if (await popoutOpen(page)) return 'the swipe also opened the highlight popout'
     const body = await page.evaluate(() => document.body.innerText)
     if (body.includes('deleted')) return 'swipe deleted the highlight instead of archiving it'
     if (!body.includes('Unread')) return 'no Unread affordance — the card was not archived'

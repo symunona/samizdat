@@ -2,6 +2,7 @@ import { ComponentProps, useMemo, useState } from 'react'
 import { Pressable, StyleSheet } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useUnistyles } from 'react-native-unistyles'
+import { useDragGuard } from './dragGuard'
 
 type IoniconName = ComponentProps<typeof Ionicons>['name']
 
@@ -22,12 +23,14 @@ export default function IconButton({ name, onPress, hitSlop = 8, size, color, ho
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const [hover, setHover] = useState(false)
+  // A drag that happens to start on the icon (feed cards live in a swipeable) is not a tap.
+  const guard = useDragGuard()
   const base = color ?? theme.colors.muted
   const active = hoverColor ?? theme.colors.text
   const glyph = size ?? theme.iconButton.size
   return (
     <Pressable
-      onPress={onPress}
+      {...guard(onPress)}
       hitSlop={hitSlop}
       onHoverIn={() => setHover(true)}
       onHoverOut={() => setHover(false)}
