@@ -645,7 +645,7 @@ build-times:
     @node "{{justfile_directory()}}/tools/build-times.mjs" show
 
 [group('build')]
-[doc('Deploy dist/samizdat.apk to the live server so the in-app updater sees it (auto-run by build-android)')]
+[doc('Deploy the built APK to the live server so the in-app updater sees it (auto-run by build-android)')]
 deploy-android:
     #!/usr/bin/env bash
     set -euo pipefail
