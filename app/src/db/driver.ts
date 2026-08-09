@@ -17,9 +17,13 @@ export interface SqlDriver {
   all<T = SqlRow>(sql: string, params?: SqlValue[]): Promise<T[]>
   // One INSERT/UPDATE/DELETE.
   run(sql: string, params?: SqlValue[]): Promise<void>
-  // Runs `fn` inside a transaction, rolling back if it throws. Calls made from `fn`
-  // land on the same connection — this is what makes "row + outbox intent + dirty key"
-  // one atomic write.
-  tx(fn: () => Promise<void>): Promise<void>
+  // Runs `fn` inside a transaction, rolling back if it throws. This is what makes
+  // "row + outbox intent + dirty key" one atomic write.
+  //
+  // `fn` receives the IN-TRANSACTION handle and must issue every statement through it.
+  // A backend may serialize its public methods (web does — one wasm connection), so a
+  // tx body reaching for the outer driver would queue behind the transaction it is
+  // itself holding. The handle is the same connection with that queue already claimed.
+  tx(fn: (d: SqlDriver) => Promise<void>): Promise<void>
   close(): Promise<void>
 }

@@ -180,7 +180,7 @@ async function attempt(fn: (tx: TxRunner) => Promise<void>): Promise<boolean> {
   }
   const d = driver
   try {
-    await fn((body) => d.tx(() => body(d)))
+    await fn((body) => d.tx(body))
     reportPersistWrite(null)
     return true
   } catch (e) {

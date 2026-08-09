@@ -694,6 +694,16 @@ The `.wasm` is served from `app/public/wasm/` by `just sync-wasm` (Metro does no
   transactions are not two transactions — the second `BEGIN` lands inside the first and
   the engine rejects it. Merges and queue reads happen INSIDE the write, so a delta can
   never be computed against a snapshot that a concurrent mutation has already moved past.
+- **On web, READS are serialized too, and a tx body must use the handle `tx()` hands it.**
+  wa-sqlite is one connection on one thread with ONE Asyncify unwind buffer: two `step()`
+  chains in flight together corrupt each other's saved stack — `memory access out of
+  bounds` / `Aborted(RuntimeError: unreachable)`, replica dead until reload. The driver
+  therefore queues every public call, and reentrancy is expressed as an OBJECT (the
+  in-transaction handle passed to the body), never as an `inTransaction` flag: a flag
+  cannot tell an inner call from an unrelated one, so it exempted every concurrent read
+  (`listOutbox` on the pusher's interval vs `setSetting` on the connection probe's) and
+  ran it straight into an open transaction. Covered by `just e2e-db`
+  (`e2e/db-web-race.mjs` — real wa-sqlite in Chromium, no server).
 - Bodies (`markdown`, `transcript`) never enter the index — `useDocuments()` returns
   `DocumentMeta`. Read a body with `useDocument(id)` / `db.getDocument(id)`, never from a list.
 - Hooks feed screens; a screen that needs a *stable* callback (`loadFromStore` feeding a

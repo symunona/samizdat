@@ -69,7 +69,7 @@ export function simulateFailedWrites(driver: SqlDriver): SqlDriver {
       return driver.all<T>(sql, params)
     },
     run: (sql: string, params?: SqlValue[]) => (flagged(FULL_KEY) ? full() : driver.run(sql, params)),
-    tx: (fn: () => Promise<void>) => (flagged(FULL_KEY) ? full() : driver.tx(fn)),
+    tx: (fn: (d: SqlDriver) => Promise<void>) => (flagged(FULL_KEY) ? full() : driver.tx(fn)),
     close: () => driver.close(),
   }
 }

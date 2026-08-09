@@ -61,15 +61,17 @@ export async function openDriver(name: string): Promise<SqlDriver> {
   sqlite3.vfs_register(vfs, true)
   const db = await sqlite3.open_v2(name)
 
-  // wa-sqlite is one connection on one thread: overlapping calls would interleave a
-  // transaction with an unrelated statement. Operations run one at a time, except those
-  // issued from INSIDE a transaction, which already hold the queue. That exemption is
-  // why repo.ts serializes its own writes — the flag cannot tell an inner call from an
-  // unrelated one, so a second tx() starting here would `BEGIN` inside the open one.
+  // wa-sqlite is one connection on one thread, and the Asyncify build has ONE unwind
+  // buffer: two overlapping `step()` chains do not merely interleave statements, they
+  // scribble over each other's saved stack — `memory access out of bounds` / `unreachable`,
+  // with the whole replica dead until reload. So EVERY public call runs one at a time.
+  //
+  // The exemption for statements issued from inside a transaction is the `raw` handle
+  // below, not a flag: a boolean cannot tell an inner call from an unrelated one, so it
+  // let every concurrent read (an outbox drain, a settings lookup) run straight into an
+  // open transaction. Reentrancy is an object identity here, which cannot be confused.
   let chain: Promise<unknown> = Promise.resolve()
-  let inTransaction = false
   function serialize<T>(fn: () => Promise<T>): Promise<T> {
-    if (inTransaction) return fn()
     const next = chain.then(fn, fn)
     chain = next.catch(() => {})
     return next
@@ -90,23 +92,32 @@ export async function openDriver(name: string): Promise<SqlDriver> {
     return out
   }
 
-  return {
-    exec: (sql) => serialize(async () => { await query(sql, []) }),
-    all: <T = SqlRow>(sql: string, params: SqlValue[] = []) => serialize(() => query<T>(sql, params)),
-    run: (sql, params = []) => serialize(async () => { await query(sql, params) }),
-    tx: (fn) => serialize(async () => {
-      inTransaction = true
+  // The unqueued handle. Only a transaction body ever holds it — it already owns the
+  // queue slot, so going through `serialize` again would deadlock on itself.
+  const raw: SqlDriver = {
+    exec: async (sql) => { await query(sql, []) },
+    all: <T = SqlRow>(sql: string, params: SqlValue[] = []) => query<T>(sql, params),
+    run: async (sql, params = []) => { await query(sql, params) },
+    tx: async (fn) => {
+      // A nested BEGIN is an engine error; repo.ts runs its transactions one after
+      // another, never inside one another.
       try {
         await query('BEGIN', [])
-        await fn()
+        await fn(raw)
         await query('COMMIT', [])
       } catch (e) {
         await query('ROLLBACK', []).catch(() => {})
         throw e
-      } finally {
-        inTransaction = false
       }
-    }),
-    close: () => serialize(async () => { await sqlite3.close(db) }),
+    },
+    close: async () => { await sqlite3.close(db) },
+  }
+
+  return {
+    exec: (sql) => serialize(() => raw.exec(sql)),
+    all: <T = SqlRow>(sql: string, params: SqlValue[] = []) => serialize(() => raw.all<T>(sql, params)),
+    run: (sql, params = []) => serialize(() => raw.run(sql, params)),
+    tx: (fn) => serialize(() => raw.tx(fn)),
+    close: () => serialize(() => raw.close()),
   }
 }

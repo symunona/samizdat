@@ -9,7 +9,7 @@ import type { SqlDriver, SqlRow, SqlValue } from './driver'
 export async function openNodeDriver(path = ':memory:'): Promise<SqlDriver> {
   const db = new DatabaseSync(path)
   db.exec('PRAGMA foreign_keys = ON')
-  return {
+  const d: SqlDriver = {
     async exec(sql: string) { db.exec(sql) },
     async all<T = SqlRow>(sql: string, params: SqlValue[] = []) {
       return db.prepare(sql).all(...params) as T[]
@@ -17,10 +17,10 @@ export async function openNodeDriver(path = ':memory:'): Promise<SqlDriver> {
     async run(sql: string, params: SqlValue[] = []) {
       db.prepare(sql).run(...params)
     },
-    async tx(fn: () => Promise<void>) {
+    async tx(fn: (inner: SqlDriver) => Promise<void>) {
       db.exec('BEGIN')
       try {
-        await fn()
+        await fn(d)
         db.exec('COMMIT')
       } catch (e) {
         db.exec('ROLLBACK')
@@ -29,4 +29,5 @@ export async function openNodeDriver(path = ':memory:'): Promise<SqlDriver> {
     },
     async close() { db.close() },
   }
+  return d
 }

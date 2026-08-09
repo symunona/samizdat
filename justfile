@@ -734,10 +734,12 @@ e2e-offline: build-server build-app-web
     cd e2e && node offline.js
 
 [group('quality')]
-[doc('DB-layer unit tests: the SQLite replica (app/src/db) driven headlessly on node:sqlite')]
+[doc('DB-layer unit tests: the SQLite replica (app/src/db) on node:sqlite + the wa-sqlite driver under concurrency')]
 e2e-db:
     @echo "Running db-layer unit tests (node:sqlite, no server, no browser)..."
     node e2e/db-unit.mjs
+    @echo "Running web-driver concurrency test (real wa-sqlite in Chromium, no server)..."
+    node e2e/db-web-race.mjs
 
 [group('quality')]
 [doc('Run all tests')]
