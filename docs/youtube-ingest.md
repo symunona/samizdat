@@ -28,14 +28,14 @@ back to this file.
 ### Option A — residential proxy (recommended)
 
 Route `yt-dlp` through a SOCKS/HTTP proxy that exits via a residential
-connection. A clean self-hosted way is a home machine (here: **fiona**) on your
+connection. A clean self-hosted way is any home machine (here a Pi, **meet-2-cam**) on your
 Tailscale tailnet running `microsocks`:
 
-**On fiona:**
+**On the proxy node:**
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
-tailscale ip -4                      # note fiona's tailnet IP, e.g. 100.x.y.z
+tailscale ip -4                      # note its tailnet IP, e.g. 100.x.y.z
 
 sudo apt-get install -y microsocks   # or build from rofl0r/microsocks
 
@@ -59,7 +59,7 @@ it — no LAN/public exposure, no auth needed.
 
 **Verify from the server:**
 ```bash
-curl -x socks5h://100.x.y.z:1080 -s https://api.ipify.org   # prints fiona's HOME ip
+curl -x socks5h://100.x.y.z:1080 -s https://api.ipify.org   # prints the node's HOME ip
 ```
 
 **Server `config.toml`:**
@@ -70,6 +70,20 @@ proxy = "socks5h://100.x.y.z:1080"
 
 > Do **not** use a Tailscale *exit node* for this — that would reroute the whole
 > VPS's traffic. The per-app SOCKS proxy only affects `yt-dlp`.
+
+**Swapping nodes.** `proxy` is single-valued — there is no failover list. When the
+node goes offline every ingest fails with the bot-block error, so check the proxy
+before blaming `yt-dlp`:
+
+```bash
+# health as the server sees it (bearer-authed; ?refresh=1 forces a live probe)
+curl -H "Authorization: Bearer $TOKEN" localhost:8765/api/v1/ytdlp/status?refresh=1
+# candidate nodes: is microsocks even listening, and where does it exit?
+curl -x socks5h://<peer>:1080 -s https://api.ipify.org
+```
+
+Point `proxy` at another node and restart. Any tailnet peer on a residential
+line works — cheap hardware is fine, audio-only downloads are light.
 
 ### Option B — cookies (fallback / auth)
 

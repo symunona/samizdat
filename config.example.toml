@@ -61,7 +61,7 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 # running microsocks) or `cookies` to an exported cookies.txt. See docs/youtube-ingest.md.
 # [ytdlp]
 # path    = "yt-dlp"                       # binary on PATH, or an absolute path
-# proxy   = "socks5h://100.x.y.z:1080"     # fiona's tailnet IP (microsocks)
+# proxy   = "socks5h://100.x.y.z:1080"     # proxy node's tailnet IP (microsocks)
 # cookies = "/var/lib/samizdat/yt-cookies.txt"  # optional auth fallback
 
 # Auto-export: one-way mirror of Documents + Annotations to a plain-markdown
