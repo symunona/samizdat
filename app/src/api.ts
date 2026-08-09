@@ -137,6 +137,9 @@ export type Document = {
   excerpt: string
   hero_image_url: string
   author: string
+  // When the article itself says it was published. Distinct from created_at (when we
+  // ingested it) — the feed sorts by the latter and the card can reveal both.
+  published_at?: string | null
   source_feed_id?: string | null
   media_type?: 'article' | 'video' | 'pdf'
   media_metadata?: string

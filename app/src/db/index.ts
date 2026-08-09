@@ -34,7 +34,8 @@ export {
   useHydrated, useSyncStatus, useDocuments, useDocument,
   useFeedHighlights, useStarredHighlights, useArchivedHighlights, useHighlightCount,
   useOutboxCount,
-  useAnnotations, useAnnotationsFor, useTags, useTagsWithCounts, useTagLinks,
+  useAnnotations, useAnnotationsFor, useAnnotatedHighlightIds,
+  useTags, useTagsWithCounts, useTagLinks,
 } from './hooks'
 
 export type {

@@ -62,12 +62,15 @@ export default function StarredScreen() {
     [router],
   )
 
+  const notedIds = db.useAnnotatedHighlightIds()
+
   const renderItem = useCallback(({ item }: { item: HighlightWithDoc }) => (
     <View style={s.itemWrapper}>
       <HighlightCard
         item={item}
         linkedDocuments={item.linked_documents}
         pinned
+        hasNote={notedIds.has(item.id)}
         onPress={() => router.push(`/document/${item.document_id}?from=/starred&highlight=${item.id}`)}
         onDocumentPress={handleDocumentPress}
       />
@@ -75,7 +78,7 @@ export default function StarredScreen() {
         <Text style={s.unpinBtnText}>☆ Unstar</Text>
       </Pressable>
     </View>
-  ), [handleUnpin, handleDocumentPress, router, s])
+  ), [handleUnpin, handleDocumentPress, notedIds, router, s])
 
   if (loading && highlights.length === 0) {
     return (

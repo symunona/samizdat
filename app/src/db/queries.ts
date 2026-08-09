@@ -140,6 +140,15 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 `
 
+// ── migrations ────────────────────────────────────────────────────────────────
+// SCHEMA_SQL above is the v1 baseline and is never edited (a shipped device already ran
+// it); every later column arrives as its own script here. Ordering lives in schema.ts.
+//
+// v1 → v2: the article's own publication date. It has always been on the wire
+// (store.Document `published_at`) but was dropped on the way into the replica, so the
+// offline feed card had no date to reveal beside the ingest one.
+export const MIGRATE_2_DOC_PUBLISHED_AT = 'ALTER TABLE documents ADD COLUMN published_at TEXT'
+
 // ── meta ──────────────────────────────────────────────────────────────────────
 export const SELECT_META = 'SELECT value FROM meta WHERE key = ?'
 export const UPSERT_META = 'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)'
@@ -150,17 +159,18 @@ export const UPSERT_META = 'INSERT OR REPLACE INTO meta (key, value) VALUES (?, 
 // list read. Bodies are fetched one document at a time by SELECT_DOCUMENT.
 export const SELECT_DOCUMENTS_META = `
 SELECT id, canonical_url, title, fetched_at, excerpt, hero_image_url, author,
-       source_feed_id, media_type, media_metadata, error_reason, annotation_count,
-       highlight_count, capture_ms, added_via, created_at, updated_at, rev, deleted_at
+       published_at, source_feed_id, media_type, media_metadata, error_reason,
+       annotation_count, highlight_count, capture_ms, added_via, created_at, updated_at,
+       rev, deleted_at
 FROM documents`
 export const SELECT_DOCUMENT = 'SELECT * FROM documents WHERE id = ?'
 export const UPSERT_DOCUMENT = `
 INSERT OR REPLACE INTO documents (
   id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author,
-  source_feed_id, media_type, media_metadata, transcript, error_reason,
+  published_at, source_feed_id, media_type, media_metadata, transcript, error_reason,
   annotation_count, highlight_count, capture_ms, added_via, created_at, updated_at,
   rev, deleted_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 export const DELETE_DOCUMENT = 'DELETE FROM documents WHERE id = ?'
 
 // ── highlights ────────────────────────────────────────────────────────────────

@@ -48,7 +48,8 @@ function parseJson<T>(v: SqlValue): T | undefined {
 function docParams(d: Document): SqlValue[] {
   return [
     d.id, d.canonical_url ?? '', d.title ?? '', d.markdown ?? '', d.fetched_at ?? '',
-    d.excerpt ?? '', d.hero_image_url ?? '', d.author ?? '', d.source_feed_id ?? null,
+    d.excerpt ?? '', d.hero_image_url ?? '', d.author ?? '', d.published_at ?? null,
+    d.source_feed_id ?? null,
     d.media_type ?? null, d.media_metadata ?? null, d.transcript ?? null,
     d.error_reason ?? null, d.annotation_count ?? null, d.highlight_count ?? null,
     d.capture_ms ?? null, d.added_via ? JSON.stringify(d.added_via) : null,
@@ -61,6 +62,7 @@ function rowToDocMeta(r: SqlRow): DocumentMeta {
     id: str(r.id), canonical_url: str(r.canonical_url), title: str(r.title),
     fetched_at: str(r.fetched_at), excerpt: str(r.excerpt),
     hero_image_url: str(r.hero_image_url), author: str(r.author),
+    published_at: nullable(r.published_at),
     source_feed_id: nullable(r.source_feed_id),
     media_type: optional(r.media_type) as Document['media_type'],
     media_metadata: optional(r.media_metadata), error_reason: optional(r.error_reason),

@@ -141,6 +141,14 @@ export default function DocumentViewer() {
   // Highlights state
   const [highlights, setHighlights] = useState<HighlightWithDoc[]>([])
   const [hlExpanded, setHlExpanded] = useState(true)
+  // Which highlights already carry a note (see HighlightCard `hasNote` — the WebView
+  // card mirrors it). Read through refs by the repaint effect below so a highlight
+  // edit does not re-push the whole set.
+  const notedIds = db.useAnnotatedHighlightIds()
+  const highlightsRef = useRef(highlights)
+  highlightsRef.current = highlights
+  const hlExpandedRef = useRef(hlExpanded)
+  hlExpandedRef.current = hlExpanded
 
   useEffect(() => {
     db.getSetting(`doc_hl_exp_${id}`).then(val => {
@@ -392,8 +400,17 @@ export default function DocumentViewer() {
       title: h.title,
       bodyHtml: h.body_html ?? h.body,
       pinned: h.pinned as 0 | 1,
+      hasNote: notedIds.has(h.id),
       tags: (h.tags ?? []).map(t => ({ id: t.id, name: t.name, color: t.color })),
-    })), [])
+    })), [notedIds])
+
+  // A note taken on a card must repaint that card. `setAnnotations` above only moves
+  // marks; the card's dotted border lives in the highlight payload, so it needs its own
+  // push — the note is created after the WebView already has its highlights.
+  useEffect(() => {
+    if (!isDocLoadedRef.current) return
+    sendToWebView({ type: 'setHighlights', highlights: toHlData(highlightsRef.current), expanded: hlExpandedRef.current })
+  }, [sendToWebView, toHlData])
 
   const handleParsedMessage = useCallback((msg: ParsedMsg) => {
     if (msg.type === 'debug') {
@@ -662,6 +679,7 @@ export default function DocumentViewer() {
       <AnnotationPanel
         visible={annVisible}
         mode={annMode}
+        selection={pendingSelection}
         existing={existingAnnotation}
         onSave={handleAnnSave}
         onDelete={annMode === 'edit' ? handleAnnDelete : undefined}

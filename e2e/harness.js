@@ -195,12 +195,17 @@ export async function newConnectedPage(browser, token, deviceId) {
 
 // Insert a text (article) Document straight into the test DB. There's no ingest in
 // the harness (scraping needs network), so we write the row the engine would.
-function documentInsert({ id, title, markdown, canonicalUrl }) {
+// `publishedAt` is the ARTICLE's own date — deliberately separate from the row's
+// created_at, because the highlight card shows the ingest date and keeps this one a
+// hover/long-press away. A fixture where the two differ is the only way to tell which
+// one the card is printing.
+function documentInsert({ id, title, markdown, canonicalUrl, publishedAt = null }) {
   const now = new Date().toISOString()
   const q = s => s.replace(/'/g, "''")
+  const pub = publishedAt ? `'${q(publishedAt)}'` : 'NULL'
   return `
 INSERT OR REPLACE INTO documents (id,canonical_url,title,markdown,fetched_at,excerpt,hero_image_url,author,published_at,source_feed_id,content_hash,media_type,media_metadata,transcript,created_at,updated_at,rev,deleted_at)
-VALUES ('${q(id)}','${q(canonicalUrl)}','${q(title)}','${q(markdown)}','${now}','','','Test',NULL,NULL,'${q(id)}hash','article',NULL,NULL,'${now}','${now}',1,NULL);`
+VALUES ('${q(id)}','${q(canonicalUrl)}','${q(title)}','${q(markdown)}','${now}','','','Test',${pub},NULL,'${q(id)}hash','article',NULL,NULL,'${now}','${now}',1,NULL);`
 }
 
 export function seedTextDoc(doc) {
@@ -248,8 +253,12 @@ VALUES ('${q(id)}','${q(name)}','${q(color)}','${now}','${now}',1,NULL);`
 // Seed a Highlight (with the pipeline → pipeline_run parents its FK needs) on a
 // Document, as the pipeline would. Used by the offline walkthrough to exercise
 // star / delete / tag on real machine-data rows.
-export function seedHighlight({ id, documentId, title, body, pinned = 0 }) {
+// `createdAt` overrides the ingest timestamp — the feed's sort key. `updated_at` stays
+// now regardless, or a back-dated row would sit below the sync cursor and never reach
+// the client.
+export function seedHighlight({ id, documentId, title, body, pinned = 0, createdAt = null }) {
   const now = new Date().toISOString()
+  const born = createdAt || now
   const q = s => s.replace(/'/g, "''")
   const pipeId = `pipe-${id}`
   const runId = `run-${id}`
@@ -259,7 +268,7 @@ VALUES ('${q(pipeId)}','seed',1,'on_new_document','{}','[]','${now}','${now}',1,
 INSERT OR IGNORE INTO pipeline_runs (id,pipeline_id,document_id,job_id,document_content_hash,status,step_index,state,superseded_at,created_at,updated_at,rev,deleted_at)
 VALUES ('${q(runId)}','${q(pipeId)}','${q(documentId)}',NULL,'','done',0,'{}',NULL,'${now}','${now}',1,NULL);
 INSERT OR REPLACE INTO highlights (id,document_id,pipeline_run_id,kind,title,body,metadata,pinned,archived_at,created_at,updated_at,rev,deleted_at)
-VALUES ('${q(id)}','${q(documentId)}','${q(runId)}','item','${q(title)}','${q(body)}','{}',${pinned ? 1 : 0},NULL,'${now}','${now}',1,NULL);
+VALUES ('${q(id)}','${q(documentId)}','${q(runId)}','item','${q(title)}','${q(body)}','{}',${pinned ? 1 : 0},NULL,'${q(born)}','${now}',1,NULL);
 `
   const f = '/tmp/samizdat-test/seed-highlight.sql'
   fs.writeFileSync(f, sql)

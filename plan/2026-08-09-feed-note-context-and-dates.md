@@ -2,7 +2,7 @@
 created: 2026-08-09
 topic: Feed note indicator, visible ingest-vs-published dates, selection context in the annotation composer, and killing the doc-viewer highlight swipe
 excerpt: Four UI fixes on the highlight card and the annotation panel. The feed sorts by highlights.created_at DESC but renders documents.published_at, so the order looks random; a highlight with a note looks identical to one without; the annotation composer never shows the text you selected; and the doc viewer's highlight cards steal horizontal drags for a pin/delete triage that duplicates buttons already in the footer.
-status: planned
+status: built + verified (just e2e-int 125/125, just e2e 25/25, just build, agent-browser walkthrough on the dev server). `just lint` mechanical checks pass; lint-parity detects both card renderers changed but its LLM review step cannot run here — ANTHROPIC_API_KEY in this shell is rejected by the API.
 ---
 
 ## Why

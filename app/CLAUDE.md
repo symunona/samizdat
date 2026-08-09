@@ -132,8 +132,40 @@ They must show the **same actions (pin · tags · annotate · delete), same icon
 **Why no shared component:** native RN has no DOM/`innerHTML`; the WebView has no RN renderer. `dangerouslySetInnerHTML` does NOT bridge this — it's web-only and kills React's event wiring (you'd hand-roll delegation anyway), and per-row HTML in a FlatList is a perf anti-pattern. So: **share the spec, not the pixels.**
 - **Icons:** same Ionicons glyph both sides — RN uses the `@expo/vector-icons` component (`IconButton`); the WebView inlines the *same glyph's* SVG path data (vector-icons can't run in the WebView). Form differs, glyph/size/meaning must match.
 - **Action protocol:** the WebView posts `hl_pin` / `hl_delete` / `hl_tags` / `hl_annotate`; the RN host (`app/(drawer)/document/[id].tsx`) maps them to the same callbacks the feed wires directly.
+- **Annotated cards are marked whole**, both sides: dotted 2px accent border + the note
+  pencil in accent (`cardNoted` / `hasNote` in RN; `.hl-card.hl-noted` /
+  `.hl-icon-btn.hl-noted-btn` in the WebView). **Pinned is applied after noted and is
+  SOLID accent** — the two states must stay tellable apart. The flag is
+  `db.useAnnotatedHighlightIds()` (a Set, read once per screen — a per-row hook in a
+  FlatList is the anti-pattern), fed to the WebView on `HlData.hasNote`. The host pushes
+  a fresh `setHighlights` when that Set changes: `setAnnotations` only moves marks, and
+  the border lives in the highlight payload.
+- **The WebView card has NO swipe gesture.** It used to drag left/right for star/delete;
+  removed, because both actions are unconditional footer buttons and the gesture only
+  bought accidental deletes plus a swallowed horizontal pan (it also forced a
+  `touch-action` dance against page mode). The RN feed's `ReanimatedSwipeable` triage is
+  a different thing and stays. Do not reintroduce a drag here.
 
 **Enforced:** `just lint` runs `spec parity` — if one of the two files changed vs main and the other didn't (or they diverged), it flags it and asks Claude whether the change needs mirroring. See `tooling/CLAUDE.md`.
+
+## The feed's date is the SORT KEY (`src/DateStamp.tsx`)
+
+The feed is ordered by **`highlights.created_at DESC`** — when the pipeline produced the
+Highlight, i.e. ingest — on both paths (`queries.sql` `ListHighlights`; replica
+`db/hooks.ts` `selectHighlights`). The card used to print `document_published_at`
+instead, so the list was ordered by one date and labelled with another and read as
+unsorted. **Whatever the list sorts by is what the card must show.**
+
+`DateStamp` shows the ingest date and keeps the article's own publication date one
+reveal away: `title` attribute for a hover tooltip on a fine pointer, long-press → toast
+on a coarse one (`isTouchDevice()`, never `Platform.OS` — see below). RNW drops an
+unknown `title` prop, so it is written onto the host node from a ref.
+
+`documents.published_at` was always on the wire (`store.Document`) but the replica
+dropped it, so offline there was no second date to reveal — hence replica schema **v2**
+(`MIGRATE_2_DOC_PUBLISHED_AT`). `SCHEMA_SQL` is the v1 baseline and is never edited; a
+new column is an appended entry in `MIGRATIONS`, or a fresh install would run
+`CREATE`-then-duplicate-`ALTER`.
 
 ## Error state comes from the JOB, not the Document (`src/failedJobs.ts`)
 
@@ -411,8 +443,6 @@ value). `loadReadingPrefs()` migrates the old boolean key `samizdat_page_mode`
 - **Resize** is throttled 150ms, but capture the anchor when the scroll SETTLES, not in
   the handler — `resize` fires after the browser has already reflowed, so reading it
   there loses the reader's place.
-- Card swipe-triage is off in page mode (a horizontal drag turns the page); `touch-action`
-  must be reset to `auto` there or the card's base `pan-y` swallows the pan.
 - Reading progress: one `reportFraction` for both modes — scroll position when scrolling,
   `pageIdx/(pageCount-1)` when paginated. `revealElement` (page jump vs `scrollIntoView`)
   is the single way to bring anything into view.

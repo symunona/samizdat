@@ -6,11 +6,11 @@
 // of truth and the replica is rebuildable, so a schema bump wipes and re-pulls from
 // since=null rather than carrying a translation layer forever (design rule 1).
 
-import { SCHEMA_SQL } from './queries'
+import { MIGRATE_2_DOC_PUBLISHED_AT, SCHEMA_SQL } from './queries'
 
 // Append a new script to migrate; never edit an existing entry (a shipped device has
 // already run it). MIGRATIONS[i] takes the DB from version i to version i+1.
-export const MIGRATIONS: string[] = [SCHEMA_SQL]
+export const MIGRATIONS: string[] = [SCHEMA_SQL, MIGRATE_2_DOC_PUBLISHED_AT]
 
 export const SCHEMA_VERSION = MIGRATIONS.length
 

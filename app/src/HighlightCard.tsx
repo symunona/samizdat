@@ -8,6 +8,7 @@ import MarkdownBody from './MarkdownBody'
 import HighlightDetail from './HighlightDetail'
 import NoteEditButton from './NoteEditButton'
 import IconButton from './IconButton'
+import DateStamp from './DateStamp'
 import { isTouchDevice } from './touch'
 import { tagColor } from './tagColor'
 import { hashColor } from './hashColor'
@@ -26,10 +27,13 @@ type Props = {
   onLinkAction?: (url: string) => void
   busy?: boolean
   pinned?: boolean
+  // At least one Annotation anchors here. The whole card is marked, not just the icon —
+  // scanning a feed for "the ones I wrote on" should not need a squint at a 14px glyph.
+  hasNote?: boolean
 }
 
 export default function HighlightCard({
-  item, linkedDocuments, onPress, onPin, onDelete, onAnnotate, onTags, onDocumentPress, onLinkAction, busy, pinned,
+  item, linkedDocuments, onPress, onPin, onDelete, onAnnotate, onTags, onDocumentPress, onLinkAction, busy, pinned, hasNote,
 }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
@@ -38,12 +42,6 @@ export default function HighlightCard({
   const [modalOpen, setModalOpen] = useState(false)
   // Popout navigates to the document at the right place (highlight deep-link); only ✕ closes.
   const goToDoc = () => { setModalOpen(false); onPress?.() }
-  const publishedLabel = useMemo(() => {
-    if (!item.document_published_at) return null
-    const d = new Date(item.document_published_at)
-    if (isNaN(d.getTime())) return null
-    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-  }, [item.document_published_at])
   // Where it came from: the feed, or — for a document no feed produced — how it was
   // added (manual, or the pipeline that pulled it in).
   const originLabel = item.source_feed_title || item.added_via || ''
@@ -54,7 +52,7 @@ export default function HighlightCard({
   const stableLinkedDocs = useMemo(() => linkedDocuments, [item.id])
 
   return (
-    <View style={[s.card, pinned && s.cardPinned]}>
+    <View style={[s.card, hasNote && s.cardNoted, pinned && s.cardPinned]}>
       <View style={s.cardHeader}>
         <View style={[s.kindBadge, { backgroundColor: hashColor(item.kind) }]}>
           <Text style={s.kindText}>{item.kind}</Text>
@@ -127,10 +125,12 @@ export default function HighlightCard({
         {onDelete ? (
           <IconButton name="trash-outline" onPress={onDelete} hitSlop={6} hoverColor="#ef4444" />
         ) : null}
-        {publishedLabel ? <Text style={s.dateText}>{publishedLabel}</Text> : null}
+        <DateStamp ingestedAt={item.created_at} publishedAt={item.document_published_at} />
         <View style={s.footerSpacer} />
         {onTags ? <IconButton name="pricetag-outline" onPress={onTags} hitSlop={6} /> : null}
-        {onAnnotate ? <NoteEditButton onPress={onAnnotate} hitSlop={6} /> : null}
+        {onAnnotate ? (
+          <NoteEditButton onPress={onAnnotate} hitSlop={6} color={hasNote ? theme.colors.accent : undefined} />
+        ) : null}
       </View>
     </View>
   )
@@ -147,8 +147,17 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.border,
       gap: 8,
     },
+    // Annotated: dotted accent. Pinned: solid accent — it is applied after, so a card
+    // that is both reads as pinned (the ★ says so anyway) and the accent note icon in
+    // the footer still marks the note.
+    cardNoted: {
+      borderColor: t.colors.accent,
+      borderStyle: 'dotted',
+      borderWidth: 2,
+    },
     cardPinned: {
       borderColor: t.colors.accent,
+      borderStyle: 'solid',
       borderWidth: 2,
     },
     cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -169,7 +178,6 @@ function buildStyles(t: Theme) {
       gap: 6,
     },
     footerSpacer: { flex: 1 },
-    dateText: { color: t.colors.muted, fontSize: 11, opacity: 0.8 },
     tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
     tagChip: {
       paddingHorizontal: 8,

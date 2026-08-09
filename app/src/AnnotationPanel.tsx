@@ -30,6 +30,8 @@ export type ExistingAnnotation = {
 type Props = {
   visible: boolean
   mode: 'create' | 'edit'
+  /** The text being anchored, in create mode. Edit mode reads `existing.exact`. */
+  selection?: PendingSelection
   existing?: ExistingAnnotation
   onSave: (data: { note: string; color: string }) => void
   onDelete?: () => void
@@ -37,11 +39,14 @@ type Props = {
   onTag?: (annotationId: string) => void
 }
 
-export default function AnnotationPanel({ visible, mode, existing, onSave, onDelete, onCancel, onTag }: Props) {
+export default function AnnotationPanel({ visible, mode, selection, existing, onSave, onDelete, onCancel, onTag }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const [note, setNote] = useState(existing?.note ?? '')
   const [moreOpen, setMoreOpen] = useState(false)
+  // The anchored text, so the composer shows WHAT you are annotating. Empty for a
+  // doc-level or standalone note — then the block is not rendered at all.
+  const anchorText = ((mode === 'create' ? selection?.exact : existing?.exact) ?? '').trim()
   const inputRef = useRef<TextInput>(null)
   const [kbHeight, setKbHeight] = useState(0)
 
@@ -102,6 +107,12 @@ export default function AnnotationPanel({ visible, mode, existing, onSave, onDel
               <Text style={s.xBtnText}>✕</Text>
             </Pressable>
           </View>
+
+          {/* Selected text being anchored. Clipped so a long selection can never
+              push the input (or the keyboard-lifted footer) off screen. */}
+          {anchorText !== '' && (
+            <Text style={s.quote} numberOfLines={4} ellipsizeMode="tail">{anchorText}</Text>
+          )}
 
           {/* Note input */}
           <TextInput
@@ -200,6 +211,15 @@ function buildStyles(t: Theme) {
       justifyContent: 'center',
     },
     xBtnText: { color: t.colors.muted, fontSize: 14, fontWeight: '600' },
+    quote: {
+      borderLeftWidth: 3,
+      borderLeftColor: t.colors.accent,
+      paddingLeft: t.spacing.sm,
+      color: t.colors.muted,
+      fontStyle: 'italic',
+      fontSize: 13,
+      lineHeight: 18,
+    },
     noteInput: {
       backgroundColor: t.colors.background,
       color: t.colors.text,

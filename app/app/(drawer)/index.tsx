@@ -11,7 +11,7 @@ import * as db from '../../src/db'
 import HighlightCard from '../../src/HighlightCard'
 import IconButton from '../../src/IconButton'
 import TagSelectorModal from '../../src/TagSelectorModal'
-import AnnotationPanel from '../../src/AnnotationPanel'
+import AnnotationPanel, { type PendingSelection } from '../../src/AnnotationPanel'
 import LinkActionSheet from '../../src/LinkActionSheet'
 import AddUrlSheet from '../../src/AddUrlSheet'
 import { useScrapeQueue } from '../../src/ScrapeQueueContext'
@@ -23,6 +23,13 @@ import FeedSkeleton from '../../src/FeedSkeleton'
 // drag first (lower threshold), so a swipe only fires on a deliberately horizontal pull.
 // (ReanimatedSwipeable doesn't expose failOffsetY, so this threshold is the only lever.)
 const SWIPE_DRAG_OFFSET = 36
+
+// A feed card has no text selection — a note taken here anchors to the head of the
+// highlight body. ONE definition, used both for the quote the composer shows and for
+// the `exact` that gets saved, so the two can never drift.
+function feedAnchor(item: HighlightWithDoc): PendingSelection {
+  return { exact: item.body.slice(0, 300), prefix: '', suffix: '', pos_start: 0, pos_end: 0 }
+}
 
 export default function FeedScreen() {
   const { theme } = useUnistyles()
@@ -153,6 +160,9 @@ export default function FeedScreen() {
   // Read through a ref, not the hook value directly: `loadFromStore` feeds `load`, and a
   // callback that changed identity on every replica write would re-fetch the feed over
   // the network on every star/archive.
+  // Which cards carry a note. Read once per render from the replica — the network feed
+  // payload has no annotation link, and a per-row hook would mount one per FlatList item.
+  const notedIds = db.useAnnotatedHighlightIds()
   const storeHighlights = db.useFeedHighlights()
   const storeRef = useRef(storeHighlights)
   storeRef.current = storeHighlights
@@ -257,7 +267,7 @@ export default function FeedScreen() {
     db.createAnnotation({
       documentId: annotateItem.document_id,
       highlightId: annotateItem.id,
-      exact: annotateItem.body.slice(0, 300),
+      exact: feedAnchor(annotateItem).exact,
       note,
       color,
     })
@@ -316,6 +326,7 @@ export default function FeedScreen() {
         item={item}
         linkedDocuments={item.linked_documents}
         pinned={isPinned}
+        hasNote={notedIds.has(item.id)}
         busy={false}
         onPress={() => router.push(`/document/${item.document_id}?from=/&highlight=${item.id}`)}
         onPin={() => handlePin(item)}
@@ -364,7 +375,7 @@ export default function FeedScreen() {
         {unarchiveBtn}
       </View>
     )
-  }, [archivedIds, deletingIds, handleArchive, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
+  }, [archivedIds, deletingIds, notedIds, handleArchive, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
 
   // Show the skeleton (not the empty state) while anything might still produce
   // highlights: the persisted store hasn't hydrated yet, the connection is still
@@ -470,6 +481,7 @@ export default function FeedScreen() {
       <AnnotationPanel
         visible={annotateItem !== null}
         mode="create"
+        selection={annotateItem ? feedAnchor(annotateItem) : undefined}
         onSave={handleAnnotateSave}
         onCancel={() => setAnnotateItem(null)}
       />

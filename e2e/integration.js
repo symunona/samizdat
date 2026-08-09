@@ -38,6 +38,53 @@ const DELETE_HL_ID = 'ffffffff-0000-4000-8000-000000000003'
 const SWIPE_HL_TITLE = 'Swipe To Archive'
 const DELETE_HL_TITLE = 'Tap To Delete'
 
+// The WebView highlight card lost its swipe-triage; this one is dragged (must not
+// move) and then deleted through the footer button (the capability must survive).
+const NOSWIPE_HL_ID = 'ffffffff-0000-4000-8000-000000000005'
+const NOSWIPE_HL_TITLE = 'Gesture Free Card'
+
+// Note-indicator triple: one annotated, one bare (the negative half), one annotated
+// AND pinned — pinned is applied last and must stay SOLID so the two read apart.
+const NOTED_HL_ID = 'ffffffff-0000-4000-8000-000000000006'
+const NOTED_HL_TITLE = 'Card With A Note'
+const PLAIN_HL_ID = 'ffffffff-0000-4000-8000-000000000007'
+const PLAIN_HL_TITLE = 'Card Without A Note'
+const PINNED_NOTED_HL_ID = 'ffffffff-0000-4000-8000-000000000008'
+const PINNED_NOTED_HL_TITLE = 'Starred And Noted Card'
+
+// The four extra cards on TEXT_DOC. `noted` drives the annotation seeded for them.
+const CARD_HLS = [
+  { id: NOSWIPE_HL_ID, title: NOSWIPE_HL_TITLE, body: 'A card a horizontal drag must never move.' },
+  { id: NOTED_HL_ID, title: NOTED_HL_TITLE, body: 'A card someone wrote a note on.', noted: true },
+  { id: PLAIN_HL_ID, title: PLAIN_HL_TITLE, body: 'A card nobody wrote a note on.' },
+  { id: PINNED_NOTED_HL_ID, title: PINNED_NOTED_HL_TITLE, body: 'A card that is starred and noted.', pinned: 1, noted: true },
+]
+
+// `t.colors.accent` (src/theme.ts) as the browser reports it.
+const ACCENT_RGB = 'rgb(232, 116, 59)'
+
+// Date fixtures: a document published in JANUARY carrying highlights ingested in
+// April / May / June. Every date is unambiguous, and none of them is "now", so a card
+// printing the publication date (the old bug) or the wrong row is visible at a glance.
+const DATED_DOC_ID = 'dddddddd-0000-4000-8000-000000000007'
+const DATED_PUBLISHED_AT = '2026-01-05T12:00:00Z'
+const DATED_DOC = {
+  id: DATED_DOC_ID,
+  title: 'Dated Article',
+  canonicalUrl: 'https://example.com/dated-article',
+  markdown: '# Dated Article\n\nPublished long before any of its highlights were ingested.',
+  publishedAt: DATED_PUBLISHED_AT,
+}
+// Seeded in a SHUFFLED order on purpose: insertion order must not be what the feed
+// renders — `created_at DESC` must be.
+const DATE_HLS = [
+  { id: 'ffffffff-0000-4000-8000-00000000000b', title: 'Ingested In May', createdAt: '2026-05-10T12:00:00Z' },
+  { id: 'ffffffff-0000-4000-8000-00000000000c', title: 'Ingested In April', createdAt: '2026-04-01T12:00:00Z' },
+  { id: 'ffffffff-0000-4000-8000-00000000000a', title: 'Ingested In June', createdAt: '2026-06-15T12:00:00Z' },
+]
+// Newest first — what the rendered feed must match.
+const DATE_HLS_BY_INGEST = [...DATE_HLS].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+
 // Highlight body whose FIRST paragraph crosses bold + link + code (multiple text
 // nodes — the hard anchoring case), padded past the 800-char clip threshold so the
 // feed card renders a "More…" button that opens the selectable overlay.
@@ -483,6 +530,18 @@ async function apiHighlight(page, id) {
     }
     return null
   }, BASE_URL, id)
+}
+
+// Anchor an Annotation to a Highlight through the real endpoint. Seeding the row
+// directly would skip the `highlight_id` round trip the card's indicator depends on.
+async function postAnnotation(token, { documentId, highlightId, exact, note }) {
+  const res = await fetch(`${BASE_URL}/api/v1/documents/${documentId}/annotations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ exact, note, color: 'yellow', highlight_id: highlightId }),
+  })
+  if (!res.ok) throw new Error(`POST annotation for ${highlightId}: HTTP ${res.status}`)
+  return res.json()
 }
 
 // ── Provenance on the meta panel ──────────────────────────────────────────────
@@ -1005,6 +1064,447 @@ async function runHighlightSelectionLifecycle(token, deviceId) {
   await sleep(500)
   if (errors.length) fail('hl overlay: no console/HTTP errors', errors.slice(0, 4).join(' | '))
   else pass('hl overlay: no console/HTTP errors')
+
+  await page.close()
+}
+
+// ── The WebView highlight card has NO swipe gesture ───────────────────────────
+// A `.hl-card` used to drag left/right for star/delete — a gesture duplicating two
+// unconditional footer buttons, so it only bought accidental deletes and a swallowed
+// horizontal pan. Removing it is only real if BOTH halves hold: a drag moves nothing,
+// and the buttons still do the job the gesture used to.
+async function runDocViewerNoSwipe(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 800 })
+  await page.goto(`${BASE_URL}/document/${TEXT_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+  await page.waitForFunction((id) => {
+    const d = document.querySelector('iframe').contentDocument
+    return !!d.querySelector(`.hl-card[data-id="${id}"]`)
+  }, { timeout: 12000 }, NOSWIPE_HL_ID)
+
+  await check('doc viewer: a highlight card claims no touch-action of its own', async () => {
+    const ta = await page.evaluate((id) => {
+      const d = document.querySelector('iframe').contentDocument
+      return d.defaultView.getComputedStyle(d.querySelector(`.hl-card[data-id="${id}"]`)).touchAction
+    }, NOSWIPE_HL_ID)
+    return ta === 'auto' ? null : `.hl-card sets touch-action: ${ta} — it would swallow the pan again`
+  })
+
+  // The removed handlers listened on the frame's own document for
+  // pointerdown/pointermove/pointerup, so a stepped pointer drag is exactly what used
+  // to translate the card. Sampled at every step: a swipe that snapped back on release
+  // would still be a swipe.
+  const drag = await page.evaluate((id) => {
+    const ifr = document.querySelector('iframe')
+    const d = ifr.contentDocument, w = ifr.contentWindow
+    const card = d.querySelector(`.hl-card[data-id="${id}"]`)
+    const r = card.getBoundingClientRect()
+    const y = r.top + Math.min(r.height / 2, 60)
+    const x0 = r.left + 30
+    const fire = (type, x) => card.dispatchEvent(new w.PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+      button: 0, buttons: 1, clientX: x, clientY: y,
+    }))
+    const transforms = []
+    const hints = []
+    fire('pointerdown', x0)
+    for (let i = 1; i <= 12; i++) {
+      fire('pointermove', x0 + (140 * i) / 12)
+      transforms.push(card.style.transform)
+      hints.push(!!d.getElementById('hl-swipe-hint'))
+    }
+    fire('pointerup', x0 + 140)
+    return {
+      transforms,
+      hints,
+      after: card.style.transform,
+      hintAfter: !!d.getElementById('hl-swipe-hint'),
+      className: card.className,
+    }
+  }, NOSWIPE_HL_ID)
+
+  await check('doc viewer: dragging a highlight card 140px right moves nothing', async () => {
+    const moved = drag.transforms.find(t => t && t !== 'none')
+    if (moved) return `the card translated mid-drag ("${moved}") — the swipe handler is back`
+    if (drag.after && drag.after !== 'none') return `the card kept transform "${drag.after}" after pointerup`
+    if (/hl-swiping/.test(drag.className)) return 'the card still takes the .hl-swiping class'
+    return null
+  })
+
+  await check('doc viewer: no #hl-swipe-hint ever exists', async () =>
+    drag.hints.some(Boolean) || drag.hintAfter
+      ? 'the swipe hint element was created — the swipe UI is back' : null)
+
+  await check('doc viewer: the dragged highlight is still there after pointerup', async () => {
+    const present = await page.evaluate((id) => {
+      const d = document.querySelector('iframe').contentDocument
+      return !!d.querySelector(`.hl-card[data-id="${id}"]`)
+    }, NOSWIPE_HL_ID)
+    if (!present) return 'the drag removed the card from the list'
+    return await apiHighlight(page, NOSWIPE_HL_ID) ? null : 'the drag deleted the highlight on the server'
+  })
+
+  await check('doc viewer: the footer trash still deletes the card', async () => {
+    const clicked = await page.evaluate((id) => {
+      const ifr = document.querySelector('iframe')
+      const btn = ifr.contentDocument.querySelector(`.hl-card[data-id="${id}"] [data-action="delete"]`)
+      if (!btn) return false
+      btn.dispatchEvent(new ifr.contentWindow.MouseEvent('click', { bubbles: true, cancelable: true }))
+      return true
+    }, NOSWIPE_HL_ID)
+    if (!clicked) return 'no footer trash button on the card'
+    try {
+      await page.waitForFunction((id) => !document.querySelector('iframe').contentDocument
+        .querySelector(`.hl-card[data-id="${id}"]`), { timeout: 6000 }, NOSWIPE_HL_ID)
+    } catch { return 'the card is still in the list after pressing the trash button' }
+    for (let i = 0; i < 20; i++) {
+      if (!await apiHighlight(page, NOSWIPE_HL_ID)) return null
+      await sleep(300)
+    }
+    return 'the card vanished locally but the delete never reached the server'
+  })
+
+  await sleep(400)
+  if (errors.length) fail('doc viewer no-swipe: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('doc viewer no-swipe: no console/HTTP errors')
+
+  await page.close()
+}
+
+// ── A highlight carrying a note is marked as such, on BOTH renderers ──────────
+// `Annotation.highlight_id` was already synced and nothing read it, so a card you had
+// written on looked exactly like one you hadn't. The negative half (a sibling card with
+// no note) is what makes this a test rather than a screenshot.
+//
+// The feed card element: the SMALLEST bordered element wide enough to be the card
+// itself — the title Text and the inner badges are unbordered or far narrower.
+const feedCardScript = `(t) => {
+  const hits = [...document.querySelectorAll('*')]
+    .filter(e => e.offsetParent && (e.innerText || '').includes(t))
+    .filter(e => {
+      const r = e.getBoundingClientRect()
+      return r.width > 250 && parseFloat(getComputedStyle(e).borderTopWidth) > 0
+    })
+  hits.sort((a, b) => a.getBoundingClientRect().height - b.getBoundingClientRect().height)
+  return hits[0] || null
+}`
+
+async function feedCardBorder(page, title) {
+  return page.evaluate((src, t) => {
+    // eslint-disable-next-line no-eval
+    const card = eval('(' + src + ')')(t)
+    if (!card) return null
+    const cs = getComputedStyle(card)
+    return { style: cs.borderTopStyle, color: cs.borderTopColor, width: cs.borderTopWidth }
+  }, feedCardScript, title)
+}
+
+// The note pencil is an icon-font glyph, like the trash one above.
+const PENCIL_GLYPH = String.fromCodePoint(
+  JSON.parse(readFileSync(
+    new URL('../app/node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/glyphmaps/Ionicons.json',
+      import.meta.url)))['create-outline'])
+
+async function runFeedNoteIndicator(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 1600 })
+  await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction(t => document.body.innerText.includes(t), { timeout: 20000 }, PLAIN_HL_TITLE)
+  // The flag comes off the replica, so wait for the pulled annotation to land instead
+  // of guessing at a delay. A timeout here is not the verdict — the checks below are.
+  await page.waitForFunction((src, t) => {
+    // eslint-disable-next-line no-eval
+    const card = eval('(' + src + ')')(t)
+    return !!card && getComputedStyle(card).borderTopStyle === 'dotted'
+  }, { timeout: 25000 }, feedCardScript, NOTED_HL_TITLE).catch(() => {})
+
+  await check('feed: an annotated card is bordered dotted in the accent', async () => {
+    const b = await feedCardBorder(page, NOTED_HL_TITLE)
+    if (!b) return 'the annotated card never rendered'
+    if (b.style !== 'dotted') return `border-style is "${b.style}", expected dotted`
+    if (b.color !== ACCENT_RGB) return `border-color is "${b.color}", expected the accent ${ACCENT_RGB}`
+    if (parseFloat(b.width) < 2) return `border-width is "${b.width}", expected 2px`
+    return null
+  })
+
+  await check('feed: a card with no note keeps the plain solid border', async () => {
+    const b = await feedCardBorder(page, PLAIN_HL_TITLE)
+    if (!b) return 'the un-annotated card never rendered'
+    if (b.style !== 'solid') return `an un-annotated card reads "${b.style}" — the indicator marks everything`
+    if (b.color === ACCENT_RGB) return 'an un-annotated card is painted in the accent'
+    return null
+  })
+
+  await check('feed: pinned stays SOLID accent on a card that also has a note', async () => {
+    const b = await feedCardBorder(page, PINNED_NOTED_HL_TITLE)
+    if (!b) return 'the pinned+annotated card never rendered'
+    if (b.color !== ACCENT_RGB) return `pinned border-color is "${b.color}"`
+    return b.style === 'solid'
+      ? null : `pinned+noted reads "${b.style}" — pinned and noted are no longer tellable apart`
+  })
+
+  await check('feed: the note pencil is accented on an annotated card only', async () => {
+    const colors = await page.evaluate((src, g, noted, plain) => {
+      // eslint-disable-next-line no-eval
+      const find = eval('(' + src + ')')
+      const pencil = (t) => {
+        const card = find(t)
+        if (!card) return null
+        // LAST match, not the first: the outer Pressable also reads as the glyph, and
+        // only the innermost node (the icon-font Text) carries the colour.
+        const hits = [...card.querySelectorAll('*')].filter(e => e.innerText === g)
+        return hits.length ? getComputedStyle(hits[hits.length - 1]).color : 'none'
+      }
+      return { noted: pencil(noted), plain: pencil(plain) }
+    }, feedCardScript, PENCIL_GLYPH, NOTED_HL_TITLE, PLAIN_HL_TITLE)
+    if (colors.noted === null || colors.plain === null) return 'a card under test did not render'
+    if (colors.noted === 'none') return 'no note pencil on the annotated card'
+    if (colors.noted !== ACCENT_RGB) return `the pencil on an annotated card is "${colors.noted}"`
+    if (colors.plain === ACCENT_RGB) return 'the pencil is accented on a card with no note'
+    return null
+  })
+
+  // Same rule, other renderer: the WebView card is raw DOM built by
+  // document-viewer.ts, so it can (and did) drift from the RN one.
+  await page.goto(`${BASE_URL}/document/${TEXT_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+  await page.waitForFunction((id) => !!document.querySelector('iframe').contentDocument
+    .querySelector(`.hl-card[data-id="${id}"]`), { timeout: 12000 }, PLAIN_HL_ID)
+
+  await check('doc viewer: the WebView card mirrors the note indicator', async () => {
+    try {
+      await page.waitForFunction((id) => {
+        const c = document.querySelector('iframe').contentDocument.querySelector(`.hl-card[data-id="${id}"]`)
+        return !!c && c.classList.contains('hl-noted')
+      }, { timeout: 12000 }, NOTED_HL_ID)
+    } catch { return 'the annotated WebView card never got .hl-noted' }
+    const st = await page.evaluate((noted, plain) => {
+      const d = document.querySelector('iframe').contentDocument
+      const cs = el => d.defaultView.getComputedStyle(el)
+      const n = d.querySelector(`.hl-card[data-id="${noted}"]`)
+      const p = d.querySelector(`.hl-card[data-id="${plain}"]`)
+      const btn = n.querySelector('[data-action="annotate"]')
+      return {
+        noted: { style: cs(n).borderTopStyle, color: cs(n).borderTopColor, width: cs(n).borderTopWidth },
+        plainNoted: p.classList.contains('hl-noted'),
+        plainStyle: cs(p).borderTopStyle,
+        btnColor: cs(btn).color,
+        btnTitle: btn.title,
+      }
+    }, NOTED_HL_ID, PLAIN_HL_ID)
+    if (st.noted.style !== 'dotted') return `WebView card border-style is "${st.noted.style}"`
+    if (st.noted.color !== ACCENT_RGB) return `WebView card border-color is "${st.noted.color}"`
+    if (parseFloat(st.noted.width) < 2) return `WebView card border-width is "${st.noted.width}"`
+    if (st.plainNoted) return 'the un-annotated WebView card is marked noted'
+    if (st.plainStyle === 'dotted') return 'the un-annotated WebView card is dotted too'
+    if (st.btnColor !== ACCENT_RGB) return `the WebView note glyph is "${st.btnColor}", not the accent`
+    return st.btnTitle === 'Edit note' ? null : `the note button still reads "${st.btnTitle}"`
+  })
+
+  await sleep(400)
+  if (errors.length) fail('feed note indicator: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('feed note indicator: no console/HTTP errors')
+
+  await page.close()
+}
+
+// ── The card prints the date the list is SORTED by ────────────────────────────
+// The feed is `highlights.created_at DESC` and the card used to print
+// `documents.published_at`: ordered by one date, labelled with another, so the order
+// read as random. The fixture's two dates are months apart, so which one is on screen
+// is unambiguous.
+async function runFeedDateStamp(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  // Tall enough to lay the whole feed out without scrolling: a programmatic scroll
+  // would trip the feed's scroll-past auto-archive and remove the cards under test.
+  await page.setViewport({ width: 900, height: 2400 })
+  await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction((titles) => titles.every(t => document.body.innerText.includes(t)),
+    { timeout: 20000 }, DATE_HLS.map(h => h.title))
+
+  const newest = DATE_HLS_BY_INGEST[0]
+  // Format the two dates with the browser's own locale rules — the assertion is about
+  // WHICH date is shown, not about how Intl spells it.
+  const want = await page.evaluate((ingested, published) => {
+    const DAY = { year: 'numeric', month: 'short', day: 'numeric' }
+    return {
+      ingested: new Date(ingested).toLocaleString(undefined, DAY),
+      published: new Date(published).toLocaleString(undefined, DAY),
+    }
+  }, newest.createdAt, DATED_PUBLISHED_AT)
+
+  const stamp = await page.evaluate((src, t) => {
+    // eslint-disable-next-line no-eval
+    const card = eval('(' + src + ')')(t)
+    if (!card) return null
+    const el = card.querySelector('[title]')
+    return {
+      cardText: card.innerText,
+      text: el ? el.innerText.trim() : null,
+      title: el ? el.getAttribute('title') : null,
+    }
+  }, feedCardScript, newest.title)
+
+  await check('feed: the visible date is the INGEST date, not the publication date', async () => {
+    if (!stamp) return 'the dated card never rendered'
+    if (stamp.text === null) return `no date stamp on the card: "${stamp.cardText.slice(0, 200)}"`
+    if (stamp.text !== want.ingested) return `the card shows "${stamp.text}", expected the ingest date ${want.ingested}`
+    if (stamp.cardText.includes(want.published)) return `the publication date ${want.published} is on the card as well`
+    return null
+  })
+
+  await check('feed: the stamp carries both dates for the reveal', async () => {
+    if (!stamp || !stamp.title) return 'the date stamp has no title attribute — nothing reveals the second date'
+    if (!stamp.title.includes('Ingested ')) return `the tooltip has no "Ingested" line: "${stamp.title}"`
+    if (!stamp.title.includes('Article created ')) return `the tooltip has no "Article created" line: "${stamp.title}"`
+    if (!stamp.title.includes(want.ingested)) return `the tooltip does not name the ingest date: "${stamp.title}"`
+    if (!stamp.title.includes(want.published)) return `the tooltip does not name the publication date: "${stamp.title}"`
+    return null
+  })
+
+  await check('feed: the rendered order is created_at DESC', async () => {
+    const tops = await page.evaluate((src, titles) => titles.map((t) => {
+      // eslint-disable-next-line no-eval
+      const card = eval('(' + src + ')')(t)
+      return card ? card.getBoundingClientRect().top : null
+    }), feedCardScript, [MANUAL_HL_TITLE, ...DATE_HLS_BY_INGEST.map(h => h.title)])
+    if (tops.some(t => t === null)) return `a card under test did not render (tops: ${JSON.stringify(tops)})`
+    const [now, ...dated] = tops
+    for (let i = 1; i < dated.length; i++) {
+      if (dated[i] <= dated[i - 1]) {
+        return `${DATE_HLS_BY_INGEST[i].title} is not below ${DATE_HLS_BY_INGEST[i - 1].title} ` +
+          `(${dated[i - 1]} → ${dated[i]}) — the feed is not ordered by created_at DESC`
+      }
+    }
+    return dated[0] > now ? null : 'a back-dated card sorted above a freshly ingested one'
+  })
+
+  await sleep(300)
+  if (errors.length) fail('feed date stamp: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('feed date stamp: no console/HTTP errors')
+
+  await page.close()
+}
+
+// ── The annotation composer shows what you anchored ───────────────────────────
+// Mirrors runSelectionLifecycle's hard case (a span crossing the inline <a>) and then
+// asserts the one thing that used to be missing: the panel showing the selected text,
+// above the input, on create AND on re-open of a saved mark.
+const CONTEXT_NOTE = 'note whose anchor the panel must show'
+
+// The quote block: the deepest element whose text IS the anchored string. RN-Web renders
+// <Text numberOfLines={4}> as a clamped div, so the whole string is in textContent even
+// when it is visually cut.
+async function panelQuote(page, want) {
+  return page.evaluate((w) => {
+    const norm = s => (s || '').replace(/\s+/g, ' ').trim()
+    const ta = document.querySelector('textarea')
+    const hits = [...document.querySelectorAll('div,span')]
+      .filter(e => e.offsetParent && norm(e.textContent) === norm(w))
+    const el = hits[hits.length - 1]
+    if (!el || !ta) return { found: !!el, textarea: !!ta, panelText: document.body.innerText.slice(-400) }
+    return {
+      found: true,
+      textarea: true,
+      beforeInput: !!(el.compareDocumentPosition(ta) & Node.DOCUMENT_POSITION_FOLLOWING),
+      aboveInput: el.getBoundingClientRect().bottom <= ta.getBoundingClientRect().top + 1,
+      noteValue: ta.value,
+    }
+  }, want)
+}
+
+async function openAnnPanelOnSelection(page) {
+  const selText = await page.evaluate(() => {
+    const ifr = document.querySelector('iframe')
+    const d = ifr.contentDocument, w = ifr.contentWindow
+    const p = d.querySelector('#sam-article p')
+    const link = p.querySelector('a')
+    const r = d.createRange()
+    r.setStart(p.firstChild, 0)
+    const endNode = link.nextSibling && link.nextSibling.nodeType === 3 ? link.nextSibling : link.firstChild
+    r.setEnd(endNode, Math.min(5, (endNode.nodeValue || 'xxxxx').length))
+    const sel = w.getSelection(); sel.removeAllRanges(); sel.addRange(r)
+    const t = sel.toString()
+    d.dispatchEvent(new w.MouseEvent('mouseup', { bubbles: true }))
+    return t
+  })
+  await page.evaluate(() => {
+    const ifr = document.querySelector('iframe')
+    ifr.contentDocument.getElementById('ann-btn')
+      .dispatchEvent(new ifr.contentWindow.MouseEvent('click', { bubbles: true }))
+  })
+  await page.waitForSelector('textarea', { timeout: 6000 })
+  return selText.trim()
+}
+
+async function runAnnotationSelectionContext(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 900 })
+  await page.goto(`${BASE_URL}/document/${TEXT_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+
+  const selText = await openAnnPanelOnSelection(page)
+
+  await check('ann panel: the selection under test crosses the inline link', async () =>
+    selText.includes('download page') ? null : `selection did not cross the link: "${selText}"`)
+
+  await check('ann panel: the composer shows the text being anchored, above the input', async () => {
+    const q = await panelQuote(page, selText)
+    if (!q.textarea) return 'the annotation panel did not open'
+    if (!q.found) return `the selected text is nowhere in the panel: "${q.panelText}"`
+    if (!q.beforeInput) return 'the quote renders AFTER the note input in document order'
+    if (!q.aboveInput) return 'the quote is not laid out above the note input'
+    return null
+  })
+
+  // Save it, then come back cold: on a reload `pendingSelection` is undefined, so a
+  // quote in the edit panel can only have come from the stored `exact`.
+  await page.evaluate((note) => {
+    const ta = document.querySelector('textarea')
+    Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set.call(ta, note)
+    ta.dispatchEvent(new Event('input', { bubbles: true }))
+  }, CONTEXT_NOTE)
+  await page.waitForFunction((note) => document.querySelector('textarea')?.value === note,
+    { timeout: 6000 }, CONTEXT_NOTE)
+  await page.evaluate(() => {
+    const el = [...document.querySelectorAll('*')].find(e => e.innerText && e.innerText.trim() === 'Save' && e.offsetParent)
+    el.click()
+  })
+  await page.waitForFunction(() =>
+    document.querySelector('iframe').contentDocument.querySelectorAll('mark[data-ann-id]').length > 0,
+    { timeout: 8000 })
+
+  await page.reload({ waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+  await page.waitForFunction(() =>
+    document.querySelector('iframe').contentDocument.querySelectorAll('mark[data-ann-id]').length > 0,
+    { timeout: 8000 })
+  await page.evaluate(() => {
+    const d = document.querySelector('iframe').contentDocument
+    d.querySelector('mark[data-ann-id]').dispatchEvent(new d.defaultView.MouseEvent('click', { bubbles: true }))
+  })
+  await page.waitForFunction((note) => document.querySelector('textarea')?.value === note,
+    { timeout: 8000 }, CONTEXT_NOTE).catch(() => {})
+
+  await check('ann panel: re-opening a saved mark shows its stored anchor too', async () => {
+    const q = await panelQuote(page, selText)
+    if (!q.textarea) return 'the edit panel did not open'
+    if (q.noteValue !== CONTEXT_NOTE) return `the edit panel holds note "${q.noteValue}"`
+    if (!q.found) return `the stored anchor is nowhere in the edit panel: "${q.panelText}"`
+    if (!q.beforeInput) return 'the quote renders AFTER the note input in document order'
+    if (!q.aboveInput) return 'the quote is not laid out above the note input'
+    return null
+  })
+
+  // Leave the document as it was found — the later reader-mode checks open it too.
+  await clickByText(page, e => /^[.·]{3}$/.test((e.innerText || '').trim()), 'more-menu toggle')
+  await sleep(400)
+  await clickByText(page, e => /delete/i.test((e.innerText || '').trim()) && (e.innerText || '').trim().length < 20, 'Delete item')
+  await sleep(700)
+
+  if (errors.length) fail('ann panel context: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('ann panel context: no console/HTTP errors')
 
   await page.close()
 }
@@ -1933,6 +2433,26 @@ async function main() {
       result: { document_id: MANUAL_DOC_ID },
     })
     seedHighlight({ id: MANUAL_HL_ID, documentId: MANUAL_DOC_ID, title: MANUAL_HL_TITLE, body: MANUAL_HL_BODY })
+    // Back-dated so they sort BELOW the four cards above: the feed checks that came
+    // first drag/tap the top of the list and a fixture pushing them off-screen would
+    // break them.
+    for (const [i, h] of CARD_HLS.entries()) {
+      seedHighlight({ ...h, documentId: TEXT_DOC_ID, createdAt: `2026-07-0${4 - i}T12:00:00Z` })
+    }
+    // The dates fixture: an article published in January, ingested months later.
+    seedTextDoc(DATED_DOC)
+    for (const h of DATE_HLS) {
+      seedHighlight({ id: h.id, documentId: DATED_DOC_ID, title: h.title, body: `Ingested ${h.createdAt}.`, createdAt: h.createdAt })
+    }
+    // The note link is real API traffic, not a seeded row — highlight_id has to
+    // survive create → sync → replica for the card to know anything. The anchor is a
+    // sentinel that appears in NO rendered body on purpose: the viewer marks every
+    // annotation whose `exact` it can find, highlight-card bodies included, and a stray
+    // <mark> ahead of the article would be the one the selection-lifecycle checks tap
+    // (and then delete).
+    for (const h of CARD_HLS.filter(x => x.noted)) {
+      await postAnnotation(token, { documentId: TEXT_DOC_ID, highlightId: h.id, exact: `unmatched anchor ${h.id}`, note: 'seeded note' })
+    }
 
     console.log('  launching browser...')
     browser = await launchBrowser()
@@ -1946,6 +2466,10 @@ async function main() {
     await runFigureRendering(token, deviceId)
     await runSelectionLifecycle(token, deviceId)
     await runHighlightSelectionLifecycle(token, deviceId)
+    await runAnnotationSelectionContext(token, deviceId)
+    await runDocViewerNoSwipe(token, deviceId)
+    await runFeedNoteIndicator(token, deviceId)
+    await runFeedDateStamp(token, deviceId)
     // Before runSettingsServices: that one permanently seeds a broken LLM provider,
     // which would keep the drawer dot lit for every check after it.
     // Before runSettingsServices for the same reason as runPersistFailure: both read a

@@ -48,6 +48,7 @@ export function selectHighlights(
         ...h,
         document_title: d?.title ?? '',
         document_url: d?.canonical_url ?? '',
+        document_published_at: d?.published_at ?? null,
         tags: (s.highlightTags[h.id] ?? [])
           .map((tid) => s.tags[tid])
           .filter((t): t is Tag => !!t),
@@ -83,6 +84,17 @@ export function selectAnnotationsFor(
       && (opts.documentId === undefined || a.document_id === opts.documentId)
       && (opts.highlightId === undefined || a.highlight_id === opts.highlightId))
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
+}
+
+// Which highlights carry at least one note. `Annotation.highlight_id` is already synced,
+// so the feed can mark an annotated card with no API change. A Set (not a per-card query)
+// because the feed asks this once per render for every row it draws.
+export function selectAnnotatedHighlightIds(s: Pick<IndexState, 'annotations'>): Set<string> {
+  const ids = new Set<string>()
+  for (const a of Object.values(s.annotations)) {
+    if (!a.deleted_at && a.highlight_id) ids.add(a.highlight_id)
+  }
+  return ids
 }
 
 export function selectTags(s: Pick<IndexState, 'tags'>): Tag[] {
@@ -197,6 +209,11 @@ export function useAnnotationsFor(opts: { documentId?: string; highlightId?: str
     () => selectAnnotationsFor({ annotations }, { documentId, highlightId }),
     [annotations, documentId, highlightId],
   )
+}
+
+export function useAnnotatedHighlightIds(): Set<string> {
+  const annotations = useIndex((s) => s.annotations)
+  return useMemo(() => selectAnnotatedHighlightIds({ annotations }), [annotations])
 }
 
 export function useTags(): Tag[] {

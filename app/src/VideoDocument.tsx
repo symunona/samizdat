@@ -986,6 +986,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       <AnnotationPanel
         visible={annVisible}
         mode={annMode}
+        selection={pendingSelection}
         existing={existingAnnotation}
         onSave={handleAnnSave}
         onDelete={annMode === 'edit' ? handleAnnDelete : undefined}
