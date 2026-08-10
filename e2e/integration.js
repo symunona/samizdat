@@ -36,6 +36,41 @@ const HL_ID = 'ffffffff-0000-4000-8000-000000000001'
 const SWIPE_HL_ID = 'ffffffff-0000-4000-8000-000000000002'
 const DELETE_HL_ID = 'ffffffff-0000-4000-8000-000000000003'
 const SWIPE_HL_TITLE = 'Swipe To Archive'
+// Its OWN document: a highlight seeded onto TEXT_DOC shows up as an extra card in
+// that document's viewer, which shifts which <mark> the annotation checks tap first.
+const PROV_DOC_ID = 'dddddddd-0000-4000-8000-000000000007'
+const PROV_DOC = {
+  id: PROV_DOC_ID,
+  title: 'Provenance Source',
+  canonicalUrl: 'https://example.com/provenance-source',
+  markdown: '# Provenance Source\n\nThe document a machine-written summary was made from.',
+}
+const PROV_HL_ID = 'ffffffff-0000-4000-8000-000000000009'
+const PROV_HL_TITLE = 'Provenance Card'
+const PROV_MODEL = 'qwen3:4b-instruct-ctx7k'
+// Its own prose, never HL_BODY: an annotation marks EVERY copy of its anchor text it
+// can find, so a second card repeating that body puts a stray <mark> in the feed and
+// the annotation checks tap the wrong one.
+const PROV_HL_BODY = [
+  'Summary card whose provenance the overlay has to spell out.',
+  '',
+  'The body only has to be long enough that the feed card clips it and renders the ' +
+    'More affordance the overlay opens from, so this paragraph keeps going past the ' +
+    'eight hundred character threshold with prose that appears nowhere else in the ' +
+    'fixtures. Nothing here is anchored by any annotation, nothing here repeats the ' +
+    'release-notes card, and nothing here is meant to be read: it exists so the card ' +
+    'clips, shows More, and opens the highlight overlay where the model name, the ' +
+    'provider, the token cap, the temperature and the token counts of the call that ' +
+    'wrote this summary are supposed to appear on a single dim line under the body. ' +
+    'One more paragraph of nothing in particular carries the body over the eight ' +
+    'hundred character clip threshold, which is what makes the card render the More ' +
+    'affordance this check taps to reach the overlay in the first place.',
+].join('\n')
+// The shape `pipeline.highlightProvenance` writes: what ACTUALLY served the call.
+const PROV_METADATA = JSON.stringify({
+  model: PROV_MODEL, provider: 'ollama-xayah', step: 'llm_summarize',
+  max_tokens: 512, temperature: 0.25, tokens_in: 5120, tokens_out: 180, prompt_sha: 'a3f19c2d',
+})
 const DELETE_HL_TITLE = 'Tap To Delete'
 
 // The WebView highlight card lost its swipe-triage; this one is dragged (must not
@@ -855,6 +890,60 @@ async function runSelectionLifecycle(token, deviceId) {
   await page.close()
 }
 
+// ── Provenance: what model wrote this summary, with what params ───────────────
+// A machine-written Highlight carries its provenance in `metadata` (JSON), and the
+// overlay is where it shows. The negative half is the point: a highlight whose
+// metadata is `{}` (hand-seeded, or written before provenance existed) must render
+// NO line at all rather than an empty row of separators.
+async function runHighlightProvenance(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 2400 })
+  await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction((t) => document.body.innerText.includes(t), { timeout: 20000 }, PROV_HL_TITLE)
+
+  await openOverlayFor(page, PROV_HL_TITLE)
+  await check('hl overlay: provenance names the model that wrote it', async () => {
+    const text = await page.evaluate(() => document.body.innerText)
+    for (const want of [PROV_MODEL, 'ollama-xayah', '512 tok', 't 0.25', '5.1k→180']) {
+      if (!text.includes(want)) return `the provenance line is missing "${want}"`
+    }
+    return null
+  })
+
+  await clickByText(page, e => (e.innerText || '').trim() === '✕', 'close overlay')
+  await sleep(400)
+
+  // The control: same overlay, a highlight with no provenance recorded.
+  await openOverlayFor(page, 'Go 1.21 Release')
+  await check('hl overlay: no provenance recorded renders no line', async () => {
+    const text = await page.evaluate(() => document.body.innerText)
+    if (text.includes(PROV_MODEL)) return 'the previous card\'s provenance is still on screen'
+    if (/\n\s*·/.test(text)) return 'an empty provenance line rendered for a highlight with none'
+    return null
+  })
+
+  await sleep(300)
+  await page.close()
+  if (errors.length) throw new Error(`JS errors: ${errors.join(' | ')}`)
+}
+
+// Open the "More…" overlay of ONE named card (clickByText would take whichever
+// affordance is topmost, which is a different card as fixtures accumulate).
+async function openOverlayFor(page, title) {
+  const opened = await page.evaluate((src, t) => {
+    // eslint-disable-next-line no-eval
+    const card = eval('(' + src + ')')(t)
+    if (!card) return false
+    const more = [...card.querySelectorAll('*')].find(e => (e.innerText || '').trim() === 'More…')
+    if (!more) return false
+    more.scrollIntoView({ block: 'center' })
+    more.click()
+    return true
+  }, feedCardScript, title)
+  if (!opened) throw new Error(`could not open the overlay of "${title}" ("More…" not found)`)
+  await waitViewerReady(page)
+}
+
 // ── The highlight-details overlay selection lifecycle (the hard case) ──────────
 // The overlay (src/HighlightDetail.tsx) hosts the SAME webview bundle as the doc
 // viewer, but is STORE-ONLY: its marks derive solely from useSyncStore annotations
@@ -863,10 +952,9 @@ async function runSelectionLifecycle(token, deviceId) {
 // feed → overlay → select → annotate path and assert the visible mark.
 async function openHighlightOverlay(page) {
   // The feed card clips the long body and shows a "More…" affordance; tapping it opens
-  // the selectable overlay (HighlightDetail Modal → iframe).
-  const opened = await clickByText(page, e => (e.innerText || '').trim() === 'More…', 'More… (open overlay)')
-  if (!opened) throw new Error('could not open highlight overlay ("More…" not found)')
-  await waitViewerReady(page)
+  // the selectable overlay (HighlightDetail Modal → iframe). Named, not "the first
+  // More…": other long-bodied fixtures render one too.
+  await openOverlayFor(page, 'Go 1.21 Release')
 }
 
 async function runHighlightSelectionLifecycle(token, deviceId) {
@@ -1413,6 +1501,12 @@ const CONTEXT_NOTE = 'note whose anchor the panel must show'
 // The quote block: the deepest element whose text IS the anchored string. RN-Web renders
 // <Text numberOfLines={4}> as a clamped div, so the whole string is in textContent even
 // when it is visually cut.
+// The annotation ids currently marked in the viewer.
+async function markIds(page) {
+  return page.evaluate(() => [...document.querySelector('iframe').contentDocument
+    .querySelectorAll('mark[data-ann-id]')].map(m => m.dataset.annId))
+}
+
 async function panelQuote(page, want) {
   return page.evaluate((w) => {
     const norm = s => (s || '').replace(/\s+/g, ' ').trim()
@@ -1484,23 +1578,32 @@ async function runAnnotationSelectionContext(token, deviceId) {
   }, CONTEXT_NOTE)
   await page.waitForFunction((note) => document.querySelector('textarea')?.value === note,
     { timeout: 6000 }, CONTEXT_NOTE)
+  // The marks already on screen belong to earlier checks (the viewer marks highlight-card
+  // bodies too). Remember them, so the one that APPEARS is this check's own — clicking
+  // "the first mark" opens whichever annotation renders first, a stranger's note as soon
+  // as another fixture lands above it.
+  const marksBefore = await markIds(page)
   await page.evaluate(() => {
     const el = [...document.querySelectorAll('*')].find(e => e.innerText && e.innerText.trim() === 'Save' && e.offsetParent)
     el.click()
   })
-  await page.waitForFunction(() =>
-    document.querySelector('iframe').contentDocument.querySelectorAll('mark[data-ann-id]').length > 0,
-    { timeout: 8000 })
+  await page.waitForFunction((before) => [...document.querySelector('iframe').contentDocument
+    .querySelectorAll('mark[data-ann-id]')].some(m => !before.includes(m.dataset.annId)),
+  { timeout: 8000 }, marksBefore)
+  const annId = (await markIds(page)).find(id => !marksBefore.includes(id))
 
   await page.reload({ waitUntil: 'networkidle2', timeout: 15000 })
   await waitViewerReady(page)
   await page.waitForFunction(() =>
     document.querySelector('iframe').contentDocument.querySelectorAll('mark[data-ann-id]').length > 0,
     { timeout: 8000 })
-  await page.evaluate(() => {
+  await page.waitForFunction((id) =>
+    !!document.querySelector('iframe').contentDocument.querySelector(`mark[data-ann-id="${id}"]`),
+    { timeout: 8000 }, annId)
+  await page.evaluate((id) => {
     const d = document.querySelector('iframe').contentDocument
-    d.querySelector('mark[data-ann-id]').dispatchEvent(new d.defaultView.MouseEvent('click', { bubbles: true }))
-  })
+    d.querySelector(`mark[data-ann-id="${id}"]`).dispatchEvent(new d.defaultView.MouseEvent('click', { bubbles: true }))
+  }, annId)
   await page.waitForFunction((note) => document.querySelector('textarea')?.value === note,
     { timeout: 8000 }, CONTEXT_NOTE).catch(() => {})
 
@@ -2456,6 +2559,11 @@ async function main() {
     for (const [i, h] of CARD_HLS.entries()) {
       seedHighlight({ ...h, documentId: TEXT_DOC_ID, createdAt: `2026-07-0${4 - i}T12:00:00Z` })
     }
+    seedTextDoc(PROV_DOC)
+    seedHighlight({
+      id: PROV_HL_ID, documentId: PROV_DOC_ID, title: PROV_HL_TITLE, body: PROV_HL_BODY,
+      metadata: PROV_METADATA, createdAt: '2026-06-01T12:00:00Z',
+    })
     // The dates fixture: an article published in January, ingested months later.
     seedTextDoc(DATED_DOC)
     for (const h of DATE_HLS) {
@@ -2483,6 +2591,7 @@ async function main() {
     await runFigureRendering(token, deviceId)
     await runSelectionLifecycle(token, deviceId)
     await runHighlightSelectionLifecycle(token, deviceId)
+    await runHighlightProvenance(token, deviceId)
     await runAnnotationSelectionContext(token, deviceId)
     await runDocViewerNoSwipe(token, deviceId)
     await runFeedNoteIndicator(token, deviceId)

@@ -61,3 +61,17 @@ func TestStripCredentialsLeavesUnparseableAlone(t *testing.T) {
 		t.Fatalf("mangled unparseable steps: %s", out)
 	}
 }
+
+// TestStripCredentialsKeepsMaxTokens: the completion cap contains "token", so the
+// credential name test ate it — the field never rendered in the step editor and the
+// next save dropped it. The neighbouring auth_token must still go.
+func TestStripCredentialsKeepsMaxTokens(t *testing.T) {
+	in := `[{"kind":"llm_summarize","config":{"max_tokens":512,"auth_token":"leak-me"}}]`
+	out := StripCredentials(in)
+	if strings.Contains(out, "leak-me") {
+		t.Fatalf("auth_token survived the strip: %s", out)
+	}
+	if configOf(t, out, 0)["max_tokens"] != float64(512) {
+		t.Fatalf("max_tokens was stripped as a credential: %s", out)
+	}
+}

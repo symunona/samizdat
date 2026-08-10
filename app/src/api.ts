@@ -807,6 +807,27 @@ export type Highlight = {
   deleted_at: string | null
 }
 
+// How a machine-written Highlight was made (server: pipeline.highlightProvenance).
+// Every field is optional: hand-made and pre-provenance highlights carry `{}` or
+// just `{"model": …}`, and an omitted param means the provider's own default.
+export type HighlightProvenance = {
+  model?: string
+  provider?: string
+  step?: string
+  max_tokens?: number
+  temperature?: number
+  tokens_in?: number
+  tokens_out?: number
+  prompt_sha?: string
+}
+
+// parseHighlightMetadata safely parses the Highlight.metadata JSON string. Takes
+// the field, not the row — same shape as parseMediaMetadata.
+export function parseHighlightMetadata(h: Pick<Highlight, 'metadata'>): HighlightProvenance {
+  if (!h.metadata) return {}
+  try { return JSON.parse(h.metadata) as HighlightProvenance } catch { return {} }
+}
+
 export async function fetchPipelines(serverUrl: string, token: string): Promise<Pipeline[]> {
   const res = await fetch(`${base(serverUrl)}/api/v1/pipelines`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -864,7 +885,7 @@ export type StepFieldSpec = {
   key: string
   label: string
   // 'model' renders the provider-grouped picker; the rest are plain inputs.
-  type: string      // 'string' | 'text' | 'int' | 'bool' | 'model'
+  type: string      // 'string' | 'text' | 'int' | 'float' | 'bool' | 'model'
   default?: unknown
   help?: string
 }

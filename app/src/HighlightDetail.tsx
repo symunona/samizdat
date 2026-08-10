@@ -3,13 +3,33 @@ import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native
 import { useUnistyles } from 'react-native-unistyles'
 import WebView from 'react-native-webview'
 import type { WebViewMessageEvent } from 'react-native-webview'
-import type { Annotation, HighlightWithDoc } from './api'
+import type { Annotation, HighlightProvenance, HighlightWithDoc } from './api'
+import { parseHighlightMetadata } from './api'
 import { buildDocumentHtml } from './markdownToHtml'
 import * as db from './db'
 import { useConnection } from './ConnectionContext'
 import IconButton from './IconButton'
 import AnnotationPanel from './AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from './AnnotationPanel'
+
+// provenanceLine renders "how this was made" as one line. Only fields the server
+// actually recorded appear — an omitted param means the provider's own default,
+// and printing a guess would read as a setting the user chose. No model = no line
+// (a hand-made or pre-provenance highlight says nothing about itself).
+export function provenanceLine(p: HighlightProvenance): string {
+  if (!p.model) return ''
+  const parts = [p.model]
+  if (p.provider) parts.push(p.provider)
+  if (p.max_tokens) parts.push(`${p.max_tokens} tok`)
+  if (p.temperature !== undefined) parts.push(`t ${p.temperature}`)
+  if (p.tokens_in || p.tokens_out) parts.push(`${compact(p.tokens_in)}→${compact(p.tokens_out)}`)
+  return parts.join(' · ')
+}
+
+function compact(n?: number): string {
+  if (!n) return '0'
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
 
 type ParsedMsg = {
   type: string
@@ -58,6 +78,8 @@ export default function HighlightDetail({
     () => buildDocumentHtml(item.body, '', item.linked_documents ?? {}, activeUrl ?? ''),
     [item.body, item.linked_documents, activeUrl],
   )
+
+  const provenance = useMemo(() => provenanceLine(parseHighlightMetadata(item)), [item])
 
   const { bg, fg, su, bo, ac, mu } = useMemo(() => ({
     bg: theme.colors.background, fg: theme.colors.text, su: theme.colors.surface,
@@ -205,6 +227,8 @@ export default function HighlightDetail({
               />
             )}
           </View>
+
+          {provenance ? <Text style={s.provenance} numberOfLines={2}>{provenance}</Text> : null}
         </View>
       </View>
 
@@ -249,7 +273,15 @@ function buildStyles(t: Theme) {
     modalTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '700' },
     modalCloseBtn: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
     modalCloseText: { color: t.colors.muted, fontSize: 18 },
-    body: { flex: 1, overflow: 'hidden', borderBottomLeftRadius: 16, borderBottomRightRadius: 16 },
+    body: { flex: 1, overflow: 'hidden' },
+    provenance: {
+      color: t.colors.muted,
+      fontSize: 11,
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderTopWidth: 1,
+      borderTopColor: t.colors.border,
+    },
     webView: { flex: 1, backgroundColor: t.colors.background },
   })
 }

@@ -17,16 +17,25 @@ type anthropicClient struct {
 	baseURL string
 }
 
-func (c *anthropicClient) Complete(ctx context.Context, model string, messages []Message) (reply string, u Usage, err error) {
+// anthropicDefaultMaxTokens is required by the Messages API — unlike temperature
+// there is no "omit it" option, so this IS the effective value when a caller sets none.
+const anthropicDefaultMaxTokens = 4096
+
+func (c *anthropicClient) Complete(ctx context.Context, p Params, messages []Message) (reply string, u Usage, err error) {
 	// Every return path feeds the provider-health registry (see health.go) — that
 	// is the only place "Anthropic is out of credits" ever becomes visible.
 	defer func() { Record("anthropic", "", err) }()
 
+	model := p.Model
 	if model == "" {
 		model = c.defaultModel
 	}
 	if model == "" {
 		model = "claude-haiku-4-5-20251001"
+	}
+	maxTokens := p.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = anthropicDefaultMaxTokens
 	}
 
 	type antMsg struct {
@@ -34,16 +43,17 @@ func (c *anthropicClient) Complete(ctx context.Context, model string, messages [
 		Content string `json:"content"`
 	}
 	type reqBody struct {
-		Model     string   `json:"model"`
-		MaxTokens int      `json:"max_tokens"`
-		Messages  []antMsg `json:"messages"`
+		Model       string   `json:"model"`
+		MaxTokens   int      `json:"max_tokens"`
+		Temperature *float64 `json:"temperature,omitempty"`
+		Messages    []antMsg `json:"messages"`
 	}
 
 	msgs := make([]antMsg, len(messages))
 	for i, m := range messages {
 		msgs[i] = antMsg(m)
 	}
-	body, _ := json.Marshal(reqBody{Model: model, MaxTokens: 4096, Messages: msgs})
+	body, _ := json.Marshal(reqBody{Model: model, MaxTokens: maxTokens, Temperature: p.Temp, Messages: msgs})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		trimSlash(c.baseURL)+"/v1/messages", bytes.NewReader(body))
@@ -86,6 +96,8 @@ func (c *anthropicClient) Complete(ctx context.Context, model string, messages [
 		Model:        model,
 		InputTokens:  out.Usage.InputTokens,
 		OutputTokens: out.Usage.OutputTokens,
+		MaxTokens:    maxTokens,
+		Temp:         p.Temp,
 	}
 	for _, c := range out.Content {
 		if c.Type == "text" {

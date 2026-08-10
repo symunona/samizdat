@@ -21,10 +21,11 @@ type openAICompatClient struct {
 	defaultModel string
 }
 
-func (c *openAICompatClient) Complete(ctx context.Context, model string, messages []Message) (reply string, u Usage, err error) {
+func (c *openAICompatClient) Complete(ctx context.Context, p Params, messages []Message) (reply string, u Usage, err error) {
 	// See anthropic.go: every return path feeds the provider-health registry.
 	defer func() { Record("openai_compat", c.baseURL, err) }()
 
+	model := p.Model
 	if model == "" {
 		model = c.defaultModel
 	}
@@ -37,16 +38,20 @@ func (c *openAICompatClient) Complete(ctx context.Context, model string, message
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
+	// Both knobs are omitted when unset: a local box (Ollama / LM Studio) has its own
+	// Modelfile defaults, and sending a made-up number would override them silently.
 	type reqBody struct {
-		Model    string   `json:"model"`
-		Messages []oaiMsg `json:"messages"`
+		Model       string   `json:"model"`
+		MaxTokens   int      `json:"max_tokens,omitempty"`
+		Temperature *float64 `json:"temperature,omitempty"`
+		Messages    []oaiMsg `json:"messages"`
 	}
 
 	msgs := make([]oaiMsg, len(messages))
 	for i, m := range messages {
 		msgs[i] = oaiMsg(m)
 	}
-	body, _ := json.Marshal(reqBody{Model: model, Messages: msgs})
+	body, _ := json.Marshal(reqBody{Model: model, MaxTokens: max(p.MaxTokens, 0), Temperature: p.Temp, Messages: msgs})
 
 	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -94,6 +99,8 @@ func (c *openAICompatClient) Complete(ctx context.Context, model string, message
 		Model:        model,
 		InputTokens:  out.Usage.PromptTokens,
 		OutputTokens: out.Usage.CompletionTokens,
+		MaxTokens:    max(p.MaxTokens, 0),
+		Temp:         p.Temp,
 	}
 	return out.Choices[0].Message.Content, usage, nil
 }

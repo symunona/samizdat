@@ -19,20 +19,15 @@ func init() {
 		Kind:        kindLLMAINewsletter,
 		Label:       "AI newsletter",
 		Description: "Caveman summary plus per-item highlights (models, tools, local models), deduped against recent issues.",
-		Fields: []FieldSpec{
-			{Key: "model", Label: "Model", Type: "model", Help: "Empty = the provider's default_model."},
-			{Key: "provider", Label: "Provider", Type: "string", Help: "Router provider id (`just check-llm` lists them). Empty = the configured chain."},
-			{Key: "skip_summary", Label: "Skip summary", Type: "bool", Default: false, Help: "Emit only the item highlights, no bulleted summary."},
-			{Key: "dedup_lookback_days", Label: "Dedup lookback (days)", Type: "int", Default: 7, Help: "How far back to look for already-covered items. 0 = 7."},
-			{Key: promptKey, Label: "Prompt", Type: "text", Default: aiNewsletterDefaultPrompt},
-		},
+		Fields: append(llmCommonFields(aiNewsletterDefaultPrompt),
+			FieldSpec{Key: "skip_summary", Label: "Skip summary", Type: "bool", Default: false, Help: "Emit only the item highlights, no bulleted summary."},
+			FieldSpec{Key: "dedup_lookback_days", Label: "Dedup lookback (days)", Type: "int", Default: 7, Help: "How far back to look for already-covered items. 0 = 7."},
+		),
 	}, handleLLMAINewsletter)
 }
 
 type aiNewsletterConfig struct {
-	Model    string `json:"model"`
-	Prompt   string `json:"prompt"`
-	Provider string `json:"provider"`
+	llmStepConfig
 	// SkipSummary emits only the topic highlights, no bulleted "summary" highlight.
 	SkipSummary bool `json:"skip_summary"`
 	// DedupLookbackDays: feed the model the topic highlights from this feed's issues
@@ -168,26 +163,10 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 	userMsg := renderPrompt(c.Prompt, map[string]string{
 		"title": doc.Title, "content": content, "recently_covered": seen,
 	})
-	reply, usage, err := router.CompleteRoute(ctx, llm.Route{Provider: c.Provider, Model: c.Model}, []llm.Message{
-		{Role: "user", Content: userMsg},
-	})
+	reply, meta, err := llmStepCall(ctx, q, run, kindLLMAINewsletter, c.llmStepConfig, userMsg, router)
 	if err != nil {
-		return StepResult{}, fmt.Errorf("llm_ai_newsletter: llm call: %w", err)
+		return StepResult{}, err
 	}
-
-	model := servedModel(usage, c.Model)
-
-	// Record LLM usage.
-	_ = q.InsertLLMUsage(ctx, store.InsertLLMUsageParams{
-		ID:            uuid.NewString(),
-		JobID:         ParentJobIDFromCtx(ctx),
-		PipelineRunID: &run.ID,
-		Provider:      usage.Provider,
-		Model:         model,
-		InputTokens:   int64(usage.InputTokens),
-		OutputTokens:  int64(usage.OutputTokens),
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-	})
 
 	reply = strings.TrimSpace(reply)
 	// Strip markdown fences if model wrapped response anyway.
@@ -206,7 +185,6 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	meta, _ := json.Marshal(map[string]string{"model": model})
 
 	// Build summary highlight body: bullet list + optional hero image. Strip a
 	// leading title echo so the card doesn't double the title.
@@ -231,7 +209,7 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 				Kind:          "summary",
 				Title:         doc.Title,
 				Body:          summaryBody,
-				Metadata:      string(meta),
+				Metadata:      meta,
 				CreatedAt:     now,
 				UpdatedAt:     now,
 			}); err != nil {
@@ -250,7 +228,7 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 				Kind:          h.Kind,
 				Title:         h.Title,
 				Body:          h.bodyString(),
-				Metadata:      string(meta),
+				Metadata:      meta,
 				CreatedAt:     now,
 				UpdatedAt:     now,
 			}); err != nil {

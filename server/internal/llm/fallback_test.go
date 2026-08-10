@@ -14,9 +14,9 @@ type stubClient struct {
 	callCount int
 }
 
-func (s *stubClient) Complete(_ context.Context, model string, _ []Message) (string, Usage, error) {
+func (s *stubClient) Complete(_ context.Context, p Params, _ []Message) (string, Usage, error) {
 	s.callCount++
-	s.gotModel = model
+	s.gotModel = p.Model
 	if s.err != nil {
 		return "", Usage{}, s.err
 	}
@@ -31,7 +31,7 @@ func TestFallbackFallsThroughOnTransport(t *testing.T) {
 		{client: backup, model: "claude-haiku-4-5-20251001"},
 	}}
 
-	reply, usage, err := c.Complete(context.Background(), "llama3.1", nil)
+	reply, usage, err := c.Complete(context.Background(), Params{Model: "llama3.1"}, nil)
 	if err != nil {
 		t.Fatalf("want fallback success, got err: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestFallbackPropagatesNonTransport(t *testing.T) {
 		{client: backup, model: "claude-haiku-4-5-20251001"},
 	}}
 
-	_, _, err := c.Complete(context.Background(), "llama3.1", nil)
+	_, _, err := c.Complete(context.Background(), Params{Model: "llama3.1"}, nil)
 	if !errors.Is(err, apiErr) {
 		t.Fatalf("want original 4xx error propagated, got %v", err)
 	}
@@ -76,7 +76,7 @@ func TestFallbackAllFail(t *testing.T) {
 		{client: backup, model: "claude-haiku-4-5-20251001"},
 	}}
 
-	_, _, err := c.Complete(context.Background(), "llama3.1", nil)
+	_, _, err := c.Complete(context.Background(), Params{Model: "llama3.1"}, nil)
 	if err == nil {
 		t.Fatal("want error when all providers fail")
 	}

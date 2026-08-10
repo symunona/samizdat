@@ -2,7 +2,7 @@
 created: 2026-08-10
 topic: LLM provenance on highlights — model + params that actually ran
 excerpt: One helper records what model/provider/params served an LLM step, stores it in highlights.metadata, and the app shows it under the highlight body.
-status: planned
+status: done
 ---
 
 # Highlight LLM provenance
@@ -73,9 +73,13 @@ Metadata shape (all optional on read — old rows carry `{"model": …}` only):
  "prompt_sha":"a3f19c2d","at":"2026-08-10T09:12:00Z"}
 ```
 
-`prompt_sha` = first 8 hex of sha256 of the rendered system/user template (not the article
-text) — enough to tell "this summary predates the prompt change" without storing the prompt
-on every row.
+`prompt_sha` = first 8 hex of sha256 of the prompt TEMPLATE (not the rendered message —
+that carries the article and would differ per document) — enough to tell "this summary
+predates the prompt change" without storing the prompt on every row.
+
+`provider` prefers the step's PINNED provider id: a pin never falls back, and
+`localhost:11434` says which box where the adapter's `openai_compat` says only which
+protocol. The ledger row keeps the transport name (`llm_status` aggregates spend by it).
 
 Replaces the four copy-pasted blocks.
 
@@ -117,3 +121,25 @@ Unset = today's behavior exactly.
 4. app: parse + detail footer + `float` field type.
 5. tests, lint, build, e2e, agent-browser.
 6. squash-merge after the user checks.
+
+## Outcome
+
+All six steps done. Two things only the real UI could have caught:
+
+1. **`max_tokens` matched the credential name test** (`token`), so the server stripped it
+   from every read path and the field never rendered — the knob would have been silently
+   undroppable-into-config. Fixed with an exact-match exemption on both sides
+   (`notCredentialRe` / `NOT_SECRET_KEY`), with tests.
+2. **The transport name is not an endpoint.** The first real run wrote
+   `provider: "openai_compat"`, which does not say which box. Pinned steps now record the
+   provider id.
+
+Verified: `go test ./internal/...`, `just lint`, `just e2e`, `just e2e-int` (128 checks,
+twice), and a real summarize run driven through the app — params set in the step editor,
+seen on the wire, rendered as `qwen3:4b-instruct-ctx7k · localhost:11434 · 512 tok · t 0.3
+· 5.1k→180` under the overlay body. The xayah Ollama box was unreachable and the Anthropic
+key is invalid, so the run went to a local stub rather than spending OpenRouter credit.
+
+Also fixed en route: `ann panel: re-opening a saved mark shows its stored anchor too` was
+intermittently failing on main — it clicked whichever mark rendered first. It now tracks
+the mark it just saved.

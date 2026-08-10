@@ -35,7 +35,7 @@ func TestOpenAICompatUsesSectionDefaultModel(t *testing.T) {
 	defer srv.Close()
 
 	c := NewRouter(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL + "/v1", DefaultModel: "gemma3:4b"})
-	_, usage, err := c.Complete(context.Background(), "", nil)
+	_, usage, err := c.Complete(context.Background(), Params{Model: ""}, nil)
 	if err != nil {
 		t.Fatalf("complete: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestExplicitModelBeatsDefault(t *testing.T) {
 	defer srv.Close()
 
 	c := NewRouter(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL + "/v1", DefaultModel: "gemma3:4b"})
-	if _, _, err := c.Complete(context.Background(), "qwen2.5:3b", nil); err != nil {
+	if _, _, err := c.Complete(context.Background(), Params{Model: "qwen2.5:3b"}, nil); err != nil {
 		t.Fatalf("complete: %v", err)
 	}
 	if got != "qwen2.5:3b" {
@@ -69,7 +69,7 @@ func TestOpenAICompatNoModelIsAnError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewRouter(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL + "/v1"})
-	_, _, err := c.Complete(context.Background(), "", nil)
+	_, _, err := c.Complete(context.Background(), Params{Model: ""}, nil)
 	if err == nil || !strings.Contains(err.Error(), "default_model") {
 		t.Fatalf("want a 'set llm.default_model' error, got %v", err)
 	}
@@ -109,7 +109,7 @@ func TestFallbackChainResolvesPerProviderModels(t *testing.T) {
 	stub := &stubClient{name: "anthropic"}
 	fc.entries[1].client = stub
 
-	if _, usage, err := fc.Complete(context.Background(), "", nil); err != nil {
+	if _, usage, err := fc.Complete(context.Background(), Params{Model: ""}, nil); err != nil {
 		t.Fatalf("want the fallback to serve, got %v", err)
 	} else if usage.Provider != "anthropic" {
 		t.Fatalf("served by %q, want anthropic", usage.Provider)

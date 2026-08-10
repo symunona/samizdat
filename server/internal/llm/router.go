@@ -25,11 +25,12 @@ type Router struct {
 	chain     Client
 }
 
-// Route names where a call should go. Both fields are optional: an empty Route is
-// "the configured chain, that chain's model".
+// Route names where a call should go (Provider) and how it should be made (Params).
+// Both are optional: an empty Route is "the configured chain, that chain's model,
+// that provider's own knobs".
 type Route struct {
 	Provider string // a Provider.ID, or a legacy transport name ("anthropic")
-	Model    string
+	Params   Params
 }
 
 // NewRouter discovers every provider reachable from cfg + the environment and
@@ -87,8 +88,8 @@ func (r *Router) Configured() bool { return r != nil && len(r.providers) > 0 }
 
 // Complete routes through the configured chain. This is the Client interface, so
 // every pre-Router caller keeps its exact behavior.
-func (r *Router) Complete(ctx context.Context, model string, msgs []Message) (string, Usage, error) {
-	return r.CompleteRoute(ctx, Route{Model: model}, msgs)
+func (r *Router) Complete(ctx context.Context, p Params, msgs []Message) (string, Usage, error) {
+	return r.CompleteRoute(ctx, Route{Params: p}, msgs)
 }
 
 // CompleteRoute serves one call.
@@ -106,13 +107,13 @@ func (r *Router) CompleteRoute(ctx context.Context, route Route, msgs []Message)
 			return "", Usage{}, ErrNoProvider
 		}
 		//nolint:wrapcheck // fallbackClient already prefixes "llm:"; wrapping again reads "llm: llm: …"
-		return r.chain.Complete(ctx, route.Model, msgs)
+		return r.chain.Complete(ctx, route.Params, msgs)
 	}
 	p := r.resolve(route.Provider)
 	if p == nil {
 		return "", Usage{}, fmt.Errorf("llm: unknown provider %q (have %s)", route.Provider, r.ids())
 	}
-	reply, usage, err := r.clients[p.ID].Complete(ctx, route.Model, msgs)
+	reply, usage, err := r.clients[p.ID].Complete(ctx, route.Params, msgs)
 	if err != nil {
 		// Name the pin in the error: a pinned route has no fallback, so this IS the
 		// failure the caller sees, and "which endpoint" is the first thing to know.
@@ -166,14 +167,14 @@ type fallbackClient struct {
 	entries []entry
 }
 
-func (f *fallbackClient) Complete(ctx context.Context, model string, msgs []Message) (string, Usage, error) {
+func (f *fallbackClient) Complete(ctx context.Context, p Params, msgs []Message) (string, Usage, error) {
 	var errs []error
 	for i, e := range f.entries {
-		m := model
+		ep := p
 		if e.model != "" {
-			m = e.model // provider-specific model (caller's tier model won't exist here)
+			ep.Model = e.model // provider-specific model (caller's tier model won't exist here)
 		}
-		reply, usage, err := e.client.Complete(ctx, m, msgs)
+		reply, usage, err := e.client.Complete(ctx, ep, msgs)
 		if err == nil {
 			if i > 0 {
 				logLLM.Warnf("primary failed; served by fallback provider %d (%s)", i, usage.Provider)

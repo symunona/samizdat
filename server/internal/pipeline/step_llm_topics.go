@@ -19,18 +19,8 @@ func init() {
 		Kind:        kindLLMTopics,
 		Label:       "Split into topics",
 		Description: "One highlight per newsletter section, body kept verbatim.",
-		Fields: []FieldSpec{
-			{Key: "model", Label: "Model", Type: "model", Help: "Empty = the provider's default_model."},
-			{Key: "provider", Label: "Provider", Type: "string", Help: "Router provider id (`just check-llm` lists them). Empty = the configured chain."},
-			{Key: promptKey, Label: "Prompt", Type: "text", Default: topicsDefaultPrompt},
-		},
+		Fields:      llmCommonFields(topicsDefaultPrompt),
 	}, handleLLMTopics)
-}
-
-type topicsConfig struct {
-	Model    string `json:"model"`
-	Prompt   string `json:"prompt"`
-	Provider string `json:"provider"`
 }
 
 type topicHighlight struct {
@@ -59,7 +49,7 @@ Rules:
 - Return {"highlights": []} if there are no real topics.` + promptTemplateTail
 
 func handleLLMTopics(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, router *llm.Router) (StepResult, error) {
-	var c topicsConfig
+	var c llmStepConfig
 	_ = ParseStepConfig(cfg, &c)
 	// Unset model = the configured provider's default_model (see step_llm_summarize).
 	if c.Prompt == "" {
@@ -83,25 +73,10 @@ func handleLLMTopics(ctx context.Context, q *store.Queries, run store.PipelineRu
 	}
 
 	userMsg := renderPrompt(c.Prompt, map[string]string{"title": doc.Title, "content": content})
-	reply, usage, err := router.CompleteRoute(ctx, llm.Route{Provider: c.Provider, Model: c.Model}, []llm.Message{
-		{Role: "user", Content: userMsg},
-	})
+	reply, meta, err := llmStepCall(ctx, q, run, kindLLMTopics, c, userMsg, router)
 	if err != nil {
-		return StepResult{}, fmt.Errorf("llm_topics: llm call: %w", err)
+		return StepResult{}, err
 	}
-
-	model := servedModel(usage, c.Model)
-
-	_ = q.InsertLLMUsage(ctx, store.InsertLLMUsageParams{
-		ID:            uuid.NewString(),
-		JobID:         ParentJobIDFromCtx(ctx),
-		PipelineRunID: &run.ID,
-		Provider:      usage.Provider,
-		Model:         model,
-		InputTokens:   int64(usage.InputTokens),
-		OutputTokens:  int64(usage.OutputTokens),
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-	})
 
 	reply = strings.TrimSpace(reply)
 	if strings.HasPrefix(reply, "```") {
@@ -119,7 +94,6 @@ func handleLLMTopics(ctx context.Context, q *store.Queries, run store.PipelineRu
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	meta, _ := json.Marshal(map[string]string{"model": model})
 
 	if err := InsertTx(ctx, q, func(q *store.Queries) error {
 		for _, h := range parsed.Highlights {
@@ -135,7 +109,7 @@ func handleLLMTopics(ctx context.Context, q *store.Queries, run store.PipelineRu
 				Kind:          "topic",
 				Title:         title,
 				Body:          body,
-				Metadata:      string(meta),
+				Metadata:      meta,
 				CreatedAt:     now,
 				UpdatedAt:     now,
 			}); err != nil {

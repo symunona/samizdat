@@ -19,18 +19,8 @@ func init() {
 		Kind:        kindLLM321Newsletter,
 		Label:       "3-2-1 newsletter",
 		Description: "Extracts James Clear's 3 ideas, 2 quotes and 1 question as highlights.",
-		Fields: []FieldSpec{
-			{Key: "model", Label: "Model", Type: "model", Help: "Empty = the provider's default_model."},
-			{Key: "provider", Label: "Provider", Type: "string", Help: "Router provider id (`just check-llm` lists them). Empty = the configured chain."},
-			{Key: promptKey, Label: "Prompt", Type: "text", Default: nl321DefaultPrompt},
-		},
+		Fields:      llmCommonFields(nl321DefaultPrompt),
 	}, handleLLM321Newsletter)
-}
-
-type nl321Config struct {
-	Model    string `json:"model"`
-	Prompt   string `json:"prompt"`
-	Provider string `json:"provider"`
 }
 
 type nl321Highlight struct {
@@ -57,7 +47,7 @@ If the newsletter has a different structure, extract as many as exist. Preserve 
 Return [] if no highlights found.` + promptTemplateTail
 
 func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, router *llm.Router) (StepResult, error) {
-	var c nl321Config
+	var c llmStepConfig
 	_ = ParseStepConfig(cfg, &c)
 	// Unset model = the configured provider's default_model (see step_llm_summarize).
 	if c.Prompt == "" {
@@ -79,25 +69,10 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 	}
 
 	userMsg := renderPrompt(c.Prompt, map[string]string{"title": doc.Title, "content": content})
-	reply, usage, err := router.CompleteRoute(ctx, llm.Route{Provider: c.Provider, Model: c.Model}, []llm.Message{
-		{Role: "user", Content: userMsg},
-	})
+	reply, meta, err := llmStepCall(ctx, q, run, kindLLM321Newsletter, c, userMsg, router)
 	if err != nil {
-		return StepResult{}, fmt.Errorf("llm_321_newsletter: llm call: %w", err)
+		return StepResult{}, err
 	}
-
-	model := servedModel(usage, c.Model)
-
-	_ = q.InsertLLMUsage(ctx, store.InsertLLMUsageParams{
-		ID:            uuid.NewString(),
-		JobID:         ParentJobIDFromCtx(ctx),
-		PipelineRunID: &run.ID,
-		Provider:      usage.Provider,
-		Model:         model,
-		InputTokens:   int64(usage.InputTokens),
-		OutputTokens:  int64(usage.OutputTokens),
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-	})
 
 	reply = strings.TrimSpace(reply)
 	if strings.HasPrefix(reply, "```") {
@@ -115,7 +90,6 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	meta, _ := json.Marshal(map[string]string{"model": model})
 
 	if err := InsertTx(ctx, q, func(q *store.Queries) error {
 		for _, h := range parsed.Highlights {
@@ -137,7 +111,7 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 				Kind:          h.Kind,
 				Title:         h.Title,
 				Body:          h.Body,
-				Metadata:      string(meta),
+				Metadata:      meta,
 				CreatedAt:     now,
 				UpdatedAt:     now,
 			}); err != nil {

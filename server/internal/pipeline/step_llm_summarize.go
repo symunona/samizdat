@@ -19,11 +19,7 @@ func init() {
 		Kind:        kindLLMSummarize,
 		Label:       "Summarize",
 		Description: "One caveman-style bullet summary highlight per document.",
-		Fields: []FieldSpec{
-			{Key: "model", Label: "Model", Type: "model", Help: "Empty = the provider's default_model."},
-			{Key: "provider", Label: "Provider", Type: "string", Help: "Router provider id (`just check-llm` lists them). Empty = the configured chain."},
-			{Key: promptKey, Label: "Prompt", Type: "text", Default: summarizeDefaultPrompt},
-		},
+		Fields:      llmCommonFields(summarizeDefaultPrompt),
 	}, handleLLMSummarize)
 }
 
@@ -34,14 +30,8 @@ const notParseableToken = "__NOT_PARSEABLE__"
 
 const summarizeDefaultPrompt = "Summarize as caveman. Rules: drop all articles (a/an/the), drop filler words (just/really/basically/actually/simply/notably), drop hedges (seems/appears/might), no pleasantries, no intro, no outro. Fragments OK. Short synonyms (big not extensive, fix not implement a solution). Max 3 bullets. Pattern: [thing] [action] [why it matters]. Bold the key topic/name of each bullet: **keyword** where it naturally lands — one bold per bullet. Boring or thin = one line. Never start with 'This article'. NO heading and NO title line — do not repeat or restate the article title; start straight with the first bullet (the title is shown separately). IMPORTANT: if content is empty, image-only, or has no meaningful text to summarize, return exactly empty string — nothing else. If the input is NOT a real article — a bot check ('checking your browser', 'verify you are human'), a login or paywall wall, a CAPTCHA, or an error/teaser stub with no article body — respond with EXACTLY " + notParseableToken + " on a single line and nothing else." + promptTemplateTail
 
-type llmSummarizeConfig struct {
-	Model    string `json:"model"`
-	Prompt   string `json:"prompt"`
-	Provider string `json:"provider"` // optional: pin a Router provider (no fallback)
-}
-
 func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.PipelineRun, cfg json.RawMessage, router *llm.Router) (StepResult, error) {
-	var c llmSummarizeConfig
+	var c llmStepConfig
 	_ = ParseStepConfig(cfg, &c)
 	// No model default here: model names are provider-specific, so an unset model
 	// resolves to the configured provider's default_model inside the client (a
@@ -65,26 +55,10 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	}
 
 	userMsg := renderPrompt(c.Prompt, map[string]string{"title": doc.Title, "content": content})
-	reply, usage, err := router.CompleteRoute(ctx, llm.Route{Provider: c.Provider, Model: c.Model}, []llm.Message{
-		{Role: "user", Content: userMsg},
-	})
+	reply, meta, err := llmStepCall(ctx, q, run, kindLLMSummarize, c, userMsg, router)
 	if err != nil {
-		return StepResult{}, fmt.Errorf("llm_summarize: llm call: %w", err)
+		return StepResult{}, err
 	}
-
-	model := servedModel(usage, c.Model)
-
-	// Record LLM usage regardless of whether we use the reply.
-	_ = q.InsertLLMUsage(ctx, store.InsertLLMUsageParams{
-		ID:            uuid.NewString(),
-		JobID:         ParentJobIDFromCtx(ctx),
-		PipelineRunID: &run.ID,
-		Provider:      usage.Provider,
-		Model:         model,
-		InputTokens:   int64(usage.InputTokens),
-		OutputTokens:  int64(usage.OutputTokens),
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-	})
 
 	reply = strings.TrimSpace(reply)
 
@@ -111,7 +85,6 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	meta, _ := json.Marshal(map[string]string{"model": model})
 
 	// Prepend hero image if one has been cached for this document.
 	body := reply
@@ -132,7 +105,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 			Kind:          "summary",
 			Title:         doc.Title,
 			Body:          body,
-			Metadata:      string(meta),
+			Metadata:      meta,
 			CreatedAt:     now,
 			UpdatedAt:     now,
 		})

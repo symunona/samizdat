@@ -256,7 +256,7 @@ VALUES ('${q(id)}','${q(name)}','${q(color)}','${now}','${now}',1,NULL);`
 // `createdAt` overrides the ingest timestamp — the feed's sort key. `updated_at` stays
 // now regardless, or a back-dated row would sit below the sync cursor and never reach
 // the client.
-export function seedHighlight({ id, documentId, title, body, pinned = 0, createdAt = null }) {
+export function seedHighlight({ id, documentId, title, body, pinned = 0, createdAt = null, metadata = '{}' }) {
   const now = new Date().toISOString()
   const born = createdAt || now
   const q = s => s.replace(/'/g, "''")
@@ -268,7 +268,7 @@ VALUES ('${q(pipeId)}','seed',1,'on_new_document','{}','[]','${now}','${now}',1,
 INSERT OR IGNORE INTO pipeline_runs (id,pipeline_id,document_id,job_id,document_content_hash,status,step_index,state,superseded_at,created_at,updated_at,rev,deleted_at)
 VALUES ('${q(runId)}','${q(pipeId)}','${q(documentId)}',NULL,'','done',0,'{}',NULL,'${now}','${now}',1,NULL);
 INSERT OR REPLACE INTO highlights (id,document_id,pipeline_run_id,kind,title,body,metadata,pinned,archived_at,created_at,updated_at,rev,deleted_at)
-VALUES ('${q(id)}','${q(documentId)}','${q(runId)}','item','${q(title)}','${q(body)}','{}',${pinned ? 1 : 0},NULL,'${q(born)}','${now}',1,NULL);
+VALUES ('${q(id)}','${q(documentId)}','${q(runId)}','item','${q(title)}','${q(body)}','${q(metadata)}',${pinned ? 1 : 0},NULL,'${q(born)}','${now}',1,NULL);
 `
   const f = '/tmp/samizdat-test/seed-highlight.sql'
   fs.writeFileSync(f, sql)

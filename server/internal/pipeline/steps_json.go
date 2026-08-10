@@ -67,6 +67,18 @@ func encodeSteps(steps []stepMap, fallback string) string {
 // an inert secret must still never reach a client.
 var credentialKeyRe = regexp.MustCompile(`(?i)api[_-]?key|secret|token|password|passphrase`)
 
+// notCredentialRe carves ONE key back out: `max_tokens` is a completion cap that
+// happens to contain "token", so the name test ate it — the field never rendered
+// in the step editor and the next save dropped it. An exact-match exception keeps
+// the guard as broad as it should be for everything else; widen it to a list only
+// when a second such key exists.
+var notCredentialRe = regexp.MustCompile(`(?i)^max_tokens$`)
+
+// isCredentialKey reports whether a config key must never reach a client.
+func isCredentialKey(k string) bool {
+	return credentialKeyRe.MatchString(k) && !notCredentialRe.MatchString(k)
+}
+
 // StripCredentials removes every credential-looking config key from a steps JSON
 // string, for responses. Keyed on the key NAME rather than on the step catalog,
 // so it also covers a legacy or hand-added key no kind declares.
@@ -86,7 +98,7 @@ func StripCredentials(stepsJSON string) string {
 		}
 		dropped := false
 		for k := range cfg {
-			if credentialKeyRe.MatchString(k) {
+			if isCredentialKey(k) {
 				delete(cfg, k)
 				dropped = true
 			}

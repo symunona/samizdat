@@ -164,7 +164,7 @@ func (r *Router) fillCloudCredits(ctx context.Context, p *Provider, res *ProbeRe
 		return
 	}
 	if deep {
-		_, _, err := p.client().Complete(ctx, "", []Message{{Role: "user", Content: "hi"}})
+		_, _, err := p.client().Complete(ctx, Params{}, []Message{{Role: "user", Content: "hi"}})
 		if err == nil {
 			res.Credits = CreditsOK
 			res.CreditsNote = "verified by 1-token ping"

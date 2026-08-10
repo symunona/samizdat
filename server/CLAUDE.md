@@ -398,7 +398,27 @@ DB row.
   `claude-haiku-4-5-20251001`; `openai_compat` errors naming `llm.default_model` — a local
   box serves only what was pulled onto it). Never re-introduce a provider-specific default
   in a step. `Usage.Model` reports what actually ran, and steps write that (via
-  `pipeline.servedModel`) to `llm_usages` and to `metadata.model`.
+  `pipeline.servedModel`) to `llm_usages` and to the Highlight's provenance.
+- **Params travel with the route and come back as what was SENT.** `llm.Params`
+  (`model`, `max_tokens`, `temperature`) rides `Route` into the client; each adapter
+  echoes the *effective* values in `Usage`. Unset stays unset — a local box has its own
+  Modelfile defaults and an invented number would silently override them — except
+  Anthropic's mandatory `max_tokens`, which reports the 4096 it really sends.
+- **How a Highlight was made lives in `highlights.metadata`, never in `body`.** Body is
+  markdown that syncs, exports to the vault and the user edits; provenance appended there
+  duplicates on regenerate and is lost on edit. `pipeline.llmStepCall` is the ONE path
+  from a step to the LLM: it routes, writes the `llm_usages` ledger row and returns the
+  provenance JSON (`model`, `provider`, `step`, `max_tokens`, `temperature`,
+  `tokens_in/out`, `prompt_sha` — a fingerprint of the prompt TEMPLATE, so a summary can
+  be dated against a prompt change). Steps differ in how they parse a reply, never in how
+  they call or account for it. The metadata's `provider` prefers the step's PINNED
+  provider id (a pin never falls back, and `localhost:11434` says which box where
+  `openai_compat` says only which protocol); the ledger keeps the transport name, which
+  is what `llm_status` aggregates spend by.
+- **`max_tokens` is exempt from the credential name test** (`notCredentialRe` in
+  `steps_json.go`, mirrored by `NOT_SECRET_KEY` in the app's `pipelines.tsx`). It contains
+  "token", so `StripCredentials` ate it: the field never rendered in the step editor and
+  the next save dropped it. Keep the two exemptions in step.
 - **Ollama's context defaults to 4096 tokens and truncates silently**; the summarize step
   feeds up to 12k chars. The OpenAI-compatible endpoint has no `num_ctx`, so bake it into
   a model variant (`FROM qwen3:4b-instruct` + `PARAMETER num_ctx 7168` → `ollama create`)

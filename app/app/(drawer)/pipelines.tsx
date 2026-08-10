@@ -91,7 +91,7 @@ function summarizeSteps(stepsJson: string): string {
 // describes the keys a kind knows about. Keys the catalog does not describe are
 // still editable — a pipeline row can carry anything.
 
-type FieldType = 'string' | 'text' | 'int' | 'bool' | 'json' | 'model'
+type FieldType = 'string' | 'text' | 'int' | 'float' | 'bool' | 'json' | 'model'
 
 type StepFieldRow = {
   key: string
@@ -111,8 +111,12 @@ type StepDraft = { kind: string; label: string; description: string; rows: StepF
 // as the second lock — a leaked credential must not become a rendered, re-savable
 // input, and the raw-JSON view is rebuilt through it too.
 const SECRET_KEY = /api[_-]?key|secret|token|password|passphrase/i
+// `max_tokens` is a completion cap that happens to contain "token" — without this
+// exception the field never renders and the next save drops it. Mirrors
+// `notCredentialRe` in the server's steps_json.go; keep the two in step.
+const NOT_SECRET_KEY = /^max_tokens$/i
 function isSecretField(key: string): boolean {
-  return SECRET_KEY.test(key)
+  return SECRET_KEY.test(key) && !NOT_SECRET_KEY.test(key)
 }
 
 // The key is always shown, so a label that is only the key re-cased ("base_url" →
@@ -122,14 +126,14 @@ function addsMeaning(label: string, key: string): boolean {
   return norm(label) !== norm(key)
 }
 
-const SPEC_TYPES: FieldType[] = ['text', 'int', 'bool', 'string', 'model']
+const SPEC_TYPES: FieldType[] = ['text', 'int', 'float', 'bool', 'string', 'model']
 
 function fieldType(spec: StepFieldSpec | undefined, value: unknown): FieldType {
   if (spec && (SPEC_TYPES as string[]).includes(spec.type)) {
     return spec.type as FieldType
   }
   if (typeof value === 'boolean') return 'bool'
-  if (typeof value === 'number') return 'int'
+  if (typeof value === 'number') return Number.isInteger(value) ? 'int' : 'float'
   if (value !== null && typeof value === 'object') return 'json'
   return typeof value === 'string' && value.length > 80 ? 'text' : 'string'
 }
@@ -146,10 +150,10 @@ function toDraftValue(v: unknown, type: FieldType): string | boolean {
 function fromDraftValue(row: StepFieldRow): unknown {
   if (row.type === 'bool') return row.value === true
   const text = String(row.value)
-  if (row.type === 'int') {
+  if (row.type === 'int' || row.type === 'float') {
     const n = Number(text)
     if (!Number.isFinite(n)) throw new Error(`${row.label}: "${text}" is not a number`)
-    return Math.trunc(n)
+    return row.type === 'int' ? Math.trunc(n) : n
   }
   if (row.type === 'json') {
     try { return JSON.parse(text) } catch { throw new Error(`${row.label}: invalid JSON`) }
@@ -283,7 +287,7 @@ function StepFieldEditor({ step, row, onChange, onPickModel }: {
             placeholderTextColor={theme.colors.placeholder}
             multiline={multiline}
             numberOfLines={multiline ? lines : 1}
-            inputMode={row.type === 'int' ? 'numeric' : 'text'}
+            inputMode={row.type === 'int' ? 'numeric' : row.type === 'float' ? 'decimal' : 'text'}
             autoCapitalize="none"
             autoCorrect={false}
           />

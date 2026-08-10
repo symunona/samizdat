@@ -192,7 +192,7 @@ Covered by `just e2e` (`runErrorStateUiCheck` + `seedDeadJob` in the harness).
 ## Pipeline step editor (`app/(drawer)/pipelines.tsx`)
 
 A step is `{kind, config}` free-form JSON; `GET /api/v1/pipeline-steps` (`fetchStepCatalog`)
-describes the keys each kind knows — label, type (`string|text|int|bool`), default, help.
+describes the keys each kind knows — label, type (`string|text|int|float|bool`), default, help.
 The editor renders the union of *catalog fields* and *config keys*, so a key the catalog
 doesn't describe is still visible and editable; a `text` field (the prompt) opens at ~4
 lines with an expand toggle. Save serializes the drafts through `putPipelineSteps` (steps
@@ -202,6 +202,10 @@ go as a JSON **string** — that's the column).
   keys of `pipeline.PipelineFilter`; anything else is printed verbatim as `key: value`. The
   old code checked `feed_id`/`tag`/`domain`/`url_pattern` — none of which exist — so every
   pipeline read "all documents", the maximally wrong answer for a feed-scoped pipeline.
+- **`max_tokens` is not a credential**, even though `SECRET_KEY` matches "token" —
+  `NOT_SECRET_KEY` carves it back out. Without the exemption the field never rendered and
+  the next save dropped it (the server strips the same name on read; the two exceptions
+  must stay in step).
 - **A credential must never enter the DOM.** No step kind declares one any more (the LLM
   Router owns endpoints and keys) and the server strips every credential-*named* key from
   each read path, but the screen ALSO drops anything matching `SECRET_KEY` — including in
