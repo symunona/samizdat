@@ -13,6 +13,7 @@
 package export
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -31,16 +32,15 @@ import (
 )
 
 const (
-	epoch      = "1970-01-01T00:00:00Z"
-	tickEvery  = 15 * time.Second
-	indexName  = "_index.md"
-	docsSub    = "documents"
-	annsSub    = "annotations"
-	assetsSub  = "assets"
-	docMark    = "samizdat: export"            // frontmatter line on every doc note
-	annMark    = "samizdat: export-annotation" // frontmatter line on every annotation note
-	indexMark  = "samizdat: export-index"      // frontmatter line on the index note
-	overlapSec = 1                             // re-query window; RFC3339 is second-resolution
+	epoch     = "1970-01-01T00:00:00Z"
+	tickEvery = 15 * time.Second
+	indexName = "_index.md"
+	docsSub   = "documents"
+	annsSub   = "annotations"
+	assetsSub = "assets"
+	docMark   = "samizdat: export"            // frontmatter line on every doc note
+	annMark   = "samizdat: export-annotation" // frontmatter line on every annotation note
+	indexMark = "samizdat: export-index"      // frontmatter line on the index note
 
 	linkWikilink = "wikilink" // ![[<file>]] — Obsidian resolves by name, path-free
 	linkRelative = "relative" // ![alt](../assets/<file>) — plain-markdown portable
@@ -232,8 +232,13 @@ func (e *Exporter) sweep(ctx context.Context) {
 
 	e.writeIndex()
 
+	// Cursor is the newest timestamp seen, NOT one second before it: the query
+	// filters on `updated_at >= cursor`, so a row committed in that same
+	// (second-resolution) timestamp is re-selected anyway. Rolling the cursor
+	// back made every sweep re-select — and rewrite — the newest notes forever,
+	// i.e. a file-change event on every tick for anything watching the vault.
 	e.mu.Lock()
-	e.cursor = overlap(maxTs)
+	e.cursor = maxTs
 	e.lastRun = time.Now().UTC().Format(time.RFC3339)
 	if !failed {
 		e.lastErr = ""
@@ -308,15 +313,26 @@ func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 }
 
 // writeNote writes body to dir/rel, creating grouping subfolders as needed.
+// A byte-identical file is left alone: rewriting it would bump its mtime and
+// wake every file watcher on the vault (Syncthing, Obsidian) for no change.
 func writeNote(dir, rel string, body []byte) error {
 	path := filepath.Join(dir, rel)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 	}
+	if unchanged(path, body) {
+		return nil
+	}
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
+}
+
+// unchanged reports whether path already holds exactly body.
+func unchanged(path string, body []byte) bool {
+	old, err := os.ReadFile(path)
+	return err == nil && bytes.Equal(old, body)
 }
 
 // removeIfMoved deletes the note at its previous path when grouping (or a
@@ -522,7 +538,10 @@ func (e *Exporter) writeIndex() {
 		// Obsidian wikilinks resolve by basename across folders.
 		fmt.Fprintf(&b, "- [[%s]]\n", strings.TrimSuffix(relBase(rel), ".md"))
 	}
-	_ = os.WriteFile(filepath.Join(e.dir, indexName), []byte(b.String()), 0o644)
+	path := filepath.Join(e.dir, indexName)
+	if body := []byte(b.String()); !unchanged(path, body) {
+		_ = os.WriteFile(path, body, 0o644)
+	}
 }
 
 func (e *Exporter) setErr(err error) {
@@ -763,16 +782,6 @@ func msToTS(ms int64) string {
 		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
 	}
 	return fmt.Sprintf("%d:%02d", m, s)
-}
-
-// overlap steps the cursor back one second so a row committed in the same
-// (second-resolution) timestamp as maxTs isn't skipped; re-export is idempotent.
-func overlap(maxTs string) string {
-	t, err := time.Parse(time.RFC3339, maxTs)
-	if err != nil {
-		return maxTs
-	}
-	return t.Add(-overlapSec * time.Second).UTC().Format(time.RFC3339)
 }
 
 // ourFileID reads a .md file's frontmatter and returns its samizdat id, or "" if

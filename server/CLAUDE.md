@@ -244,6 +244,25 @@ resolves by name and notes survive being moved. Alt text rides as the wikilink a
 (`![[f.png|caption]]`) — `wikiAlias` strips `|`/brackets and drops a bare number,
 which Obsidian would read as a width.
 
+### An idle export sweep must touch NOTHING on disk
+
+The exporter ticks every 15s and something *watches* the vault — Syncthing on this box,
+Obsidian on the phone — so a rewrite is a sync event even when the bytes are identical.
+Two rules keep an idle sweep silent, and both are load-bearing:
+
+- **The cursor sits AT the newest `updated_at`, never before it.** `ListDocumentsSince`
+  filters `updated_at >= cursor`, so a row committed in that same (second-resolution)
+  timestamp is re-selected anyway — the old `overlap()` that rolled the cursor back one
+  second only guaranteed the newest doc was re-selected and re-exported *forever*, one
+  file-change event per tick on a DB nobody had touched in weeks.
+- **`writeNote` / `writeIndex` skip a byte-identical file** (`unchanged`). This is the
+  backstop: any future re-export of an unchanged row costs an mtime bump otherwise, and
+  `_index.md` is rewritten on every sweep that does any work at all.
+
+`GET /api/v1/export/stats` calls `Refresh` (a full sweep) on every request, so the same
+rules are what keep the Settings card from churning the vault each time it paints.
+Guarded by `TestSweepIsQuietWhenNothingChanged`.
+
 ## Document media types
 - **`media_type = 'article'`** — default. HTML scrape via Playwright + Trafilatura.
 - **`media_type = 'pdf'`** — PDF ingest via plain HTTP + pure-Go text extraction

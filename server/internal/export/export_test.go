@@ -1,8 +1,14 @@
 package export
 
 import (
+	"context"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/symunona/samizdat/server/internal/store"
 )
@@ -85,4 +91,86 @@ func TestRenderDocHero(t *testing.T) {
 	if !strings.Contains(out, "![[a1.jpg]]") {
 		t.Errorf("hero embed missing:\n%s", out)
 	}
+}
+
+// TestSweepIsQuietWhenNothingChanged is the regression guard for the export
+// churn bug: the cursor used to be rolled one second BEFORE the newest row, so
+// `updated_at >= cursor` re-selected and rewrote the newest notes on every
+// 15s tick — a file-change event for Syncthing/Obsidian forever, on an idle DB.
+// A second sweep with no DB change must touch nothing on disk.
+func TestSweepIsQuietWhenNothingChanged(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	q := store.New(db)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := q.UpsertDocument(ctx, store.UpsertDocumentParams{
+		ID: "doc-1", CanonicalUrl: "https://a.example/1", Title: "Doc One",
+		Markdown: "hello", FetchedAt: now, MediaType: "article",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	e := New(q, dir, t.TempDir(), "none", linkWikilink)
+	for _, sub := range []string{docsSub, annsSub, assetsSub} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.sweep(ctx)
+
+	before := mtimes(t, dir)
+	if len(before) == 0 {
+		t.Fatal("first sweep wrote nothing")
+	}
+	// mtime has second resolution on some filesystems; make a rewrite visible.
+	past := time.Now().Add(-2 * time.Hour)
+	for path := range before {
+		if err := os.Chtimes(path, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before = mtimes(t, dir)
+
+	// The cursor must sit AT the newest row, not one second before it: with the
+	// `>=` filter, a rolled-back cursor re-selects that row on every tick.
+	if e.cursor != now {
+		t.Errorf("cursor = %q, want %q (the newest updated_at)", e.cursor, now)
+	}
+
+	e.sweep(ctx)
+
+	for path, ts := range mtimes(t, dir) {
+		if old, ok := before[path]; !ok {
+			t.Errorf("second sweep created %s", path)
+		} else if !ts.Equal(old) {
+			t.Errorf("second sweep rewrote %s (mtime %v → %v) with no DB change", path, old, ts)
+		}
+	}
+}
+
+// mtimes maps every file under root to its modification time.
+func mtimes(t *testing.T, root string) map[string]time.Time {
+	t.Helper()
+	out := map[string]time.Time{}
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", path, err)
+		}
+		out[path] = info.ModTime()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
