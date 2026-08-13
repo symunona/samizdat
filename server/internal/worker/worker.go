@@ -66,6 +66,7 @@ func (w *Worker) Start(ctx context.Context) {
 			case <-t.C:
 				w.browser.HealthCheck()
 				w.schedulePollFeeds(ctx)
+				w.sweepAutoArchive(ctx)
 				w.resetStuckJobs(ctx)
 			}
 		}
@@ -160,6 +161,38 @@ func (w *Worker) schedulePollFeeds(ctx context.Context) {
 			logScheduler.Errorf("bump next_run_at for sub %s: %v", sub.ID, err)
 		}
 		logScheduler.Printf("enqueued poll_feed for feed %s (sub %s)", sub.FeedID, sub.ID)
+	}
+}
+
+// AutoArchiveSettingKey names the opt-in "archive highlights older than
+// autoArchiveAge" preference (server_settings). The API serves and patches it;
+// the sweep below is its only reader.
+const AutoArchiveSettingKey = "auto_archive_enabled"
+
+// One month, the only age the preference offers — the flag says so in the app.
+const autoArchiveAge = 30 * 24 * time.Hour
+
+// sweepAutoArchive archives every unpinned Highlight older than autoArchiveAge.
+// Pinned is the user's explicit keep, so it survives; each archived row gets
+// rev + 1, which is what carries the change to the phone.
+func (w *Worker) sweepAutoArchive(ctx context.Context) {
+	if val, err := w.q.GetSetting(ctx, AutoArchiveSettingKey); err != nil || val != "true" {
+		return
+	}
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339)
+	cutoff := now.Add(-autoArchiveAge).Format(time.RFC3339)
+	n, err := w.q.ArchiveOldHighlights(ctx, store.ArchiveOldHighlightsParams{
+		ArchivedAt: &nowStr,
+		UpdatedAt:  nowStr,
+		CreatedAt:  cutoff,
+	})
+	if err != nil {
+		logScheduler.Errorf("auto-archive sweep: %v", err)
+		return
+	}
+	if n > 0 {
+		logScheduler.Printf("auto-archived %d highlights older than %s", n, cutoff)
 	}
 }
 

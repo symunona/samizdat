@@ -40,7 +40,11 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 # model gets whichever provider serves it its own `default_model` — never the other's.
 # [llm]
 # provider      = "openai_compat"
-# base_url      = "http://100.x.y.z:11434/v1"  # a tailnet box works the same as localhost
+# base_url      = "http://box.your-tailnet.ts.net:11434/v1"   # a tailnet box works the same as
+#                                              # localhost — but name it, don't use its IP: the
+#                                              # provider id is host:port, so the address here is
+#                                              # also what pipeline steps pin, and a rebuilt box
+#                                              # gets a new IP.
 # default_model = "qwen3:4b-instruct-ctx7k"
 #
 # [[llm.fallback]]

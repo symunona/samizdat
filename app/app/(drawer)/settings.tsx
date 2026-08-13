@@ -13,6 +13,7 @@ import { llmErrorLabel, llmProviderLabel } from '../../src/llmStatus'
 import type { LLMProvider } from '../../src/llmStatus'
 import { probeLLMProviders, probeSummary } from '../../src/llmModels'
 import type { LLMProbeResult } from '../../src/llmModels'
+import Accordion from '../../src/Accordion'
 import { clearConnection, removeServerUrl } from '../../src/storage'
 import { loadUrlLastUsedMap } from '../../src/prefs'
 import { useConnection } from '../../src/ConnectionContext'
@@ -262,18 +263,22 @@ export default function SettingsScreen() {
     else setThresholdInput(String(pageThreshold))
   }, [thresholdInput, pageThreshold, setPageThreshold])
 
-  async function handleTogglePolling(enabled: boolean) {
+  // One patch path for every server-side boolean preference — the endpoint merges
+  // only the keys present, so a partial patch is the whole update.
+  const patchSetting = useCallback(async (patch: Partial<AppSettings>) => {
     if (!activeUrl || !token) return
     setSettingsLoading(true)
     try {
-      const s = await updateSettings(activeUrl, token, { polling_enabled: enabled })
-      setSettings(s)
+      setSettings(await updateSettings(activeUrl, token, patch))
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Failed to update setting', 'error')
     } finally {
       setSettingsLoading(false)
     }
-  }
+  }, [activeUrl, token, toast])
+
+  const handleTogglePolling = useCallback((enabled: boolean) => patchSetting({ polling_enabled: enabled }), [patchSetting])
+  const handleToggleAutoArchive = useCallback((enabled: boolean) => patchSetting({ auto_archive_enabled: enabled }), [patchSetting])
 
   const saveLangPrefs = useCallback(async (next: LanguagePrefs) => {
     if (!activeUrl || !token) return
@@ -386,6 +391,22 @@ export default function SettingsScreen() {
     }
   }
 
+  // A broken routing-chain provider leads the list AND is what the collapsed card
+  // says — that is the row you have to act on. Otherwise the primary leads: the
+  // one thing worth knowing without opening the card is where jobs go by default.
+  const llmProviders = useMemo(() => {
+    const rank = (p: LLMProvider) => {
+      const routed = p.role === 'primary' || p.role === 'fallback'
+      if (routed && p.status === 'error') return 0
+      if (p.role === 'primary') return 1
+      if (p.role === 'fallback') return 2
+      if (p.role === 'retired') return 4
+      return 3
+    }
+    return [...(llmStatus?.providers ?? [])].sort((a, b) => rank(a) - rank(b))
+  }, [llmStatus])
+  const llmLead = llmProviders[0]
+
   const dotColor = status === 'connected' ? theme.colors.online : status === 'disconnected' ? theme.colors.error : theme.colors.placeholder
   const extDotColor = extStatus === 'connected' ? theme.colors.online : extStatus === 'unpaired' ? theme.colors.accent : theme.colors.placeholder
 
@@ -446,16 +467,36 @@ export default function SettingsScreen() {
     }
   }
 
+  // Spend is keyed by provider NAME (all llm_usages records), so every
+  // openai_compat row would otherwise claim the same calls — including a
+  // discovered box nothing has ever routed to. Only a row that is (or was) in the
+  // routing chain can own that history.
+  const providerUsage = (p: LLMProvider) =>
+    p.role === 'available' ? undefined : llmStatus?.usage.find((u) => u.provider === p.provider)
+
+  const providerColor = (p: LLMProvider) =>
+    p.status === 'ok' ? theme.colors.online : p.status === 'error' ? theme.colors.error : theme.colors.placeholder
+
+  // The one line a row (and the collapsed card's summary) says about a provider.
+  const providerStatusText = (p: LLMProvider) =>
+    p.status === 'error'
+      ? llmErrorLabel(p)
+      : p.status === 'ok'
+        ? `Working${p.last_ok_at ? ` — last call ${formatRelative(p.last_ok_at)}` : ''}`
+        : !p.has_key
+          ? 'No API key configured'
+          // Health tracking started later than the usage log, so a provider
+          // with spend but no recorded outcome is "unknown", not "unused".
+          : providerUsage(p)?.last_call_at
+            ? `No status yet — last call ${formatRelative(providerUsage(p)!.last_call_at!)}`
+            : 'No calls yet'
+
   // One row per configured LLM endpoint: what it is, whether the LAST real call
   // worked, and what went wrong if it didn't (there is no active probe — a
   // health-check completion would cost money on every render).
   const renderLLMProvider = (p: LLMProvider, last: boolean) => {
-    const color = p.status === 'ok' ? theme.colors.online : p.status === 'error' ? theme.colors.error : theme.colors.placeholder
-    // Spend is keyed by provider NAME (all llm_usages records), so every
-    // openai_compat row would otherwise claim the same calls — including a
-    // discovered box nothing has ever routed to. Only a row that is (or was) in the
-    // routing chain can own that history.
-    const usage = p.role === 'available' ? undefined : llmStatus?.usage.find((u) => u.provider === p.provider)
+    const color = providerColor(p)
+    const usage = providerUsage(p)
     const probe = llmProbe?.find((r) => r.id === p.id)
     return (
       <View key={p.key} style={[s.providerRow, !last && s.providerRowBorder]}>
@@ -465,19 +506,7 @@ export default function SettingsScreen() {
           <Text style={s.providerRole}>{p.role}</Text>
           {p.model ? <Text style={s.providerModel} numberOfLines={1}>{p.model}</Text> : null}
         </View>
-        <Text style={[s.providerStatus, { color }]}>
-          {p.status === 'error'
-            ? llmErrorLabel(p)
-            : p.status === 'ok'
-              ? `Working${p.last_ok_at ? ` — last call ${formatRelative(p.last_ok_at)}` : ''}`
-              : !p.has_key
-                ? 'No API key configured'
-                // Health tracking started later than the usage log, so a provider
-                // with spend but no recorded outcome is "unknown", not "unused".
-                : usage?.last_call_at
-                  ? `No status yet — last call ${formatRelative(usage.last_call_at)}`
-                  : 'No calls yet'}
-        </Text>
+        <Text style={[s.providerStatus, { color }]}>{providerStatusText(p)}</Text>
         {p.status === 'error' && p.last_error ? (
           <Text style={s.providerError} numberOfLines={3}>{p.last_error}</Text>
         ) : null}
@@ -504,13 +533,75 @@ export default function SettingsScreen() {
     )
   }
 
-  const renderLLMCard = () => (
+  // Installed build + the APK + the server's own version: the whole "what am I
+  // running" answer in one card, at the very top of the screen.
+  const renderVersionCard = () => (
     <View style={s.card}>
-      <View style={s.cardHeader}>
-        <View style={s.titleGroup}>
-          <Text style={s.cardTitle}>LLM Services</Text>
-          <Text style={s.cardSubtitle}>Status of the last call to each provider — pipelines route through these</Text>
+      <Text style={s.cardTitle}>Version</Text>
+      <Pressable
+        onPress={handleCheckVersion}
+        style={({ pressed }) => [s.infoRow, pressed && { opacity: 0.6 }]}
+        hitSlop={6}
+      >
+        <Text style={s.infoLabel}>Installed{'  '}<Text style={s.hint}>(tap to check)</Text></Text>
+        {checkingVersion
+          ? <ActivityIndicator size="small" color={theme.colors.accent} />
+          : <Text style={s.infoValue}>v{APP_VERSION} <Text style={s.hint}>(build {APP_VERSION_CODE})</Text></Text>}
+      </Pressable>
+      {serverInfo?.server_version ? (
+        <View style={s.infoRow}>
+          <Text style={s.infoLabel}>Server</Text>
+          <Text style={s.infoValue}>{serverInfo.server_version}</Text>
         </View>
+      ) : null}
+      {latestBuild && !isWeb && isUpdateAvailable(latestBuild) ? (
+        <>
+          <View style={s.statusRow}>
+            <View style={[s.dot, { backgroundColor: theme.colors.accent }]} />
+            <Text style={[s.statusText, { fontSize: 14, color: theme.colors.accent }]}>
+              Update available — v{latestBuild.version} <Text style={s.hint}>(build {latestBuild.version_code})</Text>
+            </Text>
+          </View>
+          <Pressable
+            onPress={handleDownloadApk}
+            style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
+          >
+            <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download update (.apk)</Text>
+          </Pressable>
+        </>
+      ) : isWeb && latestBuild ? (
+        // Desktop web: no update to force, but offer the APK for sideloading to a phone.
+        <Pressable
+          onPress={handleDownloadApk}
+          style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
+        >
+          <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download Android app (v{latestBuild.version})</Text>
+        </Pressable>
+      ) : latestBuild ? (
+        <View style={s.statusRow}>
+          <View style={[s.dot, { backgroundColor: theme.colors.online }]} />
+          <Text style={[s.statusText, { fontSize: 14, color: theme.colors.online }]}>Up to date</Text>
+        </View>
+      ) : null}
+    </View>
+  )
+
+  const renderLLMCard = () => (
+    <Accordion
+      title="LLM Services"
+      subtitle="Status of the last call to each provider — pipelines route through these"
+      testID="llm-services"
+      summary={llmLead
+        ? (
+          <View style={s.statusRow}>
+            <View style={[s.dot, { backgroundColor: providerColor(llmLead) }]} />
+            <Text style={[s.summaryText, { color: providerColor(llmLead) }]} numberOfLines={2}>
+              {llmProviderLabel(llmLead)} — {providerStatusText(llmLead)}
+            </Text>
+          </View>
+        )
+        : <Text style={s.cardSubtitle}>{llmStatus ? 'No LLM configured' : 'Checking…'}</Text>}
+      action={
         <Pressable
           onPress={handleProbeLLM}
           disabled={llmProbing}
@@ -522,14 +613,15 @@ export default function SettingsScreen() {
             : <Text style={s.refreshBtnText}>Probe</Text>
           }
         </Pressable>
-      </View>
+      }
+    >
       {llmProbeError ? <Text style={s.providerError}>{llmProbeError}</Text> : null}
       {!llmStatus ? (
         <ActivityIndicator size="small" color={theme.colors.accent} style={{ alignSelf: 'flex-start' }} />
-      ) : llmStatus.providers.length === 0 ? (
+      ) : llmProviders.length === 0 ? (
         <Text style={s.emptyText}>No LLM configured — set [llm] in config.toml</Text>
       ) : (
-        llmStatus.providers.map((p, i) => renderLLMProvider(p, i === llmStatus.providers.length - 1))
+        llmProviders.map((p, i) => renderLLMProvider(p, i === llmProviders.length - 1))
       )}
       {llmStatus && llmStatus.totals.total_calls > 0 ? (
         <>
@@ -552,16 +644,31 @@ export default function SettingsScreen() {
           </View>
         </>
       ) : null}
-    </View>
+    </Accordion>
   )
 
   return (
     <ScrollView style={s.screen} contentContainerStyle={s.content}>
 
+      {/* App version + Android APK — first: which build am I on, and where is the
+          newer one? It is the most-read card on the screen. */}
+      {renderVersionCard()}
+
       {/* Connection status */}
-      <View style={s.card}>
-        <View style={s.cardHeader}>
-          <Text style={s.cardTitle}>Server Connection</Text>
+      <Accordion
+        title="Server Connection"
+        testID="server-connection"
+        summary={
+          <View style={s.statusRow}>
+            <View style={[s.dot, { backgroundColor: dotColor }]} />
+            <Text style={[s.summaryText, { color: dotColor }]} numberOfLines={1}>
+              {status === 'connected'
+                ? `Connected — ${activeUrl ? hostname(activeUrl) : ''}`
+                : status === 'disconnected' ? 'Offline' : 'Checking…'}
+            </Text>
+          </View>
+        }
+        action={
           <Pressable
             onPress={handleProbe}
             disabled={probing}
@@ -572,8 +679,8 @@ export default function SettingsScreen() {
               : <Text style={s.refreshBtnText}>Test</Text>
             }
           </Pressable>
-        </View>
-
+        }
+      >
         <View style={s.statusRow}>
           <View style={[s.dot, { backgroundColor: dotColor }]} />
           <Text style={[s.statusText, { color: dotColor }]}>
@@ -593,54 +700,41 @@ export default function SettingsScreen() {
               : 'No server URLs configured'}
           </Text>
         ) : null}
-      </View>
 
-      {/* Server URLs */}
-      {serverUrls.length > 0 && (
-        <View style={s.card}>
-          <View style={s.titleGroup}>
-            <Text style={s.cardTitle}>Server URLs</Text>
-            <Text style={s.cardSubtitle}>Tried in order until one responds</Text>
-          </View>
-          {serverUrls.map((url, i) => {
-            const isActive = url === activeUrl
-            return (
-              <View key={url} style={[s.urlRow, i < serverUrls.length - 1 && s.urlRowBorder]}>
-                <View style={[s.urlDot, { backgroundColor: isActive ? theme.colors.online : theme.colors.border }]} />
-                <View style={s.urlTextGroup}>
-                  <Text style={[s.urlHost, isActive && s.urlHostActive]}>{hostname(url)}</Text>
-                  <Text style={s.urlFull} numberOfLines={1}>{url}</Text>
-                  {urlLastUsed[url] && (
-                    <Text style={s.urlLastUsed}>Last used {formatRelative(urlLastUsed[url])}</Text>
-                  )}
+        {/* The URL list belongs to the connection, not beside it: it is the answer
+            to "why am I connected there / why am I not". */}
+        {serverUrls.length > 0 && (
+          <>
+            <Text style={s.subHeading}>Server URLs — tried in order until one responds</Text>
+            {serverUrls.map((url, i) => {
+              const isActive = url === activeUrl
+              return (
+                <View key={url} style={[s.urlRow, i < serverUrls.length - 1 && s.urlRowBorder]}>
+                  <View style={[s.urlDot, { backgroundColor: isActive ? theme.colors.online : theme.colors.border }]} />
+                  <View style={s.urlTextGroup}>
+                    <Text style={[s.urlHost, isActive && s.urlHostActive]}>{hostname(url)}</Text>
+                    <Text style={s.urlFull} numberOfLines={1}>{url}</Text>
+                    {urlLastUsed[url] && (
+                      <Text style={s.urlLastUsed}>Last used {formatRelative(urlLastUsed[url])}</Text>
+                    )}
+                  </View>
+                  {isActive
+                    ? <Text style={s.activeBadge}>active</Text>
+                    : (
+                      <Pressable
+                        onPress={() => handleDeleteUrl(url)}
+                        style={({ pressed }) => [s.deleteUrlBtn, pressed && s.deleteUrlBtnPressed]}
+                      >
+                        <Text style={s.deleteUrlText}>✕</Text>
+                      </Pressable>
+                    )
+                  }
                 </View>
-                {isActive
-                  ? <Text style={s.activeBadge}>active</Text>
-                  : (
-                    <Pressable
-                      onPress={() => handleDeleteUrl(url)}
-                      style={({ pressed }) => [s.deleteUrlBtn, pressed && s.deleteUrlBtnPressed]}
-                    >
-                      <Text style={s.deleteUrlText}>✕</Text>
-                    </Pressable>
-                  )
-                }
-              </View>
-            )
-          })}
-        </View>
-      )}
-
-      {/* Server info */}
-      {serverInfo?.server_version && (
-        <View style={s.card}>
-          <Text style={s.cardTitle}>Server Info</Text>
-          <View style={s.infoRow}>
-            <Text style={s.infoLabel}>Version</Text>
-            <Text style={s.infoValue}>{serverInfo.server_version}</Text>
-          </View>
-        </View>
-      )}
+              )
+            })}
+          </>
+        )}
+      </Accordion>
 
       <Text style={s.sectionTitle}>Services</Text>
 
@@ -838,6 +932,32 @@ export default function SettingsScreen() {
         </View>
       </View>
 
+      {/* Auto-archive — a server-side sweep, so it runs whether or not a phone is
+          open. Pinned highlights are never swept. */}
+      <View style={s.card}>
+        <View style={s.cardHeader}>
+          <View style={s.titleGroup}>
+            <Text style={s.cardTitle}>Auto Archive</Text>
+            <Text style={s.cardSubtitle}>
+              {settings?.auto_archive_enabled
+                ? 'On — highlights older than 1 month are archived (pinned ones are kept)'
+                : 'Off — highlights stay in the feed until you triage them'}
+            </Text>
+          </View>
+          {settings === null
+            ? <ActivityIndicator size="small" color={theme.colors.accent} />
+            : <Switch
+                value={settings.auto_archive_enabled}
+                onValueChange={handleToggleAutoArchive}
+                disabled={settingsLoading}
+                accessibilityLabel="Auto archive older than 1 month"
+                trackColor={{ false: theme.colors.border, true: theme.colors.accent }}
+                thumbColor={theme.colors.background}
+              />
+          }
+        </View>
+      </View>
+
       {/* Transcript languages */}
       <View style={s.card}>
         <View style={s.cardHeader}>
@@ -918,62 +1038,29 @@ export default function SettingsScreen() {
 
       <Text style={s.sectionTitle}>Device</Text>
 
-      {/* App version + Android APK */}
-      <View style={s.card}>
-        <Text style={s.cardTitle}>App Version</Text>
-        <Pressable
-          onPress={handleCheckVersion}
-          style={({ pressed }) => [s.infoRow, pressed && { opacity: 0.6 }]}
-          hitSlop={6}
-        >
-          <Text style={s.infoLabel}>Installed{'  '}<Text style={{ color: theme.colors.muted, fontSize: 12 }}>(tap to check)</Text></Text>
-          {checkingVersion
-            ? <ActivityIndicator size="small" color={theme.colors.accent} />
-            : <Text style={s.infoValue}>v{APP_VERSION} <Text style={{ color: theme.colors.muted, fontSize: 12 }}>(build {APP_VERSION_CODE})</Text></Text>}
-        </Pressable>
-        {latestBuild && !isWeb && isUpdateAvailable(latestBuild) ? (
-          <>
-            <View style={s.statusRow}>
-              <View style={[s.dot, { backgroundColor: theme.colors.accent }]} />
-              <Text style={[s.statusText, { fontSize: 14, color: theme.colors.accent }]}>
-                Update available — v{latestBuild.version} <Text style={{ color: theme.colors.muted, fontSize: 12 }}>(build {latestBuild.version_code})</Text>
-              </Text>
-            </View>
-            <Pressable
-              onPress={handleDownloadApk}
-              style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
-            >
-              <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download update (.apk)</Text>
-            </Pressable>
-          </>
-        ) : isWeb && latestBuild ? (
-          // Desktop web: no update to force, but offer the APK for sideloading to a phone.
-          <Pressable
-            onPress={handleDownloadApk}
-            style={({ pressed }) => [s.disconnectBtn, { borderColor: theme.colors.accent }, pressed && s.disconnectBtnPressed]}
-          >
-            <Text style={[s.disconnectText, { color: theme.colors.accent }]}>Download Android app (v{latestBuild.version})</Text>
-          </Pressable>
-        ) : latestBuild ? (
-          <View style={s.statusRow}>
-            <View style={[s.dot, { backgroundColor: theme.colors.online }]} />
-            <Text style={[s.statusText, { fontSize: 14, color: theme.colors.online }]}>Up to date</Text>
-          </View>
-        ) : null}
-      </View>
-
       {/* Devices */}
-      <View style={s.card}>
-        <View style={s.cardHeader}>
-          <Text style={s.cardTitle}>Connected Devices</Text>
-          {status === 'connected' && (
-            devicesRefreshing
-              ? <ActivityIndicator size="small" color={theme.colors.accent} />
-              : <Pressable onPress={() => loadDevices()} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
-                  <Text style={s.refreshBtnText}>Refresh</Text>
-                </Pressable>
-          )}
-        </View>
+      <Accordion
+        title="Connected Devices"
+        testID="connected-devices"
+        summary={
+          <Text style={s.summaryText} numberOfLines={1}>
+            {status !== 'connected'
+              ? 'Connect to see devices'
+              : devicesLoading && devices.length === 0
+                ? 'Loading…'
+                : devicesError
+                  ? devicesError
+                  : `${devices.length} ${devices.length === 1 ? 'device' : 'devices'}`}
+          </Text>
+        }
+        action={status === 'connected' ? (
+          devicesRefreshing
+            ? <ActivityIndicator size="small" color={theme.colors.accent} />
+            : <Pressable onPress={() => loadDevices()} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
+                <Text style={s.refreshBtnText}>Refresh</Text>
+              </Pressable>
+        ) : undefined}
+      >
         {devicesLoading && devices.length === 0 ? (
           <ActivityIndicator color={theme.colors.accent} size="small" style={{ alignSelf: 'flex-start' }} />
         ) : devicesError ? (
@@ -1015,7 +1102,7 @@ export default function SettingsScreen() {
             )
           })
         )}
-      </View>
+      </Accordion>
 
       {/* This Device */}
       <View style={s.card}>
@@ -1106,6 +1193,9 @@ function buildStyles(t: Theme) {
     statusRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm },
     dot: { width: 10, height: 10, borderRadius: 5 },
     statusText: { fontSize: 15, fontWeight: '600' },
+    // The one line a collapsed accordion shows in place of its body.
+    summaryText: { color: t.colors.muted, fontSize: 13, fontWeight: '600', flexShrink: 1 },
+    hint: { color: t.colors.muted, fontSize: 12 },
     infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: t.spacing.sm, paddingVertical: 2 },
     infoLabel: { color: t.colors.muted, fontSize: 13, flexShrink: 0 },
     infoValue: { color: t.colors.text, fontSize: 13, flexShrink: 1, textAlign: 'right' },

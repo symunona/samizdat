@@ -7,6 +7,7 @@ import (
 	"github.com/symunona/samizdat/server/internal/langpref"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
+	"github.com/symunona/samizdat/server/internal/worker"
 )
 
 type settingsHandler struct{ q *store.Queries }
@@ -19,10 +20,11 @@ type llmUsageSummary struct {
 }
 
 type settingsPayload struct {
-	PollingEnabled bool            `json:"polling_enabled"`
-	AutoMarkRead   bool            `json:"auto_mark_read"`
-	LanguagePrefs  langpref.Prefs  `json:"language_prefs"`
-	LLMUsage       llmUsageSummary `json:"llm_usage"`
+	PollingEnabled     bool            `json:"polling_enabled"`
+	AutoMarkRead       bool            `json:"auto_mark_read"`
+	AutoArchiveEnabled bool            `json:"auto_archive_enabled"`
+	LanguagePrefs      langpref.Prefs  `json:"language_prefs"`
+	LLMUsage           llmUsageSummary `json:"llm_usage"`
 }
 
 func (h *settingsHandler) get(w http.ResponseWriter, r *http.Request) {
@@ -32,11 +34,22 @@ func (h *settingsHandler) get(w http.ResponseWriter, r *http.Request) {
 	autoVal, err := h.q.GetSetting(r.Context(), "auto_mark_read")
 	autoMarkRead := err != nil || autoVal != "false"
 
+	// Opt-in, unlike the two above: a sweep that archives on its own must never
+	// be on for a server nobody asked.
+	archiveVal, _ := h.q.GetSetting(r.Context(), worker.AutoArchiveSettingKey)
+	autoArchive := archiveVal == "true"
+
 	langRaw, _ := h.q.GetSetting(r.Context(), langpref.SettingKey)
 	prefs := langpref.Parse(langRaw)
 
 	usage := h.llmUsage(r)
-	writeJSON(w, http.StatusOK, settingsPayload{PollingEnabled: polling, AutoMarkRead: autoMarkRead, LanguagePrefs: prefs, LLMUsage: usage})
+	writeJSON(w, http.StatusOK, settingsPayload{
+		PollingEnabled:     polling,
+		AutoMarkRead:       autoMarkRead,
+		AutoArchiveEnabled: autoArchive,
+		LanguagePrefs:      prefs,
+		LLMUsage:           usage,
+	})
 }
 
 func (h *settingsHandler) llmUsage(r *http.Request) llmUsageSummary {
@@ -79,9 +92,10 @@ func toInt64(v interface{}) int64 {
 // partial patches (one field at a time), so absent fields must be left as-is.
 func (h *settingsHandler) put(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		PollingEnabled *bool           `json:"polling_enabled"`
-		AutoMarkRead   *bool           `json:"auto_mark_read"`
-		LanguagePrefs  *langpref.Prefs `json:"language_prefs"`
+		PollingEnabled     *bool           `json:"polling_enabled"`
+		AutoMarkRead       *bool           `json:"auto_mark_read"`
+		AutoArchiveEnabled *bool           `json:"auto_archive_enabled"`
+		LanguagePrefs      *langpref.Prefs `json:"language_prefs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
@@ -97,7 +111,9 @@ func (h *settingsHandler) put(w http.ResponseWriter, r *http.Request) {
 		}
 		return h.q.UpsertSetting(r.Context(), store.UpsertSettingParams{Key: key, Value: val}) == nil
 	}
-	if !upsert("polling_enabled", body.PollingEnabled) || !upsert("auto_mark_read", body.AutoMarkRead) {
+	if !upsert("polling_enabled", body.PollingEnabled) ||
+		!upsert("auto_mark_read", body.AutoMarkRead) ||
+		!upsert(worker.AutoArchiveSettingKey, body.AutoArchiveEnabled) {
 		writeErr(w, http.StatusInternalServerError, "db error")
 		return
 	}

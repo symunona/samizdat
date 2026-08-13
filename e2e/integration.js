@@ -1825,10 +1825,26 @@ const ANTHROPIC_CREDIT_ERR =
   'anthropic 400: {"type":"error","error":{"type":"invalid_request_error",' +
   '"message":"Your credit balance is too low to access the Anthropic API."}}'
 
-async function settingsText(page) {
+// Server Connection / Connected Devices / LLM Services are accordions, collapsed
+// on every fresh render — so anything reading their rows must open them first
+// (`open: ['llm-services']`). A navigation collapses them again.
+async function settingsText(page, { open = [] } = {}) {
   await page.goto(`${BASE_URL}/settings`, { waitUntil: 'networkidle2', timeout: 15000 })
   await sleep(1800) // service queries (proxy / export / llm) settle
+  for (const id of open) await openSettingsCard(page, id)
   return page.evaluate(() => document.body.innerText)
+}
+
+async function openSettingsCard(page, testID) {
+  const ok = await page.evaluate((id) => {
+    const el = document.querySelector(`[data-testid="${id}-toggle"]`)
+    if (!el) return false
+    if (el.getAttribute('aria-expanded') !== 'true') el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    return true
+  }, testID)
+  if (!ok) fail(`settings: open the "${testID}" card`, 'no accordion header with that testID')
+  await sleep(250)
+  return ok
 }
 
 // ── the replica is a real database, not a snapshot ────────────────────────────
@@ -2072,6 +2088,94 @@ async function runPersistFailure(token, deviceId) {
   await page.close()
 }
 
+// ── Settings: what leads the screen, what hides, what round-trips ─────────────
+// Three separate promises the layout makes: the build you are running is the first
+// thing on the screen, the long status cards are shut until asked, and a preference
+// flipped here is a SERVER setting (the auto-archive sweep runs with no phone open),
+// so it must survive a reload — an optimistic switch that never reached the server
+// looks identical until the next launch.
+async function runSettingsLayout(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  const txt = await settingsText(page)
+
+  await check('settings: one Version card leads the screen, app + server together', async () => {
+    const ver = txt.indexOf('Version')
+    if (ver < 0) return 'no Version card on Settings'
+    for (const later of ['Server Connection', 'Services', 'Preferences', 'Connected Devices']) {
+      const at = txt.indexOf(later)
+      if (at >= 0 && at < ver) return `"${later}" is above the Version card (${at} < ${ver})`
+    }
+    // The card ends where the next one starts — otherwise "Server Connection"
+    // would satisfy the server-version assertion below.
+    const end = txt.indexOf('Server Connection')
+    const card = txt.slice(ver, end > ver ? end : ver + 300)
+    if (!/v\d+\.\d+\.\d+/.test(card)) return 'the installed app version is not shown'
+    // The server's version was its own card; it answers the same question.
+    if (!/(^|\n)Server(\n|\s)/.test(card)) return `the server version is not in the Version card: ${card}`
+    if (/Server Info/.test(txt)) return 'the old Server Info card is still rendered'
+    return null
+  })
+
+  await check('settings: Server Connection and Connected Devices start collapsed', async () => {
+    if (/Disconnect this device[\s\S]*?Paired /.test(txt)) return 'a device row is visible with the card collapsed'
+    if (/Trying |Connected to /.test(txt)) return 'the connection detail is visible with the card collapsed'
+    if (/Server URLs/.test(txt)) return 'the URL list is visible with the connection card collapsed'
+    for (const [id, want] of [['server-connection', /Connected|Offline|Checking/], ['connected-devices', /device/i]]) {
+      const el = await page.$(`[data-testid="${id}-toggle"]`)
+      if (!el) return `no accordion header for ${id}`
+      const summary = await page.evaluate(e => e.innerText, el)
+      if (!want.test(summary)) return `${id} summary says nothing useful: "${summary}"`
+    }
+    return null
+  })
+
+  await check('settings: opening Connected Devices reveals this device', async () => {
+    await openSettingsCard(page, 'connected-devices')
+    const t = await page.evaluate(() => document.body.innerText)
+    if (!/this device/.test(t)) return `no device row after expanding: ${t.slice(t.indexOf('Connected Devices'), t.indexOf('Connected Devices') + 200)}`
+    return null
+  })
+
+  // The URL list is part of the connection, not a card beside it: it is the answer
+  // to "why am I connected there / why am I not".
+  await check('settings: opening Server Connection reveals where it is connected, and the URL list', async () => {
+    await openSettingsCard(page, 'server-connection')
+    const t = await page.evaluate(() => document.body.innerText)
+    const conn = t.indexOf('Server Connection')
+    if (!/Connected to/.test(t)) return `no connection detail after expanding: ${t.slice(conn, conn + 240)}`
+    const urls = t.indexOf('Server URLs')
+    if (urls < 0) return 'no URL list inside the expanded card'
+    if (urls < conn) return 'the URL list renders above the card it belongs to'
+    if (!/active/.test(t.slice(urls, urls + 400))) return 'the active URL is not marked'
+    return null
+  })
+
+  await check('settings: auto-archive is off by default and round-trips to the server', async () => {
+    const sel = 'input[aria-label="Auto archive older than 1 month"]'
+    const before = await page.$eval(sel, e => e.checked).catch(() => null)
+    if (before === null) return 'no auto-archive switch on Settings'
+    if (before) return 'auto-archive is on by default — the sweep must be opt-in'
+    await page.click(sel)
+    await sleep(600)
+    const served = await fetch(`${BASE_URL}/api/v1/settings`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json())
+    if (served.auto_archive_enabled !== true) return `the server did not record the flag: ${JSON.stringify(served)}`
+    // A reload is the only proof the switch reflects the server, not local state.
+    const after = await settingsText(page)
+    if (!/On — highlights older than 1 month are archived/.test(after)) {
+      return `the reloaded screen does not show it on: ${after.slice(after.indexOf('Auto Archive'), after.indexOf('Auto Archive') + 200)}`
+    }
+    await page.click(sel)
+    await sleep(600)
+    return null
+  })
+
+  await sleep(300)
+  if (errors.length) fail('settings layout: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('settings layout: no console/HTTP errors')
+
+  await page.close()
+}
+
 async function runSettingsServices(token, deviceId) {
   const { page, errors } = await newConnectedPage(browser, token, deviceId)
   let txt = await settingsText(page)
@@ -2094,6 +2198,17 @@ async function runSettingsServices(token, deviceId) {
     }
     return null
   })
+
+  // The long status cards open on demand — collapsed, the LLM card must still say
+  // which endpoint jobs go to, or collapsing it would hide the one fact worth a glance.
+  await check('settings: the LLM card starts collapsed but names its provider', async () => {
+    if (/Cumulative usage/.test(txt)) return 'the LLM card is expanded on load'
+    if (!/127\.0\.0\.1:9/.test(txt)) return `the collapsed summary does not name the provider: ${txt.slice(txt.indexOf('LLM Services'), txt.indexOf('LLM Services') + 200)}`
+    return null
+  })
+
+  await openSettingsCard(page, 'llm-services')
+  txt = await page.evaluate(() => document.body.innerText)
 
   await check('settings: the configured LLM provider is listed with no calls yet', async () => {
     if (!/127\.0\.0\.1:9/.test(txt)) return 'the configured openai_compat endpoint is not named'
@@ -2120,7 +2235,7 @@ async function runSettingsServices(token, deviceId) {
     last_error_kind: 'quota',
   }
   seedLLMHealth([RETIRED_ANTHROPIC])
-  txt = await settingsText(page)
+  txt = await settingsText(page, { open: ['llm-services'] })
 
   await check('settings: a provider out of credits reads as out of credits', async () => {
     if (!/Out of credits \/ rate limited/.test(txt)) return `no quota status in: ${txt.slice(txt.indexOf('LLM Services'), txt.indexOf('LLM Services') + 400)}`
@@ -2163,7 +2278,7 @@ async function runSettingsServices(token, deviceId) {
     last_error: 'llm: transport failure: openai_compat request: dial tcp 127.0.0.1:9: connect: connection refused',
     last_error_kind: 'transport',
   }])
-  txt = await settingsText(page)
+  txt = await settingsText(page, { open: ['llm-services'] })
 
   await check('settings: the live provider reports it is unreachable', async () => {
     if (!/Unreachable/.test(txt)) return `no transport status in: ${txt.slice(txt.indexOf('LLM Services'), txt.indexOf('LLM Services') + 400)}`
@@ -2175,6 +2290,19 @@ async function runSettingsServices(token, deviceId) {
     const dots = await page.$$('[data-testid="drawer-alert-dot"]')
     return dots.length ? null : 'no drawer alert dot after a configured provider failed'
   })
+
+  // Collapsed, the card must lead with the BROKEN endpoint — a summary showing the
+  // healthy default while a pipeline is down is worse than no summary at all.
+  await check('settings: the collapsed card summarises the broken provider', async () => {
+    const collapsed = await settingsText(page)
+    const card = collapsed.slice(collapsed.indexOf('LLM Services'), collapsed.indexOf('LLM Services') + 200)
+    if (/Cumulative usage/.test(collapsed)) return 'the LLM card did not collapse on re-render'
+    if (!/Unreachable/.test(card)) return `the summary does not name the failure: ${card}`
+    return null
+  })
+
+  await openSettingsCard(page, 'llm-services')
+  txt = await page.evaluate(() => document.body.innerText)
 
   // The whole point of a local primary: how much is it actually serving? The split
   // is per ENDPOINT (12 anthropic + 3 local = 15 → 80% / 20%), not per provider name.
@@ -2602,6 +2730,9 @@ async function main() {
     // clean error state.
     await runDbLayer(token, deviceId)
     await runPersistFailure(token, deviceId)
+    // Before runSettingsServices too: it reads the Settings screen with every
+    // service still healthy.
+    await runSettingsLayout(token, deviceId)
     await runSettingsServices(token, deviceId)
     await runPipelineStepsUi(token, deviceId)
     // Last: the reading mode persists globally (AsyncStorage → shared localStorage),

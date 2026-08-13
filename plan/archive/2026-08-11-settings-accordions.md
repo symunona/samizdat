@@ -2,7 +2,7 @@
 created: 2026-08-11
 topic: Settings screen — version on top, accordions, auto-archive flag
 excerpt: Reorder Settings so the app version/APK leads, collapse the long status cards (Server Connection, Connected Devices, LLM Services) behind a reusable accordion, and add a server-side "auto-archive older than 1 month" preference.
-status: implementing
+status: done — squash-merged to main 2026-08-13
 ---
 
 # Settings: version on top · accordions · auto-archive

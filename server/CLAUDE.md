@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS server_settings (
   --       "ytdlp_proxy_last_ok_at" (RFC3339, persisted across restarts)
   --       "llm_provider_health" (JSON []llm.ProviderHealth, see LLM provider health)
   --       "pipeline_step_prompts_backfilled" (RFC3339, guards the one-shot prompt backfill)
+  --       "auto_archive_enabled" ("true"/"false", opt-in; drives worker.sweepAutoArchive)
 );
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -174,6 +175,15 @@ Run `sqlc generate` before `go build`. `just server::gen` wraps this. Generated 
 - Admin routes: `Authorization: Passphrase <hash>` + loopback-only guard
 - Never return stack traces in HTTP responses — log internally, return `{"error":"..."}` with appropriate 4xx/5xx
 - Errors: typed sentinels + `fmt.Errorf("context: %w", err)` wrapping
+
+## Auto-archive sweep (`worker.sweepAutoArchive`)
+
+Opt-in (`server_settings.auto_archive_enabled`, served + patched by `/api/v1/settings`),
+run on the existing 60s scheduler tick — **not** a Job: there is nothing to retry, meter
+or dedup, and a queue row per sweep would be noise. `ArchiveOldHighlights` stamps
+`archived_at` on every non-deleted, non-archived, **non-pinned** Highlight older than one
+month, `rev + 1` per row so the phone pulls the change through the normal sync feed.
+Pinned is the user's explicit keep — a sweep must never undo triage.
 
 ## Job enqueue idempotency (`POST /api/v1/jobs`)
 
@@ -444,6 +454,18 @@ DB row.
   rather than setting `OLLAMA_CONTEXT_LENGTH` on a box other people share. Size the context
   to what stays on the GPU (`ollama ps` prints the split) — the first byte that spills to
   CPU roughly halves throughput.
+- **Name a self-hosted box by DNS, never by IP** (`http://xayah.tail7f475e.ts.net:11434/v1`).
+  A `providerID` is `host:port`, so the address in `base_url` is also the identity every
+  pipeline step pins — and an IP is not stable: rebuilding the tailnet box moved it, which
+  took the routing primary down AND orphaned the pinned step in one go. Because a pin never
+  falls back, the failure is silent in the worst way: `[llm]` alone would have fallen through
+  to the cloud fallback, but re-addressing the endpoint without updating the pins turns
+  every affected step into a hard error. Grep `pipelines.steps` for the old `host:port`
+  whenever `base_url` changes.
+- **Ollama binds `127.0.0.1` by default**, so a box that answers `ollama list` over ssh can
+  still be `connection refused` from here. `OLLAMA_HOST=0.0.0.0:11434` in a systemd drop-in
+  is what makes it a tailnet provider — and it has no auth, so that also exposes it to
+  whatever LAN the box sits on.
 
 ### Discovery (`discover.go`)
 

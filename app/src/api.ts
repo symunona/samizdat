@@ -1031,6 +1031,7 @@ export type LanguagePrefs = {
 export type AppSettings = {
   polling_enabled: boolean
   auto_mark_read: boolean
+  auto_archive_enabled: boolean
   language_prefs: LanguagePrefs
   llm_usage: LLMUsageSummary
 }

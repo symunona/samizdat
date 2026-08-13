@@ -585,7 +585,9 @@ only one of the two sounds at a time (audio pauses while the video plays, and vi
 `src/exportStats.ts` exposes `fetchExportStats` and `ExportStats`, hitting `GET /api/v1/export/stats` (which also triggers a server-side re-export). Kept separate from `api.ts` like `proxyStatus.ts`. The Settings "Export Vault" card shows doc/annotation counts, last-export time, dir, and any error; its Refresh button re-fetches (forcing a fresh mirror). The card renders only when the endpoint returns (i.e. when export is configured).
 
 ### `useServices.ts` — the Services group and the drawer's degraded dot
-Settings is grouped **Connection → Services → Preferences → Device**. The Services
+Settings leads with one **Version** card — installed app build, the APK download and the
+**server's** version together (they answer one question: what am I running) — then is
+grouped **Connection → Services → Preferences → Device**. The Services
 group holds the four things that can be *broken*: YouTube Proxy, Export Vault, Browser
 Extension, **LLM Services**. All three server-side checks go through ONE React Query
 cache (`useProxyStatus` / `useExportStats` / `useLLMStatus` in `src/useServices.ts`) —
@@ -593,6 +595,16 @@ never a screen-local `useState` + `setInterval`, because the drawer reads the sa
 `useServiceAlert()` (proxy configured-but-down · export errored · a non-retired LLM
 provider whose last call failed) paints the red dot on the hamburger + the drawer's
 Settings row, the same affordance as "update available" (a broken service outranks it).
+
+**Three long cards are accordions** (`src/Accordion.tsx`): Server Connection (the
+server-URL list lives INSIDE it — the list is the answer to "why am I connected there"),
+Connected Devices, LLM Services — collapsed on every render, open state screen-local. A collapsed
+card shows a one-line summary INSTEAD of its body, so collapsing never hides the fact
+worth a glance (connected host · device count · which LLM endpoint jobs go to). The LLM
+list is sorted **troubled-first** — a `primary`/`fallback` provider whose last call failed
+leads the list AND is what the summary says; otherwise the primary leads. The header's
+action button (Test / Refresh / Probe) renders only while open, so it is never tapped
+blind. e2e reads must open the card first (`settingsText(page, { open: ['llm-services'] })`).
 
 `src/llmStatus.ts` hits `GET /api/v1/llm/status` and owns the two label helpers:
 `llmErrorLabel` (kind → "Out of credits / rate limited", "Bad or missing API key",

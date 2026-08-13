@@ -14,7 +14,9 @@ export interface LLMProvider {
   provider: string
   base_url?: string
   model?: string
-  role: 'primary' | 'fallback' | 'retired'
+  // 'available' = discovered from an env key or the well-known local box; nothing
+  // routes through it, so it owns no spend and never raises the alert dot.
+  role: 'primary' | 'fallback' | 'available' | 'retired'
   status: LLMProviderStatus
   has_key: boolean
   calls: number

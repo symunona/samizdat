@@ -556,6 +556,13 @@ UPDATE highlights SET pinned = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 -- name: ArchiveHighlight :exec
 UPDATE highlights SET archived_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
+-- Auto-archive sweep. Pinned highlights are the user's explicit keep, so the
+-- sweep never touches them; rev + 1 per row is what carries the change to the
+-- phone through the normal sync feed.
+-- name: ArchiveOldHighlights :execrows
+UPDATE highlights SET archived_at = ?, updated_at = ?, rev = rev + 1
+WHERE deleted_at IS NULL AND archived_at IS NULL AND pinned = 0 AND created_at < ?;
+
 -- name: InsertHighlightTag :one
 INSERT INTO highlight_tags (id, highlight_id, tag_id, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, 0)

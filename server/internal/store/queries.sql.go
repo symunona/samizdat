@@ -25,6 +25,28 @@ func (q *Queries) ArchiveHighlight(ctx context.Context, arg ArchiveHighlightPara
 	return err
 }
 
+const archiveOldHighlights = `-- name: ArchiveOldHighlights :execrows
+UPDATE highlights SET archived_at = ?, updated_at = ?, rev = rev + 1
+WHERE deleted_at IS NULL AND archived_at IS NULL AND pinned = 0 AND created_at < ?
+`
+
+type ArchiveOldHighlightsParams struct {
+	ArchivedAt *string `json:"archived_at"`
+	UpdatedAt  string  `json:"updated_at"`
+	CreatedAt  string  `json:"created_at"`
+}
+
+// Auto-archive sweep. Pinned highlights are the user's explicit keep, so the
+// sweep never touches them; rev + 1 per row is what carries the change to the
+// phone through the normal sync feed.
+func (q *Queries) ArchiveOldHighlights(ctx context.Context, arg ArchiveOldHighlightsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, archiveOldHighlights, arg.ArchivedAt, arg.UpdatedAt, arg.CreatedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const bumpSubscriptionNextRun = `-- name: BumpSubscriptionNextRun :exec
 UPDATE subscriptions SET next_run_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
 `
