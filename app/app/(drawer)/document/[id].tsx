@@ -37,6 +37,7 @@ import { useConnection } from '../../../src/ConnectionContext'
 import { useFailedJobs, documentErrorText } from '../../../src/failedJobs'
 import { useToast } from '../../../src/ToastContext'
 import { saveTheme } from '../../../src/prefs'
+import { useWebPageTitle } from '../../../src/webPageTitle'
 import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
 import TagSelectorModal from '../../../src/TagSelectorModal'
@@ -597,6 +598,8 @@ export default function DocumentViewer() {
   const docForId = doc && doc.id === id ? doc : null
 
   const docErrorText = documentErrorText(docForId, failed)
+
+  useWebPageTitle(docForId?.title || docForId?.canonical_url)
 
   if (docForId && docForId.media_type === 'video') {
     return <VideoDocument doc={docForId} from={from} />
