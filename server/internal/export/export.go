@@ -7,6 +7,9 @@
 //
 //	documents/<slug>.md      one note per Document (marker `samizdat: export`)
 //	annotations/<slug>.md    one note per Annotation (marker `samizdat: export-annotation`)
+//	                         export.grouping inserts a date subfolder: documents
+//	                         by published (else created), annotations by their own
+//	                         created — the two can differ.
 //	assets/<id>.<ext>        copied image assets, embedded as ![[<id>.<ext>]]
 //	                         (export.image_links = "relative" → ../assets/… instead)
 //	_index.md                MOC of all documents (marker `samizdat: export-index`)
@@ -276,12 +279,14 @@ func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 		return fmt.Errorf("list assets for %s: %w", id, err)
 	}
 
-	// Anchored annotation notes share the parent doc's grouping folder.
-	group := e.groupDir(docDate(doc))
-	docRel := e.docRelPath(doc, group)
+	// An annotation is grouped by when IT was written, not by the parent doc's
+	// date: a highlight made this week belongs in this week's folder even on a
+	// ten-year-old article. So an annotation note can sit at a different depth
+	// than its doc note (unparseable doc date → flat) — hence atDepth below.
+	docRel := e.docRelPath(doc, e.groupDir(docDate(doc)))
 	annRels := make([]string, len(live))
 	for i, a := range live {
-		annRels[i] = e.annRelPath(a, group)
+		annRels[i] = e.annRelPath(a, e.groupDir(a.CreatedAt))
 	}
 
 	// Copy image assets into assets/ and map every URL they appear under in the
@@ -299,7 +304,7 @@ func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 	removeIfMoved(e.dir, oldDocRel, docRel)
 
 	for i, a := range live {
-		note := renderAnnotation(a, relBase(docRel), links)
+		note := renderAnnotation(a, relBase(docRel), atDepth(links, annRels[i]))
 		if err := writeNote(e.dir, annRels[i], note); err != nil {
 			return fmt.Errorf("write annotation note %s: %w", annRels[i], err)
 		}
@@ -709,6 +714,19 @@ func wikiAlias(alt string) string {
 // which cannot carry an embed).
 func (a assetLink) path() string {
 	return a.up + assetsSub + "/" + a.file
+}
+
+// atDepth re-bases links for a note whose folder depth differs from the doc note
+// they were built for (an annotation groups by its own created date). Only the
+// relative embed style reads `up`, but a wrong prefix there is a dead image.
+func atDepth(links map[string]assetLink, rel string) map[string]assetLink {
+	up := upPrefix(rel)
+	out := make(map[string]assetLink, len(links))
+	for k, l := range links {
+		l.up = up
+		out[k] = l
+	}
+	return out
 }
 
 // assetLinks copies a document's images into assets/ and maps every URL they can

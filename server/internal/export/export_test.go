@@ -155,6 +155,58 @@ func TestSweepIsQuietWhenNothingChanged(t *testing.T) {
 	}
 }
 
+// TestAnnotationGroupsByOwnCreatedAt: an annotation goes in the folder of the
+// week it was WRITTEN, not the week its (possibly ancient) document was
+// published — so the two notes can land in different grouping folders.
+func TestAnnotationGroupsByOwnCreatedAt(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	q := store.New(db)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	nowTS := now.Format(time.RFC3339)
+	published := "2019-03-04T00:00:00Z"
+	if _, err := q.UpsertDocument(ctx, store.UpsertDocumentParams{
+		ID: "doc-1", CanonicalUrl: "https://a.example/1", Title: "Old Post",
+		Markdown: "hello", FetchedAt: nowTS, MediaType: "article",
+		PublishedAt: &published, CreatedAt: nowTS, UpdatedAt: nowTS,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	docID := "doc-1"
+	if _, err := q.InsertAnnotation(ctx, store.InsertAnnotationParams{
+		ID: "ann-1", DocumentID: &docID, Exact: "hello", Note: "fresh take",
+		CreatedAt: nowTS, UpdatedAt: nowTS,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	e := New(q, dir, t.TempDir(), "weekly", linkWikilink)
+	for _, sub := range []string{docsSub, annsSub, assetsSub} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.sweep(ctx)
+
+	y, w := now.ISOWeek()
+	wantAnnDir := fmt.Sprintf("%s/%04d-W%02d", annsSub, y, w)
+	if got := filepath.Dir(e.annFiles["ann-1"]); got != wantAnnDir {
+		t.Errorf("annotation folder = %q, want %q (its own created_at)", got, wantAnnDir)
+	}
+	if got, want := filepath.Dir(e.docFiles["doc-1"]), docsSub+"/2019-W10"; got != want {
+		t.Errorf("doc folder = %q, want %q (its published_at)", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, e.annFiles["ann-1"])); err != nil {
+		t.Errorf("annotation note not on disk: %v", err)
+	}
+}
+
 // mtimes maps every file under root to its modification time.
 func mtimes(t *testing.T, root string) map[string]time.Time {
 	t.Helper()
