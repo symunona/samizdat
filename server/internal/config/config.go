@@ -68,6 +68,105 @@ type LLMSection struct {
 	// through. Each fallback entry's DefaultModel is the model it serves with,
 	// since the caller's tier model won't exist on a different provider.
 	Fallback []LLMSection `toml:"fallback"`
+
+	// Summarize sizes every LLM pipeline step's input. See SummarizeSection.
+	Summarize SummarizeSection `toml:"summarize"`
+}
+
+// SummarizeRole is one endpoint an LLM step may call, with the size of what it
+// can be handed. Three roles exist: map (one chunk), reduce (the partials), big
+// (documents past chunking, and the fallback when a role keeps failing).
+type SummarizeRole struct {
+	Provider  string `toml:"provider"`   // Router provider id; empty = the configured chain
+	Model     string `toml:"model"`      // empty = the provider's default_model
+	CtxTokens int    `toml:"ctx_tokens"` // the endpoint's context window
+	MaxTokens int    `toml:"max_tokens"` // completion cap for this role
+	Prompt    string `toml:"prompt"`     // empty = the step kind's built-in default
+}
+
+// SummarizeLimits are the size bands and the retry policy. Every LLM step reads
+// them; a step kind may override any subset via SummarizeSection.Steps.
+//
+// The bands, in estimated input tokens: below ChunkAbove one plain call; below
+// BigAbove chunk → map → reduce; otherwise one Big call, truncated to what Big
+// holds. There is deliberately no constant for "too big to hold" — that is
+// Big.CtxTokens, so raising the model raises the ceiling with it.
+type SummarizeLimits struct {
+	ChunkAbove   int `toml:"chunk_above"`
+	BigAbove     int `toml:"big_above"`
+	MaxChunks    int `toml:"max_chunks"` // exceeded → escalate to Big, never drop content
+	OverlapRunes int `toml:"overlap_runes"`
+	MaxTries     int `toml:"max_tries"` // per role, before falling back to Big
+
+	Map    SummarizeRole `toml:"map"`
+	Reduce SummarizeRole `toml:"reduce"`
+	Big    SummarizeRole `toml:"big"`
+}
+
+// SummarizeSection is the shared defaults plus per-step-kind overrides. Steps
+// holds only what differs — zero fields inherit, so a step that wants a bigger
+// chunking ceiling writes one line, not a whole block. Overrides cannot nest:
+// the map's value type carries no Steps of its own.
+type SummarizeSection struct {
+	SummarizeLimits
+	Steps map[string]SummarizeLimits `toml:"steps"`
+}
+
+// ForStep returns the limits a step kind runs with: the shared defaults with the
+// kind's non-zero overrides applied.
+func (s SummarizeSection) ForStep(kind string) SummarizeLimits {
+	base := s.SummarizeLimits
+	ov, ok := s.Steps[kind]
+	if !ok {
+		return base
+	}
+	overrideInt(&base.ChunkAbove, ov.ChunkAbove)
+	overrideInt(&base.BigAbove, ov.BigAbove)
+	overrideInt(&base.MaxChunks, ov.MaxChunks)
+	overrideInt(&base.OverlapRunes, ov.OverlapRunes)
+	overrideInt(&base.MaxTries, ov.MaxTries)
+	base.Map = overrideRole(base.Map, ov.Map)
+	base.Reduce = overrideRole(base.Reduce, ov.Reduce)
+	base.Big = overrideRole(base.Big, ov.Big)
+	return base
+}
+
+func overrideInt(dst *int, v int) {
+	if v != 0 {
+		*dst = v
+	}
+}
+
+func overrideStr(dst *string, v string) {
+	if v != "" {
+		*dst = v
+	}
+}
+
+func overrideRole(base, ov SummarizeRole) SummarizeRole {
+	overrideStr(&base.Provider, ov.Provider)
+	overrideStr(&base.Model, ov.Model)
+	overrideStr(&base.Prompt, ov.Prompt)
+	overrideInt(&base.CtxTokens, ov.CtxTokens)
+	overrideInt(&base.MaxTokens, ov.MaxTokens)
+	return base
+}
+
+// DefaultSummarize is what an instance with no [llm.summarize] block runs. The
+// roles name no provider or model on purpose: an unconfigured instance keeps
+// using whatever the step and the Router already resolve, and only the SIZES
+// change. Naming a model here would send a Claude id to someone's local box.
+func DefaultSummarize() SummarizeSection {
+	return SummarizeSection{SummarizeLimits: SummarizeLimits{
+		ChunkAbove:   4000,
+		BigAbove:     40000,
+		MaxChunks:    12,
+		OverlapRunes: 200,
+		MaxTries:     3,
+		Map:          SummarizeRole{CtxTokens: 7000, MaxTokens: 300},
+		Reduce:       SummarizeRole{CtxTokens: 7000, MaxTokens: 600},
+		Big:          SummarizeRole{CtxTokens: 200000, MaxTokens: 1024},
+	}}
 }
 
 func DefaultPath() (string, error) {
@@ -96,6 +195,7 @@ func Defaults() *Config {
 		Server:        ServerSection{Port: 8765},
 		Export:        ExportSection{Grouping: "weekly", ImageLinks: "wikilink"},
 		YTDLP:         YTDLPSection{Path: "yt-dlp"},
+		LLM:           LLMSection{Summarize: DefaultSummarize()},
 	}
 }
 
@@ -149,5 +249,48 @@ func Load(path string) (*Config, error) {
 	default:
 		return nil, fmt.Errorf("export.image_links %q invalid: want wikilink|relative", cfg.Export.ImageLinks)
 	}
+	if err := validateSummarize(cfg.LLM.Summarize); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// validateSummarize rejects band settings that can't be satisfied, at load time
+// rather than at the first long document. An ordering mistake here silently
+// routes every document to the wrong band, which reads as "the summarizer got
+// worse" days later.
+func validateSummarize(s SummarizeSection) error {
+	check := func(what string, l SummarizeLimits) error {
+		if l.ChunkAbove >= l.BigAbove {
+			return fmt.Errorf("%s: chunk_above (%d) must be below big_above (%d)", what, l.ChunkAbove, l.BigAbove)
+		}
+		if l.MaxTries < 1 {
+			return fmt.Errorf("%s: max_tries must be at least 1, got %d", what, l.MaxTries)
+		}
+		if l.MaxChunks < 1 {
+			return fmt.Errorf("%s: max_chunks must be at least 1, got %d", what, l.MaxChunks)
+		}
+		if l.OverlapRunes < 0 {
+			return fmt.Errorf("%s: overlap_runes must not be negative, got %d", what, l.OverlapRunes)
+		}
+		// Fixed order: a map here would report a different role each run.
+		for _, r := range []struct {
+			name string
+			role SummarizeRole
+		}{{"map", l.Map}, {"reduce", l.Reduce}, {"big", l.Big}} {
+			if r.role.CtxTokens < 1 {
+				return fmt.Errorf("%s.%s: ctx_tokens must be positive, got %d", what, r.name, r.role.CtxTokens)
+			}
+		}
+		return nil
+	}
+	if err := check("llm.summarize", s.SummarizeLimits); err != nil {
+		return err
+	}
+	for kind := range s.Steps {
+		if err := check("llm.summarize.steps."+kind, s.ForStep(kind)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

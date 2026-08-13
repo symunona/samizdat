@@ -23,6 +23,7 @@ type Router struct {
 	byID      map[string]*Provider
 	clients   map[string]Client
 	chain     Client
+	summarize config.SummarizeSection
 }
 
 // Route names where a call should go (Provider) and how it should be made (Params).
@@ -36,7 +37,7 @@ type Route struct {
 // NewRouter discovers every provider reachable from cfg + the environment and
 // builds the fallback chain from the configured ones.
 func NewRouter(cfg config.LLMSection) *Router {
-	r := &Router{byID: map[string]*Provider{}, clients: map[string]Client{}}
+	r := &Router{byID: map[string]*Provider{}, clients: map[string]Client{}, summarize: cfg.Summarize}
 	r.providers = Discover(cfg)
 
 	var entries []entry
@@ -85,6 +86,18 @@ func (r *Router) Provider(id string) (Provider, bool) {
 
 // Configured reports whether any provider can serve a call.
 func (r *Router) Configured() bool { return r != nil && len(r.providers) > 0 }
+
+// Summarize returns the size bands a step kind runs with. It lives on the Router
+// because how much a call may carry is a property of the endpoint that serves it,
+// and the Router is the one owner of endpoints. A Router built without config
+// (tests) reports the built-in defaults rather than zeroes, which would read as
+// "no context window" and route every document to the big band.
+func (r *Router) Summarize(kind string) config.SummarizeLimits {
+	if r == nil || r.summarize.Big.CtxTokens == 0 {
+		return config.DefaultSummarize().ForStep(kind)
+	}
+	return r.summarize.ForStep(kind)
+}
 
 // Complete routes through the configured chain. This is the Client interface, so
 // every pre-Router caller keeps its exact behavior.

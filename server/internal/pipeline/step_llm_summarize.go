@@ -49,18 +49,19 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 		return StepResult{}, fmt.Errorf("llm_summarize: get document: %w", err)
 	}
 
-	content := doc.Markdown
-	if len(content) > 12000 {
-		content = content[:12000] + "\n\n[truncated]"
-	}
-
-	userMsg := renderPrompt(c.Prompt, map[string]string{"title": doc.Title, "content": content})
-	reply, meta, err := llmStepCall(ctx, q, run, kindLLMSummarize, c, userMsg, router)
+	out, err := llmStepCallLong(ctx, q, run, longRequest{
+		Kind:    kindLLMSummarize,
+		Cfg:     c,
+		Title:   doc.Title,
+		Content: doc.Markdown,
+	}, router)
 	if err != nil {
 		return StepResult{}, err
 	}
-
-	reply = strings.TrimSpace(reply)
+	if !out.Step.Done {
+		return out.Step, nil // more chunks to summarize; no highlight yet
+	}
+	reply, meta := strings.TrimSpace(out.Reply), out.Meta
 
 	// LLM layer of false-parse detection: the model flagged this as a bot page /
 	// login wall / empty stub. Flag the Document and fail permanently — no highlight,
@@ -87,7 +88,7 @@ func handleLLMSummarize(ctx context.Context, q *store.Queries, run store.Pipelin
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Prepend hero image if one has been cached for this document.
-	body := reply
+	body := appendNote(reply, out.Note)
 	if assets, err2 := q.ListMediaAssetsByDocument(ctx, run.DocumentID); err2 == nil {
 		for _, a := range assets {
 			if a.Kind == "hero" {

@@ -67,18 +67,22 @@ func handleLLMTopics(ctx context.Context, q *store.Queries, run store.PipelineRu
 
 	// Unwrap the legacy ``` fence a plaintext email used to get so the model sees
 	// prose, not one code literal.
-	content := StripCodeFence(doc.Markdown)
-	if len(content) > 16000 {
-		content = content[:16000] + "\n\n[truncated]"
-	}
-
-	userMsg := renderPrompt(c.Prompt, map[string]string{"title": doc.Title, "content": content})
-	reply, meta, err := llmStepCall(ctx, q, run, kindLLMTopics, c, userMsg, router)
+	out, err := llmStepCallLong(ctx, q, run, longRequest{
+		Kind:    kindLLMTopics,
+		Cfg:     c,
+		Title:   doc.Title,
+		Content: StripCodeFence(doc.Markdown),
+	}, router)
 	if err != nil {
 		return StepResult{}, err
 	}
-
-	reply = strings.TrimSpace(reply)
+	if !out.Step.Done {
+		return out.Step, nil
+	}
+	// out.Note is deliberately dropped: this step's reply is parsed as JSON and
+	// splits into several Highlights, so there is no one body to disclose on. The
+	// cut is still recorded in each Highlight's provenance (`truncated`).
+	reply, meta := strings.TrimSpace(out.Reply), out.Meta
 	if strings.HasPrefix(reply, "```") {
 		reply = strings.TrimPrefix(reply, "```json")
 		reply = strings.TrimPrefix(reply, "```")

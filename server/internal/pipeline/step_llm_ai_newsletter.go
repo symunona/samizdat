@@ -154,21 +154,23 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 		return StepResult{}, fmt.Errorf("llm_ai_newsletter: get document: %w", err)
 	}
 
-	content := doc.Markdown
-	if len(content) > 16000 {
-		content = content[:16000] + "\n\n[truncated]"
-	}
-
 	seen := recentlyCoveredBlock(ctx, q, doc, c.DedupLookbackDays)
-	userMsg := renderPrompt(c.Prompt, map[string]string{
-		"title": doc.Title, "content": content, "recently_covered": seen,
-	})
-	reply, meta, err := llmStepCall(ctx, q, run, kindLLMAINewsletter, c.llmStepConfig, userMsg, router)
+	out, err := llmStepCallLong(ctx, q, run, longRequest{
+		Kind:    kindLLMAINewsletter,
+		Cfg:     c.llmStepConfig,
+		Title:   doc.Title,
+		Content: doc.Markdown,
+		Vars:    map[string]string{"recently_covered": seen},
+	}, router)
 	if err != nil {
 		return StepResult{}, err
 	}
-
-	reply = strings.TrimSpace(reply)
+	if !out.Step.Done {
+		return out.Step, nil
+	}
+	// out.Note dropped for the same reason as llm_topics: a parsed reply, many
+	// Highlights, no single body to disclose on. Provenance keeps `truncated`.
+	reply, meta := strings.TrimSpace(out.Reply), out.Meta
 	// Strip markdown fences if model wrapped response anyway.
 	if strings.HasPrefix(reply, "```") {
 		reply = strings.TrimPrefix(reply, "```json")

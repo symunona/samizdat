@@ -83,6 +83,11 @@ type PipelineFilter struct {
 type StepResult struct {
 	Done     bool   // true = step complete, move to next
 	NewState string // updated intermediate state for next call
+	// Continue asks for the next tick immediately instead of after the standard
+	// retry delay. A step that is WAITING on something (a child job, a rate limit)
+	// wants the delay; a step that just finished a unit of work and has more queued
+	// does not — that delay is backoff, and progress is not a failure.
+	Continue bool
 }
 
 // Handler is the function signature for a step kind. Every step gets the Router,

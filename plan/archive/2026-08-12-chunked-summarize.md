@@ -2,8 +2,39 @@
 created: 2026-08-12
 topic: Size-banded chunking summarizer for every LLM pipeline step
 excerpt: Replace the four hardcoded content truncations with a config-driven band router — single call, chunk→map→reduce on the local box, or a big-model call — plus a script-written truncation note when even the big model can't hold the document.
-status: planned
+status: done — squash-merged to main 2026-08-13
 ---
+
+## Result (verified 2026-08-12)
+
+A real run on the dev server, 58,205-rune document (~19.4k estimated tokens),
+map + fold both on xayah/qwen3-sum:
+
+- 5 chunks, 6 calls, 15,434 tokens in / 526 out, **one** Highlight.
+- ~19s per chunk; `StepResult.Continue` removed the 10s inter-tick delay.
+- Card shows `qwen3-sum:latest · xayah… · 600 tok · 15.4k→526 · 5 chunks / 6 calls`.
+- The same document previously went to the model as `markdown[:12000]` — about a
+  fifth of it.
+
+Green: `just lint`, `just test`, `just e2e`, `just e2e-int` (128 checks).
+
+Two deviations from the plan above, both deliberate:
+
+- The splitter lives in its own `pipeline/chunk.go`, not in `text.go` — `text.go`
+  is about title/fence stripping and the two share only the sentence regexp.
+- `out.Note` is dropped by the three steps whose reply is parsed as JSON: they
+  split one reply into many Highlights, so there is no single body to disclose
+  on. The cut still rides in each Highlight's provenance (`truncated`).
+
+Found and fixed while testing: `ChunkBudget` returning 0 (a window too small for
+the prompt) made `clampRunes` skip the clamp and send the whole document. It now
+fails the step instead — that zero was the exact silent-overflow this replaces.
+
+**Open, for the next pass:** the fold obeys the endpoint but not always the
+style. qwen3-sum answered the folded partials in plain prose ("A new chip is
+10,000 times more energy efficient…") rather than the caveman register its prompt
+asks for — the step prompt was written to summarize an article, and it is now
+summarizing five bullet lists. Prompt tuning, not mechanism.
 
 # Chunked summarize
 

@@ -15,8 +15,9 @@ const legacyPromptTail = "\n\n# {{title}}\n\n{{content}}"
 
 // promptTokens are the placeholders renderPrompt expands. Any token missing from
 // vars renders empty, so a template can name one the step doesn't produce
-// (only llm_ai_newsletter fills recently_covered).
-var promptTokens = []string{"title", "content", "recently_covered"}
+// (only llm_ai_newsletter fills recently_covered; only the chunked map pass
+// fills chunk/chunks).
+var promptTokens = []string{"title", "content", "recently_covered", "chunk", "chunks"}
 
 // renderPrompt expands the {{...}} placeholders of a step's prompt template.
 // Replacement is single-pass, so document text that happens to contain a token

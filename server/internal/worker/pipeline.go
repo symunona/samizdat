@@ -248,9 +248,19 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 		return "", fmt.Errorf("save step state: %w", err)
 	}
 
-	logPipeline.Printf("run %s step %d waiting (retry in %s)", run.ID[:8], run.StepIndex, stepRetryDelay)
+	// A step reporting progress gets the next tick straight away. The delay is
+	// backoff for a step that is waiting on something; charging it to a step that
+	// just finished a chunk and has eleven more would add minutes of idle to every
+	// long document.
+	delay := stepRetryDelay
+	if result.Continue {
+		delay = 0
+		logPipeline.Printf("run %s step %d progressed, continuing", run.ID[:8], run.StepIndex)
+	} else {
+		logPipeline.Printf("run %s step %d waiting (retry in %s)", run.ID[:8], run.StepIndex, stepRetryDelay)
+	}
 
-	runAfter := time.Now().UTC().Add(stepRetryDelay).Format(time.RFC3339)
+	runAfter := time.Now().UTC().Add(delay).Format(time.RFC3339)
 	stepPayload, _ := json.Marshal(runPipelineStepPayload{
 		PipelineRunID: run.ID,
 		PipelineName:  p.PipelineName,

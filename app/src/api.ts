@@ -819,6 +819,12 @@ export type HighlightProvenance = {
   tokens_in?: number
   tokens_out?: number
   prompt_sha?: string
+  // Set only when the document was too long for one call: how many pieces it was
+  // cut into and how many calls that took. Absent = one call, as before.
+  chunks?: number
+  calls?: number
+  // The document did not fit even the big model; the body says so too.
+  truncated?: boolean
 }
 
 // parseHighlightMetadata safely parses the Highlight.metadata JSON string. Takes

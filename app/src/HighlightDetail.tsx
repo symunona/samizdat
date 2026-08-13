@@ -23,6 +23,10 @@ export function provenanceLine(p: HighlightProvenance): string {
   if (p.max_tokens) parts.push(`${p.max_tokens} tok`)
   if (p.temperature !== undefined) parts.push(`t ${p.temperature}`)
   if (p.tokens_in || p.tokens_out) parts.push(`${compact(p.tokens_in)}→${compact(p.tokens_out)}`)
+  // A long document was read in pieces: the token counts above are the sum over
+  // every call, and the model named above is the one that wrote the final text.
+  if (p.chunks) parts.push(`${p.chunks} chunks${p.calls ? ` / ${p.calls} calls` : ''}`)
+  if (p.truncated) parts.push('truncated')
   return parts.join(' · ')
 }
 

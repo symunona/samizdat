@@ -448,12 +448,14 @@ DB row.
   `steps_json.go`, mirrored by `NOT_SECRET_KEY` in the app's `pipelines.tsx`). It contains
   "token", so `StripCredentials` ate it: the field never rendered in the step editor and
   the next save dropped it. Keep the two exemptions in step.
-- **Ollama's context defaults to 4096 tokens and truncates silently**; the summarize step
-  feeds up to 12k chars. The OpenAI-compatible endpoint has no `num_ctx`, so bake it into
-  a model variant (`FROM qwen3:4b-instruct` + `PARAMETER num_ctx 7168` → `ollama create`)
-  rather than setting `OLLAMA_CONTEXT_LENGTH` on a box other people share. Size the context
-  to what stays on the GPU (`ollama ps` prints the split) — the first byte that spills to
-  CPU roughly halves throughput.
+- **Ollama's context defaults to 4096 tokens and truncates silently.** The OpenAI-compatible
+  endpoint has no `num_ctx`, so bake it into a model variant (`FROM qwen3:4b-instruct` +
+  `PARAMETER num_ctx 7168` → `ollama create`) rather than setting `OLLAMA_CONTEXT_LENGTH` on
+  a box other people share. Size the context to what stays on the GPU (`ollama ps` prints the
+  split) — the first byte that spills to CPU roughly halves throughput. Then tell the server
+  the same number in `[llm.summarize.<role>] ctx_tokens`: it is the ONLY thing keeping a
+  prompt inside the window, because an oversized one comes back as a confident answer about
+  whatever survived, not as an error.
 - **Name a self-hosted box by DNS, never by IP** (`http://xayah.tail7f475e.ts.net:11434/v1`).
   A `providerID` is `host:port`, so the address in `base_url` is also the identity every
   pipeline step pins — and an IP is not stable: rebuilding the tailnet box moved it, which
@@ -513,6 +515,53 @@ cached 5 minutes (`?refresh=1` busts it). All four flavors serve the OpenAI-shap
 (Haiku/Sonnet/Opus) — an empty picker for the provider you are about to configure is worse
 than a short honest list. An unreachable provider contributes an `error` on its group,
 never an empty picker for everyone else.
+
+## How much document a step sends (`pipeline/llm_long.go` + `[llm.summarize]`)
+
+Every LLM step goes through `llmStepCallLong`. It replaced four hardcoded
+`content[:12000]`/`[:16000]` byte slices — which dropped everything past the first few
+thousand tokens, said nothing about it, and could cut a multi-byte rune in half.
+
+Three bands, sized from config, in **estimated** tokens (`EstimateTokens` = runes/3, with
+another third of the window held back as headroom; there is no tokenizer, and being wrong
+low is invisible while being wrong high is loud):
+
+| Band | Condition | What happens |
+|---|---|---|
+| small | `< chunk_above` | one call, the step's own config — byte-identical to before |
+| medium | `< big_above` | `Split` → one call per chunk (`map` role) → one fold (`reduce` role) |
+| large | else | one call to the `big` role, clamped to its window, with a visible note |
+
+- **Chunk size is derived, never configured** (`ChunkBudget`): `ctx_tokens*2/3 − max_tokens −
+  prompt`. A knob for it would be a second, staler copy of `ctx_tokens`.
+- **One chunk per job tick.** `worker.stuckJobAge` requeues a job whose `updated_at` is over
+  10 minutes old, and a dozen sequential calls to a local model cross that — the reset would
+  run a second worker on the same run: double spend, duplicate Highlights. Ticking keeps
+  `updated_at` fresh and makes a crash cost one chunk instead of all of them.
+  `StepResult.Continue` skips `stepRetryDelay` for a tick that made progress (that delay is
+  backoff, and progress is not a failure).
+- **Chunk text is never stored.** `Split` is deterministic (guarded by a test), so each tick
+  re-derives the chunks and takes the one it needs; `pipeline_runs.state` holds only the
+  partials and the counters. Storing the chunks would put a copy of every long document in
+  the runs table.
+- **The fold carries the STEP's own prompt**, not a generic one — the step's output contract
+  (caveman bullets, a JSON topic list) is the whole point of the step. Only the `map` pass
+  has its own prompt, because a chunk is not an article and the summary prompt makes a model
+  write twelve little articles. That map prompt deliberately has **no `__NOT_PARSEABLE__`
+  clause**: the sentinel kills the whole Document, and a nav bar is a normal chunk of a real
+  article.
+- **Escalation, not recursion.** A role that exhausts `max_tries` retries on the `big` role
+  (skipped when that resolves to the same endpoint). Partials too large for the `reduce`
+  window escalate the same way — there is no recursive fold.
+- **A role naming neither provider nor model keeps the step's own routing.** An instance with
+  no `[llm.summarize]` block changes how much it sends, never where. That is also why
+  `bigCtxTokens` sizes an unconfigured `big` role like the `map` role: the call would still
+  land on a 7k local box.
+- **A window too small for the prompt fails the step**, loudly. `ChunkBudget` returning 0 once
+  meant "skip the clamp", which sent the whole document to a box that could not hold it.
+- Provenance gains `chunks`/`calls`/`truncated`; token counts are sums over the run and
+  `model` names whoever wrote the final text. Absent `chunks` = one call, and the app card
+  renders exactly as before.
 
 ## LLM provider health (`internal/llm/health.go`)
 
