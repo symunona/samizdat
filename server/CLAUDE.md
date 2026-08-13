@@ -346,8 +346,37 @@ Guarded by `TestSweepIsQuietWhenNothingChanged`.
     tried and rejected — its `GetPlainText` burned >2min of CPU on a 21-page paper.
 - **`media_type = 'video'`** — YouTube/podcast ingest via yt-dlp. Fields:
   - `media_metadata`: JSON `{provider, external_id, duration_ms, transcript_status, orig_lang, transcript_langs}` where `transcript_status` ∈ `"subs" | "auto" | "none"` (of the original track), `orig_lang` is the original language code, and `transcript_langs` lists all languages present.
-  - `transcript`: JSON **lang-keyed map** `{lang: [{start_ms, end_ms, text}]}` (empty object `{}` when none). Legacy rows may still hold a bare array `[...]`; the app parsers accept both.
-  - `markdown`: flattened transcript text (one segment per line); falls back to video description when no transcript.
+  - `transcript`: JSON **lang-keyed map** `{lang: [{start_ms, end_ms, text, new_para?}]}` (empty object `{}` when none). Legacy rows may still hold a bare array `[...]`; the app parsers accept both.
+  - `markdown`: flattened transcript prose — sentences run together, paragraphs separated by a blank line; falls back to video description when no transcript.
+  - **A segment is a SENTENCE, not a caption cue** (`internal/transcript`). Two things
+    happen between the `.vtt` and the row, and both are load-bearing:
+    - **Roll-up de-dup** (`ParseVTT`). YouTube auto-captions emit every spoken line
+      three times — a paint-on cue carrying inline word timings (`<00:00:01.000>`),
+      a ~10ms "settle" cue holding the finished line, and the same line again as the
+      carried-over first line of the next cue. The joined cue texts run A, "A B", B,
+      "B C" …, which is never *equal* to its predecessor, so the original cue-level
+      dedup dropped nothing and every video body was **~3x its real text** (and every
+      LLM step paid 3x tokens). Roll-up is detected by those inline timings; in that
+      mode each LINE is a candidate and a line equal to the last emitted one is
+      dropped. Window of one — the only false drop is a line repeated verbatim
+      back-to-back. Manual subtitle tracks have no inline timings and keep the
+      per-cue path.
+    - **Sentence reflow** (`Reflow`). A cue is a ~35-char display wrap cut
+      mid-sentence, so cues are concatenated and re-cut at sentence boundaries, with
+      each segment re-timed by interpolating within the cue its first/last character
+      fell in. `>>` is YouTube's speaker marker: it is stripped and forces a break.
+      `NewPara` marks a paragraph opening (speaker change, silence gap > 2.5s, or a
+      paragraph past ~700 chars). Guards both ways: a run-on past 350 chars / 20s is
+      split at a clause boundary, a sentence under 40 chars is glued to the next.
+    - **Never render one block per cue.** That was thousands of mid-sentence stubs,
+      it broke TextQuoteSelector anchors across the wraps, and it fed the LLM
+      shredded prose. The app renders `.seg` spans grouped into `.para` blocks.
+  - `worker.BackfillTranscripts` repairs rows written before that, one-shot, guarded by
+    `server_settings.transcripts_reparsed_rollup`. It re-parses the cached `.vtt`
+    (kept in `<cache>/media` exactly so this needs no yt-dlp and no network); a row
+    whose subtitles are gone falls back to `transcript.DedupRollup`, which recovers
+    each line from the stored segments by stripping the leading copy of the one before
+    it. A row that yields nothing is left untouched — never replace a body with nothing.
 
 ## Step catalog + prompts live in config, not in Go
 

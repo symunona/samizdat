@@ -15,6 +15,9 @@ type Segment struct {
 	StartMs int64  `json:"start_ms"`
 	EndMs   int64  `json:"end_ms"`
 	Text    string `json:"text"`
+	// NewPara marks a segment that opens a display paragraph (speaker change or a
+	// silence gap). Set by Reflow; raw cues never carry it.
+	NewPara bool `json:"new_para,omitempty"`
 }
 
 // tagRe strips VTT inline tags: <00:00:01.000>, <c>, </c>, <c.colorE5E5E5>, etc.
@@ -23,12 +26,29 @@ var tagRe = regexp.MustCompile(`<[^>]*>`)
 // wsRe collapses runs of whitespace (incl. non-breaking space) to a single space.
 var wsRe = regexp.MustCompile(`[\s\x{00a0}]+`)
 
-// ParseVTT parses a WebVTT document into deduplicated, time-ordered segments.
+// inlineTimeRe matches a VTT inline word timing, <00:00:01.000>. Their presence is
+// what identifies YouTube's roll-up auto-captions (see ParseVTT).
+var inlineTimeRe = regexp.MustCompile(`<\d{2}:\d{2}:\d{2}\.\d{3}>`)
+
+// ParseVTT parses a WebVTT document into deduplicated, time-ordered cues.
+//
+// YouTube auto-captions are a ROLL-UP stream: every spoken line is emitted three
+// times — a paint-on cue carrying inline word timings, a ~10ms "settle" cue holding
+// the finished line, and again as the carried-over first line of the next paint-on
+// cue. Joining a whole cue therefore yields A, A, "A B", B, "B C" … which is never
+// exactly equal to its predecessor, so cue-level dedup drops nothing and the body
+// comes out ~3x its real length.
+//
+// So in roll-up mode (detected by the inline timings) each LINE is a candidate and a
+// line equal to the last emitted one is dropped — that kills both the settle cue and
+// the carry-over. A window of one is deliberate: the only false drop is a line that
+// genuinely repeats verbatim back-to-back.
 func ParseVTT(data string) []Segment {
 	// Normalize newlines; split into blocks separated by blank lines.
 	data = strings.ReplaceAll(data, "\r\n", "\n")
 	data = strings.ReplaceAll(data, "\r", "\n")
 	blocks := strings.Split(data, "\n\n")
+	rollup := inlineTimeRe.MatchString(data)
 
 	var segs []Segment
 	var lastText string
@@ -56,32 +76,67 @@ func ParseVTT(data string) []Segment {
 			continue
 		}
 
-		// Everything after the timing line is the caption text.
-		raw := strings.Join(lines[timingIdx+1:], " ")
-		text := cleanText(raw)
-		if text == "" {
-			continue
+		// Roll-up: each line stands alone (carry-over lines are dropped below).
+		// Otherwise the whole cue is one segment, as authored in manual subs.
+		body := lines[timingIdx+1:]
+		if !rollup {
+			body = []string{strings.Join(body, " ")}
 		}
-		// Rolling auto-captions repeat the previous cue verbatim — drop exact dups.
-		if text == lastText {
-			continue
+		for _, raw := range body {
+			text := cleanText(raw)
+			if text == "" || text == lastText {
+				continue
+			}
+			segs = append(segs, Segment{StartMs: start, EndMs: end, Text: text})
+			lastText = text
 		}
-
-		segs = append(segs, Segment{StartMs: start, EndMs: end, Text: text})
-		lastText = text
 	}
 
 	return segs
 }
 
-// FlattenText joins segment texts into a single plain-text body (one line each),
-// used as the Document.markdown so Pipeline/Highlight/Annotation machinery works.
-func FlattenText(segs []Segment) string {
-	parts := make([]string, len(segs))
-	for i, s := range segs {
-		parts[i] = s.Text
+// DedupRollup repairs segments produced by the pre-fix cue-level parser, for rows
+// whose .vtt files are no longer cached (pruned, or ingested before per-language
+// subtitle files were kept). Joining a whole roll-up cue yields A, "A B", B, "B C" …
+// so each line is recoverable by stripping the leading copy of the line before it.
+// A no-op on clean transcripts: no sentence opens with the whole previous one.
+func DedupRollup(segs []Segment) []Segment {
+	out := make([]Segment, 0, len(segs))
+	last := ""
+	for _, s := range segs {
+		text := s.Text
+		if text == last {
+			continue
+		}
+		if last != "" && strings.HasPrefix(text, last+" ") {
+			text = strings.TrimSpace(text[len(last):])
+		}
+		if text == "" {
+			continue
+		}
+		s.Text = text
+		out = append(out, s)
+		last = text
 	}
-	return strings.Join(parts, "\n")
+	return out
+}
+
+// FlattenText joins segment texts into a plain-text body used as Document.markdown,
+// so Pipeline/Highlight/Annotation machinery works on prose: sentences run together
+// inside a paragraph, paragraphs separated by a blank line. Reflow marks the breaks.
+func FlattenText(segs []Segment) string {
+	var b strings.Builder
+	for i, s := range segs {
+		switch {
+		case i == 0:
+		case s.NewPara:
+			b.WriteString("\n\n")
+		default:
+			b.WriteString(" ")
+		}
+		b.WriteString(s.Text)
+	}
+	return b.String()
 }
 
 func cleanText(s string) string {

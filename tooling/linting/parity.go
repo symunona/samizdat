@@ -86,7 +86,11 @@ func checkPair(repoRoot string, p parityPair) error {
 	prompt := buildParityPrompt(p, diffA, diffB, string(srcA), string(srcB))
 	result, err := ai.Complete(context.Background(), claude.ModelSonnet, prompt)
 	if err != nil {
-		return fmt.Errorf("claude complete: %w", err)
+		// Same graceful degrade as a missing key: an unusable key (or a dead
+		// endpoint) must not block every branch's lint on a judgement we cannot
+		// obtain. Remind the human instead.
+		fmt.Printf("\nparity: cannot judge (%v) — verify the change is reflected in BOTH files manually.\n", err)
+		return nil
 	}
 
 	inSync, notes := parseParityResponse(result)

@@ -2091,6 +2091,53 @@ func (q *Queries) ListDocumentsByFeed(ctx context.Context, sourceFeedID *string)
 	return items, nil
 }
 
+const listDocumentsByMediaType = `-- name: ListDocumentsByMediaType :many
+SELECT id, canonical_url, title, markdown, fetched_at, excerpt, hero_image_url, author, published_at, source_feed_id, content_hash, media_type, media_metadata, transcript, error_reason, created_at, updated_at, rev, deleted_at FROM documents WHERE media_type = ? AND deleted_at IS NULL ORDER BY created_at DESC
+`
+
+func (q *Queries) ListDocumentsByMediaType(ctx context.Context, mediaType string) ([]Document, error) {
+	rows, err := q.db.QueryContext(ctx, listDocumentsByMediaType, mediaType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Document
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.CanonicalUrl,
+			&i.Title,
+			&i.Markdown,
+			&i.FetchedAt,
+			&i.Excerpt,
+			&i.HeroImageUrl,
+			&i.Author,
+			&i.PublishedAt,
+			&i.SourceFeedID,
+			&i.ContentHash,
+			&i.MediaType,
+			&i.MediaMetadata,
+			&i.Transcript,
+			&i.ErrorReason,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDocumentsByPipeline = `-- name: ListDocumentsByPipeline :many
 SELECT DISTINCT d.id, d.canonical_url, d.title, d.markdown, d.fetched_at, d.excerpt,
        d.hero_image_url, d.author, d.published_at, d.source_feed_id, d.content_hash,
@@ -4331,6 +4378,29 @@ func (q *Queries) UpdateDocumentMarkdown(ctx context.Context, arg UpdateDocument
 	_, err := q.db.ExecContext(ctx, updateDocumentMarkdown,
 		arg.Markdown,
 		arg.Excerpt,
+		arg.ContentHash,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
+}
+
+const updateDocumentTranscript = `-- name: UpdateDocumentTranscript :exec
+UPDATE documents SET markdown = ?, transcript = ?, content_hash = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type UpdateDocumentTranscriptParams struct {
+	Markdown    string `json:"markdown"`
+	Transcript  string `json:"transcript"`
+	ContentHash string `json:"content_hash"`
+	UpdatedAt   string `json:"updated_at"`
+	ID          string `json:"id"`
+}
+
+func (q *Queries) UpdateDocumentTranscript(ctx context.Context, arg UpdateDocumentTranscriptParams) error {
+	_, err := q.db.ExecContext(ctx, updateDocumentTranscript,
+		arg.Markdown,
+		arg.Transcript,
 		arg.ContentHash,
 		arg.UpdatedAt,
 		arg.ID,

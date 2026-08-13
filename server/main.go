@@ -14,6 +14,7 @@ import (
 	"github.com/symunona/samizdat/server/internal/network"
 	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
+	"github.com/symunona/samizdat/server/internal/worker"
 )
 
 var logServer = logger.New("server")
@@ -104,6 +105,12 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// into its config so it becomes visible + editable. One-shot, self-guarded.
 	if err := pipeline.BackfillStepPrompts(context.Background(), store.New(db)); err != nil {
 		return fmt.Errorf("backfill step prompts: %w", err)
+	}
+
+	// Same shape: video bodies written before the roll-up fix hold every spoken line
+	// three times. The cached .vtt files make that repairable offline.
+	if err := worker.BackfillTranscripts(context.Background(), store.New(db), c.CacheDir); err != nil {
+		return fmt.Errorf("backfill transcripts: %w", err)
 	}
 
 	if err := os.MkdirAll(c.CacheDir+"/media", 0755); err != nil {

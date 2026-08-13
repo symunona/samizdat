@@ -38,15 +38,28 @@ export function buildDocumentHtml(
   return wrapViewerHtml(title, bodyHtml)
 }
 
-// buildTranscriptHtml renders a video Document's time-anchored transcript: each
-// segment is a `.seg` paragraph carrying its `data-start-ms`, so the WebView can
-// highlight/seek by playback time while reusing the same annotation machinery.
+// buildTranscriptHtml renders a video Document's time-anchored transcript: one
+// `.seg` span per sentence carrying its `data-start-ms` (so the WebView can
+// highlight/seek by playback time and reuse the same annotation machinery), grouped
+// into `.para` paragraphs on the server's `new_para` breaks — a block per caption
+// wrap would be thousands of mid-sentence stubs.
 export function buildTranscriptHtml(
-  segments: { start_ms: number; end_ms?: number; text: string }[],
+  segments: { start_ms: number; end_ms?: number; text: string; new_para?: boolean }[],
   title: string,
 ): string {
-  const body = segments
-    .map(s => `<p class="seg" data-start-ms="${s.start_ms}" data-end-ms="${s.end_ms ?? ''}" data-ts="${fmtSegTime(s.start_ms)}">${escapeHtmlText(s.text)}</p>`)
+  type Seg = (typeof segments)[number]
+  const paras: Seg[][] = []
+  for (const s of segments) {
+    if (paras.length === 0 || s.new_para) paras.push([])
+    paras[paras.length - 1].push(s)
+  }
+  const body = paras
+    .map(segs => {
+      const spans = segs
+        .map(s => `<span class="seg" data-start-ms="${s.start_ms}" data-end-ms="${s.end_ms ?? ''}">${escapeHtmlText(s.text)}</span>`)
+        .join(' ')
+      return `<p class="para" data-ts="${fmtSegTime(segs[0].start_ms)}">${spans}</p>`
+    })
     .join('\n')
   return wrapViewerHtml(title, body)
 }

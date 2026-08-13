@@ -2,7 +2,7 @@
 created: 2026-08-13
 topic: YouTube transcript roll-up de-duplication + sentence reflow
 excerpt: Auto-caption VTT is a roll-up stream — every spoken line lands three times (paint-on cue, 10ms settle cue, carry-over line of the next cue). ParseVTT joins whole cues and only drops exactly-equal ones, so nothing was dropped and every video body is ~3x its real text. Fix the parser, then reflow 35-char display stubs into sentences/paragraphs while keeping per-segment scroll-follow.
-status: planned
+status: done — parser + reflow + renderer + backfill shipped; all 10 video Documents repaired on this instance (ddc03351 346983 → 115311 chars), verified by a real mouse click in agent-browser
 ---
 
 # Transcript de-dup + sentence reflow
@@ -99,10 +99,30 @@ readers do.
 
 ## Backfill
 
-10 video Documents, all 12 `.vtt` still in `cache/media/` → offline re-parse, no yt-dlp,
+10 video Documents; the 12 cached `.vtt` cover 6 of them → offline re-parse, no yt-dlp,
 no bot wall. Boot-time, self-guarded by a `settings` key, next to the existing
 `pipeline.BackfillStepPrompts` precedent: re-parse each video Document's cached VTT →
 rewrite `transcript` + `markdown` + `content_hash`, bump `rev` so phones re-pull.
+
+The other 4 predate per-language ingest: no `transcript_langs`, no cached `.vtt`, and a
+bare-array transcript. `transcript.DedupRollup` repairs those from the stored segments —
+the pre-fix parser stored A, "A B", B, "B C" …, so each line comes back by stripping the
+leading copy of the one before it. Result on this instance:
+
+| doc | before | after |
+|---|---|---|
+| ddc03351 | 346 983 | 115 311 |
+| 9b5badaf | 300 943 | 99 669 |
+| 957847bd | 201 532 | 70 753 |
+| 7c39db6f | 173 306 | 57 376 |
+| ee382465 | 143 793 | 47 944 |
+| 3d4fd892 | 115 982 | 38 747 |
+| 568379f5 | 58 205 | 19 465 |
+| ce0c1ed3 | 47 801 | 15 973 |
+| ae46a98a | 49 136 | 49 140 |
+
+`ae46a98a` has **manual** subtitles — no roll-up, so only the reflow applied and the
+length is unchanged. That is the control case.
 
 Known consequence: character offsets of existing annotations on these 10 docs move (the
 body loses 2/3 of its length). Time-anchored transcript annotations re-anchor by

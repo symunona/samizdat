@@ -552,7 +552,16 @@ auto-scroll (`mediaTime` message) keeps following with **no** change to the tran
 `expo-file-system` (`legacy` import) downloads the audio asset to `FileSystem.documentDirectory`. The local URI is persisted in AsyncStorage under key `video_audio_<docId>` and restored on mount. The sync button is hidden on web (no `expo-file-system` on web).
 
 ### Transcript rendering
-`buildTranscriptHtml()` in `src/markdownToHtml.ts` renders `TranscriptSegment[]` as `.seg` paragraphs with `data-start-ms` attributes. The document-viewer WebView bundle handles:
+`buildTranscriptHtml()` in `src/markdownToHtml.ts` renders `TranscriptSegment[]` as one
+**`.seg` span per sentence** carrying `data-start-ms`/`data-end-ms`, grouped into `.para`
+paragraph blocks on the server's `new_para` flag. **A block per segment is wrong** — the
+server sends sentences, but before that it sent YouTube's ~35-char display wraps, and one
+`<p>` each meant thousands of mid-sentence stubs (see `server/CLAUDE.md` → video Documents
+for why the segment is a sentence). The hover timestamp chip hangs off the **paragraph**:
+an absolutely-positioned `::after` on an inline span lands per line-box, i.e. mid-sentence.
+
+Everything below keys off `.seg[data-start-ms]` and is indifferent to the tag, so the
+follow/seek/annotation machinery needed no change. The document-viewer WebView bundle handles:
 - `mediaTime` message → highlights the active `.seg` and auto-scrolls (suppressed for 2.5s after user scroll)
 - `activeSegVisible` message (outbound) → reports whether the `.seg.active` is on-screen; the host shows/hides the floating resume button
 - `scrollToActive` message → scrolls the active `.seg` to center and resets the user-scroll timer so auto-follow resumes

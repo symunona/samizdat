@@ -205,6 +205,71 @@ func TestAnnotationGroupsByOwnCreatedAt(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, e.annFiles["ann-1"])); err != nil {
 		t.Errorf("annotation note not on disk: %v", err)
 	}
+
+	// Deleting the only note in a week folder must take the folder with it —
+	// an empty grouping dir still shows up in Obsidian's file tree.
+	annDir := filepath.Join(dir, wantAnnDir)
+	later := now.Add(time.Second).Format(time.RFC3339)
+	if err := q.SoftDeleteAnnotation(ctx, store.SoftDeleteAnnotationParams{
+		DeletedAt: &later, UpdatedAt: later, ID: "ann-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.sweep(ctx)
+
+	if _, err := os.Stat(annDir); !os.IsNotExist(err) {
+		t.Errorf("empty grouping dir %s survived (err=%v)", wantAnnDir, err)
+	}
+	// ...but never the top-level folder itself.
+	if _, err := os.Stat(filepath.Join(dir, annsSub)); err != nil {
+		t.Errorf("annotations/ root was pruned: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, e.docFiles["doc-1"])); err != nil {
+		t.Errorf("doc note lost: %v", err)
+	}
+}
+
+// TestPruneGroupDirKeepsSharedFolder: pruning is opportunistic — a folder that
+// still holds another note must survive the removal of its neighbour.
+func TestPruneGroupDirKeepsSharedFolder(t *testing.T) {
+	dir := t.TempDir()
+	group := filepath.Join(dir, annsSub, "2026-W33")
+	if err := os.MkdirAll(group, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"a.md", "b.md"} {
+		if err := os.WriteFile(filepath.Join(group, n), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removeIfMoved(dir, annsSub+"/2026-W33/a.md", annsSub+"/2026-W34/a.md")
+	if _, err := os.Stat(group); err != nil {
+		t.Errorf("folder with a remaining note was pruned: %v", err)
+	}
+	// The boot pass clears folders emptied by an older build; a populated
+	// neighbour and the top-level folders are left alone.
+	stale := filepath.Join(dir, docsSub, "2025-W01")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	(&Exporter{dir: dir}).pruneEmptyGroups()
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale empty grouping dir survived the boot pass (err=%v)", err)
+	}
+	if _, err := os.Stat(group); err != nil {
+		t.Errorf("boot pass removed a populated folder: %v", err)
+	}
+
+	// Flat layout: the top-level folder is not a grouping dir, never a candidate.
+	if err := os.WriteFile(filepath.Join(dir, annsSub, "c.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeIfPresent(dir, annsSub+"/c.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, annsSub)); err != nil {
+		t.Errorf("annotations/ root pruned on a flat-layout delete: %v", err)
+	}
 }
 
 // mtimes maps every file under root to its modification time.

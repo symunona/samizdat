@@ -128,18 +128,22 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 #ann-gutter{position:fixed;top:0;right:0;width:6px;height:100%;pointer-events:none;z-index:90}
 #doc-title{font-size:1.6em;font-weight:700;color:var(--fg);margin:0 0 1em;line-height:1.3}
 
-/* Transcript segments (video/podcast documents) */
-.seg{position:relative;cursor:pointer;border-radius:4px;padding:2px 6px;margin:0 -6px 0.35em;transition:background 0.2s,color 0.2s;color:var(--mu)}
+/* Transcript (video/podcast documents): a paragraph of sentence-sized .seg spans.
+   The paragraph is the block; a seg is inline so sentences read as prose. */
+.para{position:relative;margin:0 0 0.9em;color:var(--mu)}
+.seg{cursor:pointer;border-radius:4px;padding:1px 2px;margin:0 -2px;transition:background 0.2s,color 0.2s}
 .seg:hover{background:var(--su);color:var(--fg)}
 .seg.active{background:rgba(232,116,59,0.16);color:var(--fg)}
-/* A transcript line carrying a time-anchored annotation — tap reopens the note */
+/* A transcript sentence carrying a time-anchored annotation — tap reopens the note */
 .seg.has-ann{background:rgba(167,139,250,0.12)}
 .seg.has-ann:hover{background:rgba(167,139,250,0.2)}
 .seg-ann-badge{color:#a78bfa;font-size:0.85em;margin-right:4px;user-select:none}
-/* Faded per-line timestamp, revealed on hover (desktop / pointer devices only) */
+/* Faded paragraph timestamp, revealed on hover (desktop / pointer devices only). It
+   hangs off the PARAGRAPH: an absolutely-positioned ::after on an inline span lands
+   per line-box, i.e. mid-sentence. */
 @media (hover:hover){
-.seg[data-ts]::after{content:attr(data-ts);position:absolute;top:2px;right:6px;font-size:0.78em;font-variant-numeric:tabular-nums;color:var(--mu);background:var(--su);padding:0 4px;border-radius:3px;opacity:0;transition:opacity 0.15s;pointer-events:none}
-.seg[data-ts]:hover::after{opacity:0.65}
+.para[data-ts]::after{content:attr(data-ts);position:absolute;top:0;right:0;font-size:0.78em;font-variant-numeric:tabular-nums;color:var(--mu);background:var(--su);padding:0 4px;border-radius:3px;opacity:0;transition:opacity 0.15s;pointer-events:none}
+.para[data-ts]:hover::after{opacity:0.65}
 }
 
 /* Highlight section */

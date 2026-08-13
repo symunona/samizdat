@@ -38,6 +38,49 @@ late cue
 	}
 }
 
+// YouTube auto-captions roll up: paint-on cue, ~10ms settle cue, then the finished
+// line carried over as the first line of the next paint-on cue. Every spoken line
+// therefore arrives three times.
+func TestParseVTTRollup(t *testing.T) {
+	in := `WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.160 --> 00:00:01.990 align:start position:0%
+
+How<00:00:00.400><c> do</c><00:00:01.600><c> I</c><00:00:01.700><c> quit?</c>
+
+00:00:01.990 --> 00:00:02.000 align:start position:0%
+How do I quit?
+
+
+00:00:02.000 --> 00:00:04.390 align:start position:0%
+How do I quit?
+&gt;&gt; It's<00:00:02.240><c> okay.</c>
+
+00:00:04.390 --> 00:00:04.400 align:start position:0%
+&gt;&gt; It's okay.
+
+
+00:00:04.400 --> 00:00:05.749 align:start position:0%
+&gt;&gt; It's okay.
+&gt;&gt; Hang<00:00:04.560><c> on.</c>
+`
+	got := ParseVTT(in)
+	want := []string{"How do I quit?", ">> It's okay.", ">> Hang on."}
+	if len(got) != len(want) {
+		t.Fatalf("want %d lines (settle + carry-over dropped), got %d: %+v", len(want), len(got), got)
+	}
+	for i, w := range want {
+		if got[i].Text != w {
+			t.Errorf("seg%d = %q, want %q", i, got[i].Text, w)
+		}
+	}
+	if got[1].StartMs != 2000 || got[1].EndMs != 4390 {
+		t.Errorf("seg1 timing = %d..%d, want 2000..4390 (the paint-on cue's)", got[1].StartMs, got[1].EndMs)
+	}
+}
+
 func TestParseVTTEntities(t *testing.T) {
 	in := "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nMemories&nbsp; are real &amp; weird &#39;magic&#39;\n"
 	got := ParseVTT(in)
@@ -62,12 +105,5 @@ func TestParseTimestamp(t *testing.T) {
 		if !ok || got != want {
 			t.Errorf("parseTimestamp(%q) = %d,%v want %d", in, got, ok, want)
 		}
-	}
-}
-
-func TestFlattenText(t *testing.T) {
-	segs := []Segment{{Text: "a"}, {Text: "b"}}
-	if FlattenText(segs) != "a\nb" {
-		t.Errorf("FlattenText = %q", FlattenText(segs))
 	}
 }

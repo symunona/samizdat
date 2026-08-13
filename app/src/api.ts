@@ -155,8 +155,9 @@ export type Document = {
   deleted_at: string | null
 }
 
-// A time-anchored transcript segment (video/podcast Documents).
-export type TranscriptSegment = { start_ms: number; end_ms: number; text: string }
+// A time-anchored transcript segment (video/podcast Documents) — one sentence, with
+// new_para set on the ones that open a display paragraph (speaker change / silence).
+export type TranscriptSegment = { start_ms: number; end_ms: number; text: string; new_para?: boolean }
 
 export type MediaMetadata = {
   provider?: string

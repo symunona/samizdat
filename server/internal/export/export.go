@@ -108,6 +108,10 @@ func (e *Exporter) Run(ctx context.Context) {
 	e.loadIndex()
 	e.log.Printf("auto-export → %s (%d docs, %d annotations)", e.dir, len(e.docFiles), len(e.annFiles))
 	e.sweep(ctx)
+	// After the boot sweep has moved whatever regrouped: pruneGroupDir only fires
+	// on a note leaving, so folders emptied by an older build (or by a grouping
+	// change made while the server was down) need this one pass to disappear.
+	e.pruneEmptyGroups()
 
 	t := time.NewTicker(tickEvery)
 	defer t.Stop()
@@ -345,6 +349,39 @@ func unchanged(path string, body []byte) bool {
 func removeIfMoved(dir, oldRel, newRel string) {
 	if oldRel != "" && oldRel != newRel {
 		_ = os.Remove(filepath.Join(dir, oldRel))
+		pruneGroupDir(dir, oldRel)
+	}
+}
+
+// pruneEmptyGroups removes every empty grouping subfolder under documents/ and
+// annotations/. Grouping is exactly one level deep, so a shallow ReadDir is the
+// whole job. os.Remove refuses a non-empty dir — nothing is ever read to decide.
+func (e *Exporter) pruneEmptyGroups() {
+	for _, sub := range []string{docsSub, annsSub} {
+		entries, err := os.ReadDir(filepath.Join(e.dir, sub))
+		if err != nil {
+			continue
+		}
+		for _, ent := range entries {
+			if ent.IsDir() {
+				_ = os.Remove(filepath.Join(e.dir, sub, ent.Name()))
+			}
+		}
+	}
+}
+
+// pruneGroupDir removes the grouping subfolder a departing note left empty
+// (documents/2019-W10), so a regrouping doesn't litter the vault with empty
+// dirs Obsidian still shows. os.Remove refuses a non-empty directory, so it
+// doubles as the emptiness check; documents/, annotations/ and assets/ are never
+// candidates because they sit directly under dir (no separator in their parent).
+func pruneGroupDir(dir, rel string) {
+	i := strings.LastIndex(rel, "/")
+	if i < 0 {
+		return
+	}
+	if sub := rel[:i]; strings.Contains(sub, "/") {
+		_ = os.Remove(filepath.Join(dir, sub))
 	}
 }
 
@@ -434,7 +471,7 @@ func (e *Exporter) removeDoc(id string) error {
 	rel := e.docFiles[id]
 	delete(e.docFiles, id)
 	e.mu.Unlock()
-	return removeIfPresent(filepath.Join(e.dir, rel), rel)
+	return removeIfPresent(e.dir, rel)
 }
 
 // removeAnnotation deletes our note for a tombstoned annotation.
@@ -443,20 +480,19 @@ func (e *Exporter) removeAnnotation(id string) error {
 	rel := e.annFiles[id]
 	delete(e.annFiles, id)
 	e.mu.Unlock()
-	return removeIfPresent(filepath.Join(e.dir, rel), rel)
+	return removeIfPresent(e.dir, rel)
 }
 
-func removeIfPresent(path, name string) error {
-	if name == "" {
+// removeIfPresent deletes dir/rel and prunes the grouping folder it emptied.
+func removeIfPresent(dir, rel string) error {
+	if rel == "" {
 		return nil
 	}
-	err := os.Remove(path)
-	if os.IsNotExist(err) {
-		return nil
+	err := os.Remove(filepath.Join(dir, rel))
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove note %s: %w", rel, err)
 	}
-	if err != nil {
-		return fmt.Errorf("remove note %s: %w", name, err)
-	}
+	pruneGroupDir(dir, rel)
 	return nil
 }
 

@@ -474,7 +474,9 @@ func readLangVTT(base, lang string) []transcript.Segment {
 		if err != nil {
 			continue
 		}
-		if segs := transcript.ParseVTT(string(data)); len(segs) > 0 {
+		// Reflow here, not at the call sites: ingest and the backfill must produce
+		// byte-identical segments or a re-parse would churn every rev.
+		if segs := transcript.Reflow(transcript.ParseVTT(string(data))); len(segs) > 0 {
 			return segs
 		}
 	}

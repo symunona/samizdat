@@ -132,6 +132,12 @@ UPDATE documents SET excerpt = ?, hero_image_url = ?, author = ?, updated_at = ?
 -- name: UpdateDocumentMarkdown :exec
 UPDATE documents SET markdown = ?, excerpt = ?, content_hash = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
+-- name: UpdateDocumentTranscript :exec
+UPDATE documents SET markdown = ?, transcript = ?, content_hash = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: ListDocumentsByMediaType :many
+SELECT * FROM documents WHERE media_type = ? AND deleted_at IS NULL ORDER BY created_at DESC;
+
 -- name: MarkDocumentError :exec
 UPDATE documents SET error_reason = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
 
