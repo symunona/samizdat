@@ -2,7 +2,7 @@
 created: 2026-08-16
 topic: Video document viewer — selection, tap semantics, jump-back, transcript search
 excerpt: Selection no longer yanks the transcript or fights playback; tapping a line stops seeking (play-from moves into the long-tap row); a jump leaves a way back; the transcript gets a find bar.
-status: built
+status: shipped — squash-merged to main 2026-08-28 (522e015)
 ---
 
 # Transcript: selection, tap semantics, jump-back, search

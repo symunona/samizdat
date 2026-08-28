@@ -6,7 +6,7 @@ excerpt: >-
   YouTube ingest fails with the bot-block error. Replace it with an ordered
   pool that health-checks every entry, picks the active one stickily, rotates
   past a bot-blocked IP mid-job, and renders the whole list in Settings.
-status: built — merged to main
+status: shipped — squash-merged to main 2026-08-28 (a79e9a4)
 ---
 
 # Residential proxy pool
