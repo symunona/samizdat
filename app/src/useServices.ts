@@ -62,6 +62,9 @@ export function useServiceAlert(): boolean {
   const { data: llm } = useLLMStatus()
   const persistBroken = usePersistHealth((s) => s.failure !== null)
   const proxyDown = !!proxy?.configured && !proxy.ok
+  // A stale yt-dlp breaks every video ingest on every proxy, so it belongs in
+  // the same dot — it is a broken service, just not a broken proxy.
+  const ytdlpStale = !!proxy?.ytdlp?.stale
   const exportBroken = !!exp?.enabled && !!exp.last_error
   // Only the routing chain can break a pipeline: a 'retired' provider is history
   // and an 'available' one (discovered from an env key, nothing routes to it) is
@@ -69,5 +72,5 @@ export function useServiceAlert(): boolean {
   const llmBroken = !!llm?.providers.some(
     (p) => (p.role === 'primary' || p.role === 'fallback') && p.status === 'error',
   )
-  return persistBroken || proxyDown || exportBroken || llmBroken
+  return persistBroken || proxyDown || ytdlpStale || exportBroken || llmBroken
 }

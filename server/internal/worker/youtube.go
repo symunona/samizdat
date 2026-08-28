@@ -17,8 +17,10 @@ import (
 
 	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/langpref"
+	"github.com/symunona/samizdat/server/internal/proxypool"
 	"github.com/symunona/samizdat/server/internal/store"
 	"github.com/symunona/samizdat/server/internal/transcript"
+	"github.com/symunona/samizdat/server/internal/ytdlp"
 )
 
 // youtubeID extracts the video id from a YouTube URL (watch, youtu.be, shorts,
@@ -99,15 +101,100 @@ type ytMediaMetadata struct {
 	Description      string   `json:"description,omitempty"`
 }
 
+// ytdlpEnv is everything a yt-dlp invocation needs: the binary, the optional
+// cookie jar, and the residential egress pool it rotates through.
+type ytdlpEnv struct {
+	cfg     config.YTDLPSection
+	pool    *proxypool.Pool
+	version *ytdlp.Checker
+}
+
+// versionInfo is the cached yt-dlp version state, or a zero Info when no
+// checker is wired (tests, CLI paths) — classification then falls back to the
+// generic message rather than guessing at staleness.
+func (y ytdlpEnv) versionInfo(ctx context.Context) ytdlp.Info {
+	if y.version == nil {
+		return ytdlp.Info{}
+	}
+	return y.version.Get(ctx)
+}
+
+func (y ytdlpEnv) bin() string {
+	if y.cfg.Path != "" {
+		return y.cfg.Path
+	}
+	return "yt-dlp"
+}
+
+// ytdlpRun is one yt-dlp invocation: args WITHOUT --proxy/--cookies/URL, which
+// the runner appends per attempt. stdoutOnly captures stdout alone (-J writes
+// the info JSON there); otherwise stdout+stderr are combined for the classifier.
+type ytdlpRun struct {
+	what       string // log label, e.g. "probe"
+	args       []string
+	url        string
+	stdoutOnly bool
+}
+
+// exec runs yt-dlp, walking the proxy pool: a run that trips YouTube's bot wall
+// demotes that egress IP and retries on the next proxy, so one blocked
+// residential address cannot fail a job while the others are healthy. Any other
+// failure returns immediately — retrying a private video on six proxies is six
+// times the wait for the same error.
+func (r ytdlpRun) exec(ctx context.Context, yt ytdlpEnv) ([]byte, error) {
+	attempts := yt.pool.Attempts()
+	if len(attempts) == 0 {
+		attempts = []string{""} // unconfigured: a single direct run
+	}
+	var tried []string
+	var lastErr error
+	for _, px := range attempts {
+		args := append([]string{}, r.args...)
+		if px != "" {
+			args = append(args, "--proxy", px)
+		}
+		if yt.cfg.Cookies != "" {
+			args = append(args, "--cookies", yt.cfg.Cookies)
+		}
+		args = append(args, r.url)
+
+		label := "direct"
+		if px != "" {
+			label = proxypool.Label(px)
+		}
+		logScraper.Printf("yt-dlp %s %s (proxy=%s)", r.what, r.url, label)
+		cmd := exec.CommandContext(ctx, yt.bin(), args...)
+		var out []byte
+		var err error
+		if r.stdoutOnly {
+			out, err = cmd.Output()
+			if ee, ok := err.(*exec.ExitError); ok {
+				out = ee.Stderr // stdout held the JSON; classify against stderr
+			}
+		} else {
+			out, err = cmd.CombinedOutput()
+		}
+		if err == nil {
+			return out, nil
+		}
+		tried = append(tried, label)
+		lastErr = classifyYTDLPError(err, string(out), tried, yt.versionInfo(ctx))
+		// Only a bot wall is worth another egress IP. A stale-binary signature
+		// failure looks identical on every proxy, so rotating burns the whole
+		// pool to arrive at the same error.
+		if ctx.Err() != nil || px == "" || isStaleBinaryFailure(string(out)) || !isBotBlock(string(out)) {
+			return nil, lastErr
+		}
+		yt.pool.MarkFailed(px, "youtube bot check")
+		logScraper.Printf("yt-dlp %s: proxy %s hit the bot wall — rotating", r.what, label)
+	}
+	return nil, lastErr
+}
+
 // handleYouTube ingests a YouTube URL into a video Document: audio-only download
 // via yt-dlp + transcript (manual subs → auto-subs → none). Errors from the
 // datacenter-IP bot wall are translated into an actionable message (docs link).
-func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonical, videoID string, cacheDir string, cfg config.YTDLPSection, manual bool) (string, error) {
-	bin := cfg.Path
-	if bin == "" {
-		bin = "yt-dlp"
-	}
-
+func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonical, videoID string, cacheDir string, yt ytdlpEnv, manual bool) (string, error) {
 	mediaDir := filepath.Join(cacheDir, "media")
 	if err := os.MkdirAll(mediaDir, 0755); err != nil {
 		return "", fmt.Errorf("mkdir media: %w", err)
@@ -120,7 +207,7 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 	// downloading media, so we can decide which subtitle tracks to request.
 	// Blindly requesting "en" pulled YouTube's machine-translation for
 	// non-English videos; now we keep the original per the user's language prefs.
-	info, err := probeYTInfo(ctx, bin, canonical, cfg)
+	info, err := probeYTInfo(ctx, canonical, yt)
 	if err != nil {
 		return "", err
 	}
@@ -144,19 +231,12 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 		"--no-playlist", "--no-progress",
 		"-o", base + ".%(ext)s",
 	}
-	if cfg.Proxy != "" {
-		args = append(args, "--proxy", cfg.Proxy)
-	}
-	if cfg.Cookies != "" {
-		args = append(args, "--cookies", cfg.Cookies)
-	}
-	args = append(args, canonical)
 
-	logScraper.Printf("yt-dlp %s (proxy=%q langs=%v)", canonical, cfg.Proxy, wanted)
-	cmd := exec.CommandContext(ctx, bin, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", classifyYTDLPError(err, string(out), cfg)
+	// langs ride the run label so there is ONE line per attempt — a separate
+	// log call would print twice per proxy tried.
+	what := fmt.Sprintf("audio[%s]", strings.Join(wanted, ","))
+	if _, err := (ytdlpRun{what: what, args: args, url: canonical}).exec(ctx, yt); err != nil {
+		return "", err
 	}
 
 	// Locate the downloaded audio file (ext should be .m4a).
@@ -297,7 +377,7 @@ type fetchVideoPayload struct {
 // Document (by canonical URL) so the app can play it without the YouTube embed.
 // On-demand — most video Docs are never watched, and video is far larger than the
 // audio we always fetch. Idempotent: skips if a video asset already exists.
-func handleFetchVideo(ctx context.Context, q *store.Queries, job store.Job, cacheDir string, cfg config.YTDLPSection) (string, error) {
+func handleFetchVideo(ctx context.Context, q *store.Queries, job store.Job, cacheDir string, yt ytdlpEnv) (string, error) {
 	var p fetchVideoPayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 		return "", fmt.Errorf("bad payload: %w", err)
@@ -318,19 +398,14 @@ func handleFetchVideo(ctx context.Context, q *store.Queries, job store.Job, cach
 	if !ok {
 		return "", fmt.Errorf("document %s is not a youtube video", doc.ID[:8])
 	}
-	return fetchDocVideo(ctx, q, doc.CanonicalUrl, vid, cacheDir, cfg)
+	return fetchDocVideo(ctx, q, doc.CanonicalUrl, vid, cacheDir, yt)
 }
 
 // fetchDocVideo downloads a capped-resolution muxed mp4 for a video Document and
 // records it as a media_asset with kind="video". Prefers a muxed mp4 ≤720p, falls
 // back to merging ≤480p video+audio — capping resolution keeps the 4GB box's disk
-// in check. Routed through the configured proxy (the VPS IP is bot-blocked).
-func fetchDocVideo(ctx context.Context, q *store.Queries, canonical, videoID, cacheDir string, cfg config.YTDLPSection) (string, error) {
-	bin := cfg.Path
-	if bin == "" {
-		bin = "yt-dlp"
-	}
-
+// in check. Routed through the proxy pool (the VPS IP is bot-blocked).
+func fetchDocVideo(ctx context.Context, q *store.Queries, canonical, videoID, cacheDir string, yt ytdlpEnv) (string, error) {
 	mediaDir := filepath.Join(cacheDir, "media")
 	if err := os.MkdirAll(mediaDir, 0755); err != nil {
 		return "", fmt.Errorf("mkdir media: %w", err)
@@ -345,19 +420,9 @@ func fetchDocVideo(ctx context.Context, q *store.Queries, canonical, videoID, ca
 		"--no-playlist", "--no-progress",
 		"-o", base + ".%(ext)s",
 	}
-	if cfg.Proxy != "" {
-		args = append(args, "--proxy", cfg.Proxy)
-	}
-	if cfg.Cookies != "" {
-		args = append(args, "--cookies", cfg.Cookies)
-	}
-	args = append(args, canonical)
 
-	logScraper.Printf("yt-dlp video %s (proxy=%q)", canonical, cfg.Proxy)
-	cmd := exec.CommandContext(ctx, bin, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", classifyYTDLPError(err, string(out), cfg)
+	if _, err := (ytdlpRun{what: "video", args: args, url: canonical}).exec(ctx, yt); err != nil {
+		return "", err
 	}
 
 	// Locate the produced file (ext should be .mp4 after the merge).
@@ -397,25 +462,11 @@ func fetchDocVideo(ctx context.Context, q *store.Queries, canonical, videoID, ca
 // the ingest can read the original language before deciding which subtitle tracks
 // to request. One lightweight extra hit per ingest — worth it to stop translating
 // non-English videos by default.
-func probeYTInfo(ctx context.Context, bin, canonical string, cfg config.YTDLPSection) (*ytInfo, error) {
+func probeYTInfo(ctx context.Context, canonical string, yt ytdlpEnv) (*ytInfo, error) {
 	args := []string{"-J", "--skip-download", "--no-playlist", "--no-progress"}
-	if cfg.Proxy != "" {
-		args = append(args, "--proxy", cfg.Proxy)
-	}
-	if cfg.Cookies != "" {
-		args = append(args, "--cookies", cfg.Cookies)
-	}
-	args = append(args, canonical)
-
-	logScraper.Printf("yt-dlp probe %s (proxy=%q)", canonical, cfg.Proxy)
-	cmd := exec.CommandContext(ctx, bin, args...)
-	out, err := cmd.Output() // -J writes the info JSON to stdout
+	out, err := (ytdlpRun{what: "probe", args: args, url: canonical, stdoutOnly: true}).exec(ctx, yt)
 	if err != nil {
-		stderr := ""
-		if ee, ok := err.(*exec.ExitError); ok {
-			stderr = string(ee.Stderr)
-		}
-		return nil, classifyYTDLPError(err, stderr, cfg)
+		return nil, err
 	}
 	var info ytInfo
 	if err := json.Unmarshal(out, &info); err != nil {
@@ -502,21 +553,62 @@ func firstMatch(pattern string) string {
 	return ""
 }
 
+// isBotBlock reports whether yt-dlp output is YouTube's bot wall — the one
+// failure worth retrying on a different egress IP.
+func isBotBlock(output string) bool {
+	low := strings.ToLower(output)
+	return strings.Contains(low, "confirm you") || strings.Contains(low, "not a bot") ||
+		strings.Contains(low, "sign in to confirm")
+}
+
+// isStaleBinaryFailure reports whether yt-dlp failed the way an out-of-date
+// binary does: YouTube rotated its signature/player scheme and the extractor no
+// longer speaks it. The media URLs come back fine and then 403 on fetch, which
+// is indistinguishable from an IP ban by symptom — and it happens on EVERY
+// proxy, which is what makes calling it a proxy problem so expensive.
+func isStaleBinaryFailure(output string) bool {
+	low := strings.ToLower(output)
+	switch {
+	case strings.Contains(low, "unable to download video data") && strings.Contains(low, "403"),
+		strings.Contains(low, "nsig extraction failed"),
+		strings.Contains(low, "signature extraction failed"),
+		strings.Contains(low, "failed to extract any player response"),
+		strings.Contains(low, "unable to extract yt initial data"),
+		strings.Contains(low, "please report this issue on"):
+		return true
+	}
+	return false
+}
+
 // classifyYTDLPError turns raw yt-dlp failures into actionable operator messages.
-func classifyYTDLPError(err error, output string, cfg config.YTDLPSection) error {
+// tried lists the proxy labels already burned on this job, so a bot-block error
+// names what was exhausted instead of a single %q. ver is the binary's version
+// state, which separates "your IP is blocked" from "your yt-dlp is old" — two
+// failures with the same symptom and opposite fixes.
+func classifyYTDLPError(err error, output string, tried []string, ver ytdlp.Info) error {
 	if execErr, ok := err.(*exec.Error); ok && execErr.Err != nil {
 		return fmt.Errorf("yt-dlp not found (set [ytdlp].path in config; install: https://github.com/yt-dlp/yt-dlp#installation): %w", err)
 	}
-	low := strings.ToLower(output)
-	if strings.Contains(low, "confirm you") || strings.Contains(low, "not a bot") || strings.Contains(low, "sign in to confirm") {
+	if isStaleBinaryFailure(output) {
+		// Named as its own condition even when the version check says current:
+		// swapping proxies cannot fix a signature failure, and saying so is the
+		// whole point of splitting it out from the bot-block message.
+		if advice := ver.Advice(); advice != "" {
+			return fmt.Errorf("yt-dlp is out of date: %s. YouTube changed its player/signature scheme — this fails on EVERY proxy, so it is not a proxy problem", advice)
+		}
+		return fmt.Errorf("yt-dlp could not extract the media (YouTube player/signature change). Not a proxy problem — it fails the same on every egress IP. Update the binary (`yt-dlp -U`); if it is already current, the extractor fix has not shipped yet")
+	}
+	if isBotBlock(output) {
 		hint := "this server's IP is blocked by YouTube (bot check)."
-		if cfg.Proxy == "" {
-			hint += " Set [ytdlp].proxy to a residential proxy (e.g. a home node over Tailscale) or [ytdlp].cookies to a cookies.txt."
+		if len(tried) == 0 || (len(tried) == 1 && tried[0] == "direct") {
+			hint += " Set [ytdlp].proxies to residential proxies (e.g. home nodes over Tailscale) or [ytdlp].cookies to a cookies.txt."
 		} else {
-			hint += fmt.Sprintf(" Proxy %q is set but did not clear the block — verify it exits via a residential IP, or add [ytdlp].cookies.", cfg.Proxy)
+			hint += fmt.Sprintf(" Tried %d proxies (%s) — none cleared it. Verify they exit via distinct residential IPs (two nodes in one household share one address), or add [ytdlp].cookies.",
+				len(tried), strings.Join(tried, ", "))
 		}
 		return fmt.Errorf("youtube unavailable: %s See docs/youtube-ingest.md", hint)
 	}
+	low := strings.ToLower(output)
 	if strings.Contains(low, "video unavailable") || strings.Contains(low, "private video") {
 		return fmt.Errorf("youtube video unavailable (private/removed/region-locked)")
 	}

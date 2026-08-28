@@ -62,7 +62,7 @@ server/
       admin_test_device.go  # POST /api/v1/admin/test-device (loopback only) — idempotent: one reusable robot device, rotates its token
       media.go              # GET  /api/v1/media/{id}      (asset serving)
                             # GET  /api/v1/documents/{id}/audio (audio streaming)
-      ytdlp_status.go       # GET  /api/v1/ytdlp/status    (bearer-authed, proxy health)
+      ytdlp_status.go       # GET  /api/v1/ytdlp/status    (bearer-authed, proxy POOL health)
       llm_status.go         # GET  /api/v1/llm/status      (bearer-authed, provider health + spend)
                             # GET  /api/v1/llm/models      (bearer-authed, model catalog per provider)
                             # POST /api/v1/llm/probe       (bearer-authed, ACTIVE probe; ?deep=1 spends 1 token)
@@ -73,6 +73,9 @@ server/
       pipeline_steps.go     # GET  /api/v1/pipeline-steps  (bearer-authed, step catalog)
       pipelines.go          # CRUD for pipelines; redacts secrets on every read path
       pipelines_test.go     # integration test: api_key round-trip (preserve + redact)
+    proxypool/
+      pool.go               # THE residential egress pool for yt-dlp: ordered list, health, rotation
+      pool_test.go
     extractor/
       substack_notes.go     # SubstackNotesAdapter: discovers Notes via Substack reader API
                             # (no auth, no headless browser — profile page gates anon after 2 items)
@@ -119,7 +122,8 @@ CREATE TABLE IF NOT EXISTS server_settings (
   key         TEXT PRIMARY KEY,
   value       TEXT NOT NULL
   -- keys: "passphrase_hash" (Argon2id $argon2id$... string)
-  --       "ytdlp_proxy_last_ok_at" (RFC3339, persisted across restarts)
+  --       "ytdlp_proxy_last_ok" (JSON {proxy: RFC3339}, persisted across restarts)
+  --       "ytdlp_proxy_last_ok_at" (pre-pool scalar; read once to seed the above)
   --       "llm_provider_health" (JSON []llm.ProviderHealth, see LLM provider health)
   --       "pipeline_step_prompts_backfilled" (RFC3339, guards the one-shot prompt backfill)
   --       "auto_archive_enabled" ("true"/"false", opt-in; drives worker.sweepAutoArchive)
@@ -658,6 +662,55 @@ pipeline steps mint their own clients (`llm.New` per step), so wiring health thr
   so a row seeded by another process (or an integration test) becomes visible without a
   restart. In-memory rows always win over persisted ones — `Restore` skips any key already
   present in the registry.
+
+## The yt-dlp egress pool (`internal/proxypool`)
+
+`[ytdlp].proxies` is an ORDERED POOL, and `proxypool.Pool` is its single owner —
+built once in `api.New`, threaded into the worker AND read by the status endpoint, so
+the Settings card can never disagree with what an ingest actually used. Before it,
+`[ytdlp].proxy` was one string: when that one home node blinked, every ingest died
+with the bot-block error.
+
+- **Sticky active.** `Current()` keeps the active entry while it is healthy, else the
+  first healthy one, else `list[0]`. Not "best of the healthy": re-picking on every
+  probe would reshuffle which IP YouTube sees mid-session, and an unprobed pool must
+  still be usable — a probe failure is not proof yt-dlp fails.
+- **`Attempts()` ends with the UNHEALTHY entries**, deliberately. A stale probe must
+  never take the whole pool out of service.
+- **Only a bot wall rotates.** `ytdlpRun.exec` retries on the next proxy for
+  `isBotBlock(output)` and returns immediately for everything else — a private video
+  would otherwise cost one full wait per proxy for the same error.
+- **Every yt-dlp invocation goes through `ytdlpRun`** (probe `-J`, audio, video). The
+  three sites used to hand-roll `--proxy`/`--cookies`/exec/classify; a fourth would
+  have been a fourth copy that silently never rotates.
+- **Distinct exit IPs are the number that matters**, not the entry count. Two nodes in
+  one household come out of one address, so failing over between them buys nothing —
+  `Probe` returns the exit IP for exactly this reason and the app tags duplicates.
+- The pool probes with a transport chosen by scheme (`socks5*` vs `http(s)`); yt-dlp
+  accepts both, so probing an `http://` entry with a SOCKS dialer would report a
+  working proxy as dead.
+
+### A stale binary is a SEPARATE failure class (`internal/ytdlp`)
+
+`isStaleBinaryFailure` and `internal/ytdlp.Checker` exist because the two ways video
+ingest dies have the same symptom and opposite fixes. YouTube rotates its
+player/signature scheme every few weeks; a behind-by-one-release `yt-dlp` then 403s on
+the media fetch — on EVERY proxy. Read as an IP ban, that costs an afternoon of swapping
+nodes that were never broken. (It is exactly what happened: the reported "residential
+proxy broke" was a 2.5-month-old binary; all seven proxies were healthy.)
+
+- **It never rotates.** `exec` checks `isStaleBinaryFailure` BEFORE `isBotBlock` in its
+  continue condition — retrying a signature failure across seven nodes costs seven waits
+  for one answer.
+- **Its error message names the versions and says "not a proxy problem"** — including
+  when the version check says the binary is current, because the diagnosis (swapping
+  proxies won't help) holds either way. What it must NOT do then is assert staleness.
+- **`Checker.Get` is cached 6h** and compares against the GitHub release list. Offline it
+  falls back to age (`StaleAfter` = 30d): being unable to check must never turn a current
+  binary into a reported problem, but a year-old one still is. Equal-to-latest is current
+  however old the release — yt-dlp going quiet for months is not the operator's problem.
+- Served in `GET /api/v1/ytdlp/status` as `ytdlp`, beside the proxies, and it raises the
+  app's alert dot (`useServiceAlert`): a broken service, just not a broken proxy.
 
 ## Scraper paywall auth (per-domain login)
 Paywalled domains reuse the owner's subscription via a persisted browser session,

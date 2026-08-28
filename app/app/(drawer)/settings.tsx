@@ -11,6 +11,7 @@ import { displayLang, parseLangInput } from '../../src/langNames'
 import { APP_VERSION, APP_VERSION_CODE, isUpdateAvailable } from '../../src/appVersion'
 import { useLatestBuild } from '../../src/useUpdate'
 import { useProxyStatus, useExportStats, useLLMStatus } from '../../src/useServices'
+import { proxyLabel, type YtdlpProxyEntry } from '../../src/proxyStatus'
 import { llmErrorLabel, llmProviderLabel } from '../../src/llmStatus'
 import type { LLMProvider } from '../../src/llmStatus'
 import { probeLLMProviders, probeSummary } from '../../src/llmModels'
@@ -125,6 +126,10 @@ export default function SettingsScreen() {
   // last known status was broken. A healthy background poll stays green instead
   // of blinking the dot to grey every interval.
   const proxyChecking = !proxyStatus || proxyRechecking || (proxyFetching && !proxyStatus.ok)
+  const proxyOnlineCount = proxyStatus?.proxies.filter((p) => p.ok).length ?? 0
+  const ytdlpVersion = proxyStatus?.ytdlp
+  // Distinct EXIT IPs, not entries: that is how many addresses YouTube can ban.
+  const proxyExitIPCount = new Set((proxyStatus?.proxies ?? []).filter((p) => p.ok && p.exit_ip).map((p) => p.exit_ip)).size
   const [deviceNameInput, setDeviceNameInput] = useState('')
   const [deviceNameSaving, setDeviceNameSaving] = useState(false)
   const [deviceNameSaved, setDeviceNameSaved] = useState(false)
@@ -558,6 +563,78 @@ export default function SettingsScreen() {
     )
   }
 
+  // Exit IPs shared by more than one node. Two boxes in the same household come
+  // out of one public address, so they are availability backups, not a second
+  // egress — failing over to one after YouTube blocks the other buys nothing,
+  // and the card has to say so.
+  const sharedExitIPs = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const p of proxyStatus?.proxies ?? []) {
+      if (p.exit_ip) counts.set(p.exit_ip, (counts.get(p.exit_ip) ?? 0) + 1)
+    }
+    return new Set([...counts].filter(([, n]) => n > 1).map(([ip]) => ip))
+  }, [proxyStatus])
+
+  // The card's headline, rendered BOTH as the collapsed summary and at the top of
+  // the open body — collapsing must never hide the fact worth a glance, and a
+  // stale binary is exactly that (it breaks every ingest on every node), so it
+  // gets a one-liner here as well as the full warning box inside.
+  const proxySummary = !proxyStatus ? (
+    <View style={s.statusRow}>
+      <View style={[s.dot, { backgroundColor: theme.colors.placeholder }]} />
+      <Text style={[s.statusText, { color: theme.colors.placeholder }]}>Checking…</Text>
+    </View>
+  ) : !proxyStatus.configured ? (
+    <Text style={s.connectionDetail}>
+      No proxy configured — yt-dlp connects directly (datacenter IPs are usually blocked). Set [ytdlp].proxies; see docs/youtube-ingest.md
+    </Text>
+  ) : (
+    <>
+      <View style={s.statusRow}>
+        <View style={[s.dot, { backgroundColor: proxyChecking ? theme.colors.placeholder : proxyStatus.ok ? theme.colors.online : theme.colors.error }]} />
+        <Text style={[s.statusText, { color: proxyChecking ? theme.colors.placeholder : proxyStatus.ok ? theme.colors.online : theme.colors.error }]}>
+          {proxyChecking
+            ? 'Checking…'
+            : proxyStatus.ok
+              ? `${proxyLabel(proxyStatus.proxy)} — exit IP ${proxyStatus.exit_ip}`
+              : 'No proxy reachable — video ingest will hit the bot wall'}
+        </Text>
+      </View>
+      <Text style={s.connectionDetail}>
+        {`${proxyOnlineCount} of ${proxyStatus.proxies.length} online · ${proxyExitIPCount} distinct exit ${proxyExitIPCount === 1 ? 'IP' : 'IPs'}`}
+        {ytdlpVersion?.installed ? ` · yt-dlp ${ytdlpVersion.installed}` : ''}
+      </Text>
+      {ytdlpVersion?.stale ? (
+        <Text style={s.proxyWarnTitle}>yt-dlp is out of date — run `yt-dlp -U`</Text>
+      ) : null}
+    </>
+  )
+
+  // One row per configured egress proxy: which node, whether the last probe got
+  // through, and the public IP it came out of.
+  const renderProxy = (p: YtdlpProxyEntry, last: boolean) => {
+    const color = p.ok ? theme.colors.online : theme.colors.error
+    return (
+      <View key={p.proxy} style={[s.providerRow, !last && s.providerRowBorder]}>
+        <View style={s.providerHeadRow}>
+          <View style={[s.dot, { backgroundColor: color }]} />
+          <Text style={s.providerName} numberOfLines={1}>{p.label}</Text>
+          {p.active ? <Text style={s.proxyActive}>active</Text> : null}
+          {p.exit_ip ? <Text style={s.providerModel} numberOfLines={1}>{p.exit_ip}</Text> : null}
+          {p.exit_ip && sharedExitIPs.has(p.exit_ip) ? <Text style={s.proxyShared}>shared IP</Text> : null}
+        </View>
+        <Text style={[s.providerStatus, { color }]}>
+          {p.ok
+            ? 'Online'
+            : p.last_ok_at ? `Offline — last online ${formatRelative(p.last_ok_at)}` : 'Offline — never online'}
+        </Text>
+        {!p.ok && p.error ? (
+          <Text style={s.providerError} numberOfLines={2}>{p.error}</Text>
+        ) : null}
+      </View>
+    )
+  }
+
   // Installed build + the APK + the server's own version: the whole "what am I
   // running" answer in one card, at the very top of the screen.
   const renderVersionCard = () => (
@@ -791,47 +868,43 @@ export default function SettingsScreen() {
       )}
 
       {/* YouTube proxy */}
-      <View style={s.card}>
-        <View style={s.cardHeader}>
-          <View style={s.titleGroup}>
-            <Text style={s.cardTitle}>YouTube Proxy</Text>
-            <Text style={s.cardSubtitle}>yt-dlp routes through this for video ingestion</Text>
-          </View>
-          {proxyChecking
+      <Accordion
+        title="YouTube Proxies"
+        subtitle="yt-dlp routes video ingestion through the first healthy node"
+        testID="youtube-proxies"
+        summary={proxySummary}
+        action={
+          proxyChecking
             ? <ActivityIndicator size="small" color={theme.colors.accent} />
             : <Pressable onPress={handleRecheckProxy} style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed]}>
                 <Text style={s.refreshBtnText}>Recheck</Text>
               </Pressable>
-          }
-        </View>
-
-        {!proxyStatus ? (
-          <View style={s.statusRow}>
-            <View style={[s.dot, { backgroundColor: theme.colors.placeholder }]} />
-            <Text style={[s.statusText, { color: theme.colors.placeholder }]}>Checking…</Text>
-          </View>
-        ) : !proxyStatus.configured ? (
-          <Text style={s.connectionDetail}>
-            No proxy configured — yt-dlp connects directly (datacenter IPs are usually blocked). See docs/youtube-ingest.md
-          </Text>
-        ) : (
+        }
+      >
+        {proxySummary}
+        {!proxyStatus || !proxyStatus.configured ? null : (
           <>
-            <View style={s.statusRow}>
-              <View style={[s.dot, { backgroundColor: proxyChecking ? theme.colors.placeholder : proxyStatus.ok ? theme.colors.online : theme.colors.error }]} />
-              <Text style={[s.statusText, { color: proxyChecking ? theme.colors.placeholder : proxyStatus.ok ? theme.colors.online : theme.colors.error }]}>
-                {proxyChecking ? 'Checking…' : proxyStatus.ok ? `Online — exit IP ${proxyStatus.exit_ip}` : 'Offline'}
-              </Text>
-            </View>
-            <Text style={s.connectionDetail} numberOfLines={2}>
-              <Text style={s.connectionUrl}>{proxyStatus.proxy}</Text>
-              {proxyStatus.last_ok_at ? ` — last online ${formatRelative(proxyStatus.last_ok_at)}` : ' — never online'}
-            </Text>
-            {!proxyStatus.ok && proxyStatus.error ? (
-              <Text style={s.errorText} numberOfLines={3}>{proxyStatus.error}</Text>
+            {ytdlpVersion?.stale ? (
+              // Its own warning, not a red proxy dot: swapping nodes cannot fix
+              // a signature-scheme change, and every proxy fails identically.
+              <View style={s.proxyWarn}>
+                <Text style={s.proxyWarnTitle}>
+                  {ytdlpVersion.latest
+                    ? `yt-dlp is out of date — ${ytdlpVersion.installed} installed, ${ytdlpVersion.latest} available`
+                    : `yt-dlp is ${ytdlpVersion.age_days} days old`}
+                </Text>
+                <Text style={s.proxyWarnBody}>
+                  YouTube changes its player scheme every few weeks. A stale binary 403s on every
+                  proxy — that is not a proxy fault. Run `yt-dlp -U` on the server.
+                </Text>
+              </View>
             ) : null}
+            <View style={s.proxyList}>
+              {proxyStatus.proxies.map((p, i) => renderProxy(p, i === proxyStatus.proxies.length - 1))}
+            </View>
           </>
         )}
-      </View>
+      </Accordion>
 
       {/* Auto-export vault */}
       {exportStats && (
@@ -1356,6 +1429,20 @@ function buildStyles(t: Theme) {
     deviceNameIndicator: { marginLeft: 4 },
     deviceNameSaved: { color: t.colors.online, fontSize: 14, fontWeight: '700', marginLeft: 4 },
     llmCostValue: { color: t.colors.accent, fontWeight: '700' },
+    // Proxy pool rows (reuse the provider row chrome — same shape of fact)
+    proxyList: { marginTop: t.spacing.xs },
+    proxyActive: { color: t.colors.online, fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+    proxyShared: { color: t.colors.muted, fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+    proxyWarn: {
+      marginTop: t.spacing.xs,
+      padding: t.spacing.sm,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: t.colors.error,
+      gap: 3,
+    },
+    proxyWarnTitle: { color: t.colors.error, fontSize: 13, fontWeight: '700', lineHeight: 18 },
+    proxyWarnBody: { color: t.colors.muted, fontSize: 11, lineHeight: 16 },
     // LLM provider rows
     providerRow: { paddingVertical: t.spacing.sm, gap: 5 },
     providerRowBorder: { borderBottomWidth: 1, borderBottomColor: t.colors.border },

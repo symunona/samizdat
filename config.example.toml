@@ -61,11 +61,20 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 # ("instruct") build: a reasoning model spends most of its tokens on hidden thinking.
 
 # YouTube / podcast ingestion via yt-dlp. A datacenter VPS IP is bot-blocked by
-# YouTube, so set `proxy` to a residential proxy (e.g. a home node over Tailscale
-# running microsocks) or `cookies` to an exported cookies.txt. See docs/youtube-ingest.md.
+# YouTube, so list residential proxies in `proxies` (e.g. home nodes over Tailscale
+# running microsocks) or set `cookies` to an exported cookies.txt.
+# `proxies` is an ORDERED POOL, not a preference hint: the server health-checks
+# every entry each minute, routes jobs through the first healthy one, and rotates
+# to the next when a run trips YouTube's bot wall. Two nodes behind the same
+# household share one public IP — check the exit IPs in Settings › YouTube Proxy
+# before counting them as two. See docs/youtube-ingest.md.
 # [ytdlp]
 # path    = "yt-dlp"                       # binary on PATH, or an absolute path
-# proxy   = "socks5h://100.x.y.z:1080"     # proxy node's tailnet IP (microsocks)
+# proxies = [                              # ordered; first healthy one carries jobs
+#   "socks5h://node-a.tailnet.ts.net:1080",
+#   "socks5h://node-b.tailnet.ts.net:1080",
+# ]
+# proxy   = "socks5h://100.x.y.z:1080"     # legacy single-valued key; appended to `proxies`
 # cookies = "/var/lib/samizdat/yt-cookies.txt"  # optional auth fallback
 
 # Auto-export: one-way mirror of Documents + Annotations to a plain-markdown

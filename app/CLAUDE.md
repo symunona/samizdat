@@ -664,8 +664,28 @@ iframe actually posts, since a dropped handler is a silent no-op that throws not
 video is just a view switch, not a separate player; the handoff in `useMediaTimeline` guarantees
 only one of the two sounds at a time (audio pauses while the video plays, and vice-versa).
 
-### `proxyStatus.ts` — yt-dlp proxy health
-`src/proxyStatus.ts` exposes `fetchYtdlpProxyStatus` and `YtdlpProxyStatus`. Kept separate from `api.ts` to avoid merge conflicts. Polled every 20s via `useProxyStatus()` (below) so the card flips back to green on its own when the proxy host returns.
+### `proxyStatus.ts` — yt-dlp proxy POOL health
+`src/proxyStatus.ts` exposes `fetchYtdlpProxyStatus`, `YtdlpProxyStatus` and `YtdlpProxyEntry`. Kept separate from `api.ts` to avoid merge conflicts. Polled every 20s via `useProxyStatus()` (below) so the card flips back to green on its own when a proxy host returns.
+
+`[ytdlp].proxies` is a LIST, so the response carries `proxies[]` — every configured
+egress node with its own dot, exit IP and error. The flat top-level fields
+(`proxy`/`ok`/`exit_ip`/…) describe the **active** entry and predate the pool; they stay
+because APKs already installed parse exactly that shape, and `fetchYtdlpProxyStatus`
+synthesizes a one-entry `proxies` from them when talking to a pre-pool server, so the
+card has a single shape to render.
+
+The card is an `Accordion` (`testID="youtube-proxies"`), so the per-node rows are behind a
+tap and e2e reads must open it first (`openSettingsCard(page, 'youtube-proxies')`).
+
+`ytdlp` on the same response is the BINARY's version, not a proxy's. A stale yt-dlp
+403s on every egress IP, so it renders as its own warning box above the node list while
+the proxy dots stay green — colouring the nodes red would send the user swapping
+hardware that works. It also raises `useServiceAlert()`.
+
+The card's headline number is **distinct exit IPs**, not entry count: two nodes in one
+household come out of one address, so failing over between them buys nothing against a
+YouTube ban. Duplicated IPs are tagged `SHARED IP` — without that the card would read as
+"7 proxies" when it is really five addresses.
 
 ### `exportStats.ts` — auto-export vault status
 `src/exportStats.ts` exposes `fetchExportStats` and `ExportStats`, hitting `GET /api/v1/export/stats` (which also triggers a server-side re-export). Kept separate from `api.ts` like `proxyStatus.ts`. The Settings "Export Vault" card shows doc/annotation counts, last-export time, dir, and any error; its Refresh button re-fetches (forcing a fresh mirror). The card renders only when the endpoint returns (i.e. when export is configured).
@@ -674,7 +694,7 @@ only one of the two sounds at a time (audio pauses while the video plays, and vi
 Settings leads with one **Version** card — installed app build, the APK download and the
 **server's** version together (they answer one question: what am I running) — then is
 grouped **Connection → Services → Preferences → Device**. The Services
-group holds the four things that can be *broken*: YouTube Proxy, Export Vault, Browser
+group holds the four things that can be *broken*: YouTube Proxies, Export Vault, Browser
 Extension, **LLM Services**. All three server-side checks go through ONE React Query
 cache (`useProxyStatus` / `useExportStats` / `useLLMStatus` in `src/useServices.ts`) —
 never a screen-local `useState` + `setInterval`, because the drawer reads the same data:
@@ -682,11 +702,15 @@ never a screen-local `useState` + `setInterval`, because the drawer reads the sa
 provider whose last call failed) paints the red dot on the hamburger + the drawer's
 Settings row, the same affordance as "update available" (a broken service outranks it).
 
-**Three long cards are accordions** (`src/Accordion.tsx`): Server Connection (the
+**The long cards are accordions** (`src/Accordion.tsx`): Server Connection (the
 server-URL list lives INSIDE it — the list is the answer to "why am I connected there"),
-Connected Devices, LLM Services — collapsed on every render, open state screen-local. A collapsed
+Connected Devices, YouTube Proxies, Context Menu, LLM Services — collapsed on every render,
+open state screen-local. A collapsed
 card shows a one-line summary INSTEAD of its body, so collapsing never hides the fact
-worth a glance (connected host · device count · which LLM endpoint jobs go to). The LLM
+worth a glance (connected host · device count · active proxy + online/distinct-IP counts ·
+which LLM endpoint jobs go to). The proxy card's summary also carries a one-line
+`yt-dlp is out of date` flag — the full warning box lives in the body, but the alert
+itself must survive collapsing. The LLM
 list is sorted **troubled-first** — a `primary`/`fallback` provider whose last call failed
 leads the list AND is what the summary says; otherwise the primary leads. The header's
 action button (Test / Refresh / Probe) renders only while open, so it is never tapped

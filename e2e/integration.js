@@ -2721,7 +2721,7 @@ async function runSettingsServices(token, deviceId) {
   await check('settings: every service card sits inside the Services group', async () => {
     const up = txt.toUpperCase()
     const svc = up.indexOf('SERVICES'), prefs = up.indexOf('PREFERENCES')
-    for (const card of ['YouTube Proxy', 'Export Vault', 'Browser Extension', 'LLM Services']) {
+    for (const card of ['YouTube Proxies', 'Export Vault', 'Browser Extension', 'LLM Services']) {
       const at = txt.indexOf(card)
       if (at < 0) return `no "${card}" card on Settings`
       if (at < svc || at > prefs) return `"${card}" is outside the Services group (at ${at}, group ${svc}..${prefs})`
@@ -2736,6 +2736,20 @@ async function runSettingsServices(token, deviceId) {
     if (!/127\.0\.0\.1:9/.test(txt)) return `the collapsed summary does not name the provider: ${txt.slice(txt.indexOf('LLM Services'), txt.indexOf('LLM Services') + 200)}`
     return null
   })
+
+  // Same rule for the proxy card: the test config sets no [ytdlp].proxies, so the
+  // one fact worth a glance is that video ingest has no residential egress at all —
+  // and a collapsed card that hid it would be worse than no card.
+  await check('settings: the proxy card starts collapsed but says ingest is unrouted', async () => {
+    const at = txt.indexOf('YouTube Proxies')
+    if (at < 0) return 'no "YouTube Proxies" card on Settings'
+    if (!/No proxy configured/.test(txt.slice(at, at + 300))) {
+      return `the collapsed summary does not report the unconfigured pool: ${txt.slice(at, at + 200)}`
+    }
+    return null
+  })
+
+  await openSettingsCard(page, 'youtube-proxies')
 
   await openSettingsCard(page, 'llm-services')
   txt = await page.evaluate(() => document.body.innerText)

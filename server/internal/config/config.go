@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -35,13 +36,36 @@ type ExportSection struct {
 }
 
 // YTDLPSection configures YouTube/podcast ingestion via yt-dlp. The VPS's
-// datacenter IP is bot-blocked by YouTube, so Proxy (a residential SOCKS/HTTP
-// proxy, e.g. a home node over Tailscale) is required for the happy path.
+// datacenter IP is bot-blocked by YouTube, so a residential SOCKS/HTTP proxy
+// (e.g. a home node over Tailscale) is required for the happy path.
 // See docs/youtube-ingest.md.
 type YTDLPSection struct {
-	Path    string `toml:"path"`    // yt-dlp binary; default "yt-dlp" (PATH lookup)
-	Proxy   string `toml:"proxy"`   // e.g. "socks5h://100.x.y.z:1080"; empty = direct
+	Path string `toml:"path"` // yt-dlp binary; default "yt-dlp" (PATH lookup)
+	// Proxies is the ordered egress pool: the first healthy entry carries jobs,
+	// and one that trips YouTube's bot wall is demoted mid-job so the next takes
+	// over. A single-valued pool is a pool of one — when that node blinked,
+	// every ingest failed, which is why this is a list.
+	Proxies []string `toml:"proxies"` // e.g. ["socks5h://100.x.y.z:1080", ...]
+	// Proxy is the pre-pool single-valued key, still honoured so an existing
+	// config keeps working: ProxyList() appends it to Proxies.
+	Proxy   string `toml:"proxy"`
 	Cookies string `toml:"cookies"` // optional Netscape cookies.txt path (fallback/auth)
+}
+
+// ProxyList is the effective egress pool in preference order: Proxies first,
+// then the legacy Proxy, blanks and duplicates dropped. Empty = run direct.
+func (y YTDLPSection) ProxyList() []string {
+	out := make([]string, 0, len(y.Proxies)+1)
+	seen := map[string]bool{}
+	for _, p := range append(append([]string{}, y.Proxies...), y.Proxy) {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 type ServerSection struct {

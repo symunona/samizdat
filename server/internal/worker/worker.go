@@ -15,7 +15,9 @@ import (
 	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/pipeline"
+	"github.com/symunona/samizdat/server/internal/proxypool"
 	"github.com/symunona/samizdat/server/internal/store"
+	"github.com/symunona/samizdat/server/internal/ytdlp"
 )
 
 const (
@@ -32,11 +34,11 @@ type Worker struct {
 	browser      *BrowserPool
 	extractorReg extractor.Registry
 	llmRouter    *llm.Router
-	ytdlp        config.YTDLPSection
+	ytdlp        ytdlpEnv
 	creds        *credstore.Store
 }
 
-func New(q *store.Queries, db *sql.DB, cacheDir string, extractorDir string, llmRouter *llm.Router, ytdlp config.YTDLPSection, creds *credstore.Store) *Worker {
+func New(q *store.Queries, db *sql.DB, cacheDir string, extractorDir string, ytdlpCfg config.YTDLPSection, llmRouter *llm.Router, proxies *proxypool.Pool, ver *ytdlp.Checker, creds *credstore.Store) *Worker {
 	browser, err := NewBrowserPool()
 	if err != nil {
 		logWorker.Fatalf("browser init failed: %v", err)
@@ -47,7 +49,7 @@ func New(q *store.Queries, db *sql.DB, cacheDir string, extractorDir string, llm
 		reg = make(extractor.Registry)
 	}
 	logWorker.Printf("loaded %d extractor configs from %s", len(reg), extractorDir)
-	return &Worker{q: q, db: db, cacheDir: cacheDir, browser: browser, extractorReg: reg, llmRouter: llmRouter, ytdlp: ytdlp, creds: creds}
+	return &Worker{q: q, db: db, cacheDir: cacheDir, browser: browser, extractorReg: reg, llmRouter: llmRouter, ytdlp: ytdlpEnv{cfg: ytdlpCfg, pool: proxies, version: ver}, creds: creds}
 }
 
 func (w *Worker) Start(ctx context.Context) {

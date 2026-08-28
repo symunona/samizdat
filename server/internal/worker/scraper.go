@@ -19,7 +19,6 @@ import (
 	"github.com/andybalholm/cascadia"
 	"github.com/google/uuid"
 	trafilatura "github.com/markusmobius/go-trafilatura"
-	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/credstore"
 	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/pipeline"
@@ -106,7 +105,7 @@ func refreshSession(browser *BrowserPool, cred *credstore.Store, auth *extractor
 	return true
 }
 
-func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, reg extractor.Registry, cred *credstore.Store, cacheDir string, ytdlp config.YTDLPSection) (string, error) {
+func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, browser *BrowserPool, reg extractor.Registry, cred *credstore.Store, cacheDir string, ytdlp ytdlpEnv) (string, error) {
 	var p scrapePayload
 	if err := json.Unmarshal([]byte(job.Payload), &p); err != nil {
 		return "", fmt.Errorf("bad payload: %w", err)
