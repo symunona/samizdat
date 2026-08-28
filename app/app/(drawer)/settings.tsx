@@ -4,7 +4,9 @@ import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import { fetchDevices, revokeDevice, fetchSettings, updateSettings, updateDeviceName, mintExtensionToken, androidApkUrl, ApiError } from '../../src/api'
-import type { DeviceInfo, AppSettings, LanguagePrefs } from '../../src/api'
+import type { DeviceInfo, AppSettings, LanguagePrefs, ContextMenuPrefs } from '../../src/api'
+import ContextMenuEditor from '../../src/ContextMenuEditor'
+import { cacheContextMenu, defaultContextMenu, normalizeContextMenu } from '../../src/contextMenu'
 import { displayLang, parseLangInput } from '../../src/langNames'
 import { APP_VERSION, APP_VERSION_CODE, isUpdateAvailable } from '../../src/appVersion'
 import { useLatestBuild } from '../../src/useUpdate'
@@ -295,6 +297,22 @@ export default function SettingsScreen() {
     }
   }, [activeUrl, token, toast, loadSettings])
 
+  // The selection context menu (the reader's "···"). Server-held so it is the same
+  // on every device; the replica cache is refreshed here too, or an edit made on
+  // the desktop would not reach a phone that is offline next time it selects text.
+  const saveContextMenu = useCallback(async (next: ContextMenuPrefs) => {
+    if (!activeUrl || !token) return
+    setSettings((prev) => (prev ? { ...prev, context_menu: next } : prev)) // optimistic
+    try {
+      const r = await updateSettings(activeUrl, token, { context_menu: next })
+      setSettings(r)
+      await cacheContextMenu(r.context_menu ?? next)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to update context menu', 'error')
+      loadSettings()
+    }
+  }, [activeUrl, token, toast, loadSettings])
+
   // Seed the preserved-language list from the platform locale the first time we
   // see an empty policy, so a fresh install defaults to "keep the languages I
   // read in their original language".
@@ -406,6 +424,13 @@ export default function SettingsScreen() {
     return [...(llmStatus?.providers ?? [])].sort((a, b) => rank(a) - rank(b))
   }, [llmStatus])
   const llmLead = llmProviders[0]
+
+  // A pre-context-menu server answers without the key; the editor still needs a
+  // menu to render, and the defaults are what that server will store on first save.
+  const contextMenu = useMemo(
+    () => (settings?.context_menu ? normalizeContextMenu(settings.context_menu) : defaultContextMenu()),
+    [settings],
+  )
 
   const dotColor = status === 'connected' ? theme.colors.online : status === 'disconnected' ? theme.colors.error : theme.colors.placeholder
   const extDotColor = extStatus === 'connected' ? theme.colors.online : extStatus === 'unpaired' ? theme.colors.accent : theme.colors.placeholder
@@ -973,6 +998,29 @@ export default function SettingsScreen() {
           renderLangEditor()
         )}
       </View>
+
+      {/* Selection context menu — the "···" next to Annotate in the reader. */}
+      <Accordion
+        title="Context Menu"
+        subtitle="Actions offered on a text selection in the reader"
+        testID="context-menu"
+        summary={
+          <Text style={s.cardSubtitle}>
+            {settings === null
+              ? 'Loading…'
+              : `${(settings.context_menu?.items ?? []).filter((i) => i.enabled).length} action(s) enabled`}
+          </Text>
+        }
+      >
+        {settings === null ? (
+          <ActivityIndicator size="small" color={theme.colors.accent} />
+        ) : (
+          <ContextMenuEditor
+            menu={contextMenu}
+            onChange={saveContextMenu}
+          />
+        )}
+      </Accordion>
 
       {/* Reading mode (document viewer) — the SAME preference the reader's 3-way
           Flow/Auto/Page control writes, never a second flag. */}

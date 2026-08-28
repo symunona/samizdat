@@ -151,6 +151,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	mux.HandleFunc("GET /api/v1/llm/status", bearerAuth(q, llmStatusH.get))
 	mux.HandleFunc("GET /api/v1/llm/models", bearerAuth(q, llmStatusH.models))
 	mux.HandleFunc("POST /api/v1/llm/probe", bearerAuth(q, llmStatusH.probe))
+	mux.HandleFunc("POST /api/v1/llm/ask", bearerAuth(q, llmStatusH.ask))
 
 	exportH := &exportHandler{exp: exp}
 	mux.HandleFunc("GET /api/v1/export/stats", bearerAuth(q, exportH.stats))

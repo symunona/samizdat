@@ -51,6 +51,11 @@ type SelectionData = {
   suffix: string
   pos_start: number
   pos_end: number
+  // Wider surroundings, for the context menu's {{selection_wider_context}} only.
+  // The anchor is prefix/suffix/pos_* above and NOTHING may change their values —
+  // every stored annotation re-anchors off them.
+  wide_prefix?: string
+  wide_suffix?: string
   // For video transcripts: playback time of the anchored segment (data-start-ms).
   // Undefined for article selections.
   media_ts_ms?: number
@@ -123,8 +128,17 @@ mark.color-green{background-color:rgba(74,222,128,0.3)}
 mark.color-blue{background-color:rgba(96,165,250,0.3)}
 mark.color-pink{background-color:rgba(244,114,182,0.3)}
 mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);transition:filter 0.3s}
-/* Anchored to the current text selection (top/left set in JS by positionAnnButton). */
-#ann-btn{position:fixed;top:0;left:0;background:var(--ac);color:var(--bg);border:none;border-radius:20px;padding:8px 16px;font-weight:700;font-size:14px;cursor:pointer;display:none;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.4);white-space:nowrap}
+/* Anchored to the current text selection (top/left set in JS by positionSelActions).
+   The row holds Annotate + the ··· menu; only the ROW is positioned, so the two can
+   never drift apart. */
+#sel-actions{position:fixed;top:0;left:0;display:none;gap:6px;z-index:100}
+#sel-actions.on{display:flex}
+#ann-btn,#sel-more-btn,#sel-play-btn{background:var(--ac);color:var(--bg);border:none;border-radius:20px;padding:8px 16px;font-weight:700;font-size:14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.4);white-space:nowrap}
+#sel-more-btn,#sel-play-btn{padding:8px 12px;line-height:1}
+/* Play-from-here: only meaningful on a transcript selection, so it is shown per
+   selection (see handleSelection), not by the row's own .on class. */
+#sel-play-btn{display:none}
+#sel-actions.has-time #sel-play-btn{display:block}
 #ann-gutter{position:fixed;top:0;right:0;width:6px;height:100%;pointer-events:none;z-index:90}
 #doc-title{font-size:1.6em;font-weight:700;color:var(--fg);margin:0 0 1em;line-height:1.3}
 
@@ -137,6 +151,10 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 /* A transcript sentence carrying a time-anchored annotation — tap reopens the note */
 .seg.has-ann{background:rgba(167,139,250,0.12)}
 .seg.has-ann:hover{background:rgba(167,139,250,0.2)}
+/* Transcript search hits. The whole sentence lights up — the .seg IS the unit, and
+   a class toggle rewrites no DOM, so annotation offsets cannot move. */
+.seg.find-hit{background:rgba(250,204,21,0.28);color:var(--fg)}
+.seg.find-current{background:rgba(250,204,21,0.6);color:var(--bg);font-weight:600}
 .seg-ann-badge{color:#a78bfa;font-size:0.85em;margin-right:4px;user-select:none}
 /* Faded paragraph timestamp, revealed on hover (desktop / pointer devices only). It
    hangs off the PARAGRAPH: an absolutely-positioned ::after on an inline span lands
@@ -585,7 +603,11 @@ function setActiveSeg(ms: number): void {
   const els = segEls()
   const idx = activeSegIndex(els, ms)
   els.forEach((el, i) => el.classList.toggle('active', i === idx))
-  if (idx >= 0 && Date.now() - _lastUserScroll > 2500) {
+  // Never yank the view while the reader holds a selection: the selection gestures
+  // (mouse drag, native long-press + handle drag) emit neither `wheel` nor
+  // `touchmove`, so without this the next playback tick scrolls the active line back
+  // to center and the selection appears to "jump to the top".
+  if (idx >= 0 && !_pendingSel && Date.now() - _lastUserScroll > 2500) {
     // Instant, not smooth: transcript follows playback line-by-line — a glide would
     // still be mid-animation when the next line activates, so it never settles.
     els[idx].scrollIntoView({ behavior: 'auto', block: 'center' })
@@ -662,6 +684,51 @@ function markSegAnnotation(a: AnnData): void {
   badge.dataset.annBadge = a.id
   badge.textContent = '✏'
   seg.insertBefore(badge, seg.firstChild)
+}
+
+// ── Transcript search ─────────────────────────────────────────────────────────
+// Matching is per SEGMENT (a sentence), not per character run: the seg is the unit
+// the reader navigates by, and a class toggle rewrites no DOM — so no text node is
+// split and every annotation's char offset stays exactly where it was.
+
+let _findHits: HTMLElement[] = []
+let _findIdx = 0
+
+function clearFind(): void {
+  for (const el of _findHits) el.classList.remove('find-hit', 'find-current')
+  _findHits = []
+  _findIdx = 0
+}
+
+// q = query (empty clears); step = 0 for a fresh search, ±1 to move between hits of
+// the query already showing. Reports {count, index} back so the host can render n/m.
+function runFind(q: string, step: number): void {
+  const query = q.trim().toLowerCase()
+  if (!query) {
+    clearFind()
+    sendMsg({ type: 'findResult', count: 0, index: 0 })
+    return
+  }
+  if (step === 0 || _findHits.length === 0) {
+    clearFind()
+    const els = segEls()
+    _findHits = els.filter(el => (el.textContent ?? '').toLowerCase().includes(query))
+    for (const el of _findHits) el.classList.add('find-hit')
+    // Start at the first hit at or after the line playing now, so a search during
+    // playback lands where the reader is rather than at the top of the document.
+    const activeAt = els.findIndex(el => el.classList.contains('active'))
+    const at = activeAt < 0 ? -1 : _findHits.findIndex(el => els.indexOf(el) >= activeAt)
+    _findIdx = at < 0 ? 0 : at
+  } else if (_findHits.length > 0) {
+    _findIdx = (_findIdx + step + _findHits.length) % _findHits.length
+  }
+  const cur = _findHits[_findIdx]
+  for (const el of _findHits) el.classList.toggle('find-current', el === cur)
+  if (cur) {
+    _lastUserScroll = Date.now() // searching is reading — hold off auto-follow
+    revealElement(cur)
+  }
+  sendMsg({ type: 'findResult', count: _findHits.length, index: _findHits.length ? _findIdx + 1 : 0 })
 }
 
 function unmarkSegAnnotation(id: string): void {
@@ -767,12 +834,17 @@ function handleInit(msg: InitMsg): void {
 document.addEventListener('click', (e: MouseEvent) => {
   const target = e.target as HTMLElement
 
-  // Ann-btn
-  const annBtn = target.closest && target.closest('#ann-btn')
-  if (annBtn) {
+  // Selection actions — Annotate opens the annotation panel, ··· opens the host's
+  // context menu. Both consume the pending selection and clear the row.
+  const selBtn = target.closest && target.closest<HTMLElement>('#ann-btn, #sel-more-btn, #sel-play-btn')
+  if (selBtn) {
     if (!_pendingSel) return
-    ;(document.getElementById('ann-btn') as HTMLButtonElement).style.display = 'none'
-    sendMsg({ type: 'selection', data: _pendingSel })
+    document.getElementById('sel-actions')?.classList.remove('on')
+    if (selBtn.id === 'sel-play-btn') {
+      sendMsg({ type: 'play_from', ms: _pendingSel.media_ts_ms ?? 0 })
+    } else {
+      sendMsg({ type: selBtn.id === 'sel-more-btn' ? 'selection_menu' : 'selection', data: _pendingSel })
+    }
     _pendingSel = null
     _lastSelText = ''
     window.getSelection()?.removeAllRanges()
@@ -832,14 +904,15 @@ document.addEventListener('click', (e: MouseEvent) => {
     return
   }
 
-  // Transcript segment — tap (not a text selection). A line carrying a
-  // time-anchored annotation reopens that note; otherwise seek to its time.
+  // Transcript segment — tap (not a text selection). A tap NEVER seeks: reading a
+  // transcript means touching it constantly, and every stray tap threw playback to
+  // another minute. Seeking lives on the selection row's ▶ (play from here). A line
+  // carrying a time-anchored annotation still reopens that note.
   const seg = target.closest && target.closest<HTMLElement>('.seg[data-start-ms]')
   if (seg) {
     const seln = window.getSelection()
-    if (!seln || seln.isCollapsed) {
-      if (seg.dataset.annId) sendMsg({ type: 'tap_annotation', id: seg.dataset.annId })
-      else sendMsg({ type: 'seek', ms: Number(seg.dataset.startMs) })
+    if ((!seln || seln.isCollapsed) && seg.dataset.annId) {
+      sendMsg({ type: 'tap_annotation', id: seg.dataset.annId })
     }
     return
   }
@@ -907,6 +980,11 @@ window.addEventListener('scroll', () => {
 
 // ── Text selection ────────────────────────────────────────────────────────────
 
+// How much text around the selection rides along for the context menu's AI
+// actions. Big enough that a model sees the paragraph the sentence came from,
+// small enough that it is not a second copy of the article.
+const WIDE_CONTEXT_CHARS = 600
+
 let _pendingSel: SelectionData | null = null
 let _lastSelText = '' // change-detection so the poll only acts/logs on a real change
 let _pollUntil = 0    // keep the touch poll alive until this time (extended on each change)
@@ -927,12 +1005,12 @@ function dbg(...parts: unknown[]): void {
 // for the diagnostic log; work is gated on the selection actually having changed.
 function handleSelection(reason: string): void {
   const sel = window.getSelection()
-  const annBtn = document.getElementById('ann-btn')
+  const actions = document.getElementById('sel-actions')
   if (!sel || sel.isCollapsed || !sel.toString().trim()) {
     if (_lastSelText !== '') {
       _lastSelText = ''
       _pendingSel = null
-      if (annBtn) annBtn.style.display = 'none'
+      if (actions) actions.classList.remove('on')
       dbg('clear via', reason)
     }
     return
@@ -943,14 +1021,29 @@ function handleSelection(reason: string): void {
   const range = sel.getRangeAt(0)
   const start = getCharOffset(range) + lead
   const ctx = getContext(start, exact.length, 64)
+  const wide = getContext(start, exact.length, WIDE_CONTEXT_CHARS)
   // If the selection sits inside a transcript segment, anchor the note to that
   // segment's playback time (not wherever audio happens to be playing).
   const startNode = range.startContainer
   const startEl = startNode.nodeType === Node.TEXT_NODE ? startNode.parentElement : (startNode as HTMLElement)
   const seg = startEl?.closest<HTMLElement>('.seg[data-start-ms]')
   const media_ts_ms = seg ? Number(seg.dataset.startMs) || 0 : undefined
-  _pendingSel = { exact, prefix: ctx.prefix, suffix: ctx.suffix, pos_start: start, pos_end: start + exact.length, media_ts_ms }
-  if (annBtn) positionAnnButton(annBtn, range)
+  const wasIdle = _lastSelText === ''
+  _pendingSel = {
+    exact, prefix: ctx.prefix, suffix: ctx.suffix,
+    pos_start: start, pos_end: start + exact.length, media_ts_ms,
+    wide_prefix: wide.prefix, wide_suffix: wide.suffix,
+  }
+  // A live selection counts as user activity: it suppresses the transcript's
+  // playback auto-follow for the usual window (see setActiveSeg).
+  _lastUserScroll = Date.now()
+  if (actions) {
+    actions.classList.toggle('has-time', media_ts_ms !== undefined)
+    positionSelActions(actions, range)
+  }
+  // Selecting on a transcript means the reader stopped listening and started
+  // reading — the host pauses playback so the words stop moving under the finger.
+  if (wasIdle && media_ts_ms !== undefined) sendMsg({ type: 'selection_start' })
   if (exact !== _lastSelText) {
     _lastSelText = exact
     _pollUntil = Date.now() + 2500 // selection still moving (handle drag) — keep polling
@@ -958,13 +1051,13 @@ function handleSelection(reason: string): void {
   }
 }
 
-// Place the Annotate button next to the selection instead of pinning it to a
-// far corner — otherwise the user selects text and the button appears
-// bottom-right, out of sight, seemingly "only on scroll". position:fixed keeps
-// it viewport-anchored on both the web iframe (internal scroll) and the native
-// WebView.
-function positionAnnButton(btn: HTMLElement, range: Range): void {
-  btn.style.display = 'block'
+// Place the selection action row (Annotate + ···) next to the selection instead
+// of pinning it to a far corner — otherwise the user selects text and the buttons
+// appear bottom-right, out of sight, seemingly "only on scroll". position:fixed
+// keeps it viewport-anchored on both the web iframe (internal scroll) and the
+// native WebView. The ROW is positioned, never the individual buttons.
+function positionSelActions(btn: HTMLElement, range: Range): void {
+  btn.classList.add('on')
   const rect = range.getBoundingClientRect()
   const vw = window.innerWidth
   const vh = window.innerHeight
@@ -1321,6 +1414,10 @@ function handleMessage(event: MessageEvent): void {
       }
       break
     }
+
+    case 'findTranscript':
+      runFind((msg.q as string) ?? '', (msg.step as number) ?? 0)
+      break
 
     case 'requestSegmentWindow': {
       const win = segmentWindow(msg.ms as number)

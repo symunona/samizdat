@@ -384,6 +384,49 @@ after `just build-android`. Do not claim them working from web tests.
 
 `Platform.OS === 'web'` is true for ALL browsers — desktop Chrome and mobile Safari alike. Never use it to mean "desktop". To branch on touch capability use `window.matchMedia('(pointer: coarse').matches`. Mobile web and native app must behave identically; `Platform.OS === 'web'` silently breaks one of them.
 
+## Selection context menu + AI popout
+
+A selection in the document viewer raises a two-button row: **Annotate** and a
+**···** that opens a configurable action sheet (copy · web search · translate · AI
+question). The config is **server-held** — `ctxmenu.Prefs` in `server_settings`,
+served by `/api/v1/settings` as `context_menu` — so a template authored on the
+desktop is the one the phone offers. `src/contextMenu.ts` caches the last good copy
+in the replica (`samizdat_context_menu_cache`), so the sheet still opens offline;
+copy and web search work there, the two LLM kinds report that they cannot.
+
+- **The anchor fields are frozen.** `SelectionData.prefix/suffix` (64 chars) and
+  `pos_start/pos_end` ARE the TextQuoteSelector — every stored annotation
+  re-anchors off them. The menu's `{{selection_wider_context}}` rides on ADDITIVE
+  `wide_prefix`/`wide_suffix` (600 chars). Never widen the anchor fields to feed a
+  prompt.
+- **The menu is RN, not DOM.** Its actions need the clipboard shim, the network and
+  a model config, none of which exist inside the WebView — so `document-viewer.ts`
+  only posts `selection_menu` with the same payload as `selection`, and the host
+  renders `SelectionMenuSheet`. A sheet (not a popover anchored to the button) is
+  the same affordance on native and web with no iframe→RN coordinate math. The row
+  (`#sel-actions`) is what gets positioned, never the two buttons separately.
+- `src/SelectionActions.tsx` owns the interaction: load config → sheet → run the
+  action. `src/AiPopout.tsx` is the single popout for both LLM kinds (loading →
+  answer → error/Retry). Nothing is persisted unless **Save** is pressed: that
+  hands the answer to `AnnotationPanel` (`initialNote`) with the ORIGINAL
+  selection, so it lands through the normal local-first `db.createAnnotation` path
+  and syncs/exports like any other note.
+- `renderTemplate` expands `{{selection}}` / `{{selection_wider_context}}` /
+  `{{article_title}}` / `{{article_summary}}` in **one pass**, mirroring the
+  server's `pipeline/prompt.go` — a selection containing `{{…}}` must never be
+  re-expanded. The web-search URL uses `renderUrlTemplate` (percent-encoded).
+- **Translate has two engines.** `browser` uses Chrome's built-in `Translator` when
+  present (web only) and otherwise falls back to the LLM — absence is normal, not
+  an error. `src/translate.ts` is the only place that feature-detects.
+- Settings → **Context Menu** accordion (`src/ContextMenuEditor.tsx`) edits the
+  master prompt + the items. Text fields commit on **blur**, and a model choice
+  writes `model` AND `provider` in one update (see `ModelPicker`).
+- Covered by `just e2e-int` (`runSelectionContextMenu`, `runContextMenuSettings`).
+  The first must run **after** `runSettingsServices`: it makes a real completion
+  through the stub box, and a real call lands in the provider-health registry where
+  in-memory rows beat seeded ones, moving the per-endpoint call counts that check
+  asserts on.
+
 ## Document body images — ONE lightbox, two callers (`src/ImageViewer.tsx`)
 
 `ImageLightbox` (named export) is the controlled full-screen zoomable overlay: visible
@@ -480,6 +523,9 @@ tab bar are pinned so you never scroll the video away to get back to it:
 - **Tab content** (`flex:1`) fills the space between the tab bar and footer and scrolls
   **internally**. The transcript pane (WebView / iframe) stays mounted (hidden on other tabs)
   so it keeps auto-following playback.
+- **Find bar** (transcript tab, above the pane) — the transcript is the one long text on
+  this screen and the browser's own find cannot reach into the WebView. See
+  "Transcript interaction contract" below.
 - **Floating resume button** — a top-right down-arrow shown only while the transcript is up
   and the currently-playing segment has drifted off-screen. Tap → scrolls to the active line
   and resumes auto-follow. Driven by the webview's `activeSegVisible` message; the tap posts
@@ -562,12 +608,43 @@ an absolutely-positioned `::after` on an inline span lands per line-box, i.e. mi
 
 Everything below keys off `.seg[data-start-ms]` and is indifferent to the tag, so the
 follow/seek/annotation machinery needed no change. The document-viewer WebView bundle handles:
-- `mediaTime` message → highlights the active `.seg` and auto-scrolls (suppressed for 2.5s after user scroll)
+- `mediaTime` message → highlights the active `.seg` and auto-scrolls (suppressed for 2.5s after user scroll, and entirely while a selection is up)
 - `activeSegVisible` message (outbound) → reports whether the `.seg.active` is on-screen; the host shows/hides the floating resume button
 - `scrollToActive` message → scrolls the active `.seg` to center and resets the user-scroll timer so auto-follow resumes
 - `hotkey` message (outbound) → forwards a keyboard shortcut key (arrows / `[` `]` `=` / `n` `a`) to the host when the transcript frame has focus (see keyboard shortcuts above)
-- `seek` message (outbound) → tapping a `.seg` seeks audio to that timestamp
+- `selection_start` / `play_from` messages (outbound) → pause on a live selection; play from the selected line's timestamp (a tap does NOT seek — see the interaction contract below)
+- `findTranscript` message → search; `findResult` (outbound) reports `{count, index}`
 - `requestSegmentWindow` / `segmentWindow` messages → builds a text-anchor around the active segment for time-stamped annotations
+
+### Transcript interaction contract (tap · selection · jump-back · find)
+
+Reading a transcript means touching it constantly, so touch must be cheap and playback
+must never move under the finger. Four rules, split host ↔ WebView:
+
+- **A tap NEVER seeks.** The `.seg` click handler posts nothing but `tap_annotation`
+  (a line carrying a time-anchored note reopens it). Seeking lives on the selection
+  row's **▶** (`#sel-play-btn`), which posts `play_from {ms}` → the host `userSeek` +
+  `play`. The button is shown per selection via `#sel-actions.has-time`, i.e. only when
+  the range sits in a `.seg` — an article selection never offers it.
+- **A live selection pauses playback and freezes the auto-follow.** `handleSelection`
+  posts `selection_start` once per selection (transcript only) → the host pauses; there
+  is no auto-resume. It ALSO bumps `_lastUserScroll`, and `setActiveSeg` skips its
+  `scrollIntoView` while `_pendingSel` is set. Without both, the next `mediaTime` tick
+  scrolls the playing line back to center mid-selection — the "it jumps to the top"
+  bug. `wheel`/`touchmove` do not cover it: neither a mouse drag nor Android's
+  long-press + handle drag emits them.
+- **A jump leaves a way back.** `jumpFromMs` (the amber scrub flag) also renders a
+  **Back to m:ss** pill above the footer. It routes through `userSeek`, so using it
+  re-drops the flag where we were — the pill toggles between the two spots.
+- **Find is per SEGMENT, and rewrites no DOM.** `findTranscript {q, step}` → the viewer
+  toggles `.find-hit` / `.find-current` on whole `.seg`s and replies
+  `findResult {count, index}` for the `n/m` label. A fresh query lands on the first hit
+  at or after the playing line. Wrapping matches in new nodes would be the obvious
+  implementation and is the wrong one here: the seg IS the unit the reader navigates,
+  and a class toggle cannot move a single annotation's char offset.
+
+Covered by `just e2e-int` (`runTranscriptPlayback`) — which asserts on the messages the
+iframe actually posts, since a dropped handler is a silent no-op that throws nothing.
 
 ### Time-anchored annotations
 `Annotation` now has a `media_ts_ms` field. When creating an annotation on a video document, `positionMs` is captured at the time the user taps "add note" and sent as `media_ts_ms`. Tapping an existing annotation seeks audio to its timestamp.

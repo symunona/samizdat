@@ -92,7 +92,7 @@ function wrapViewerHtml(title: string, bodyHtml: string): string {
 <body>
 <div id="sam-article">${bodyHtml}</div>
 <div id="ann-gutter"></div>
-<button id="ann-btn">Annotate</button>
+<div id="sel-actions"><button id="sel-play-btn" title="Play from here">▶</button><button id="ann-btn">Annotate</button><button id="sel-more-btn" title="More actions">···</button></div>
 </body>
 </html>`
 }

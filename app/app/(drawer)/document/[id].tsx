@@ -40,6 +40,7 @@ import { saveTheme } from '../../../src/prefs'
 import { useWebPageTitle } from '../../../src/webPageTitle'
 import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
+import SelectionActions from '../../../src/SelectionActions'
 import TagSelectorModal from '../../../src/TagSelectorModal'
 import LinkActionSheet from '../../../src/LinkActionSheet'
 import { useScrapeQueue } from '../../../src/ScrapeQueueContext'
@@ -248,6 +249,11 @@ export default function DocumentViewer() {
   const [annMode, setAnnMode] = useState<'create' | 'edit'>('create')
   const [pendingSelection, setPendingSelection] = useState<PendingSelection | undefined>()
   const [existingAnnotation, setExistingAnnotation] = useState<ExistingAnnotation | undefined>()
+  // Body the annotation composer opens with — set only when an AI answer is kept.
+  const [annInitialNote, setAnnInitialNote] = useState('')
+
+  // Selection context menu ("···" next to Annotate). Null = closed.
+  const [menuSelection, setMenuSelection] = useState<PendingSelection | null>(null)
 
   // Tag selector modal state
   const [tagModalVisible, setTagModalVisible] = useState(false)
@@ -277,6 +283,17 @@ export default function DocumentViewer() {
     setPendingSelection({ exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 })
     setAnnMode('create')
     setExistingAnnotation(undefined)
+    setAnnInitialNote('')
+    setAnnVisible(true)
+  }, [])
+
+  // An AI answer the reader kept: it becomes a normal Annotation on the ORIGINAL
+  // selection — same local-first path as any note, so it syncs and exports.
+  const handleSaveAiNote = useCallback((sel: PendingSelection, answer: string) => {
+    setPendingSelection(sel)
+    setAnnMode('create')
+    setExistingAnnotation(undefined)
+    setAnnInitialNote(answer)
     setAnnVisible(true)
   }, [])
 
@@ -458,7 +475,10 @@ export default function DocumentViewer() {
       setPendingSelection(msg.data)
       setAnnMode('create')
       setExistingAnnotation(undefined)
+      setAnnInitialNote('')
       setAnnVisible(true)
+    } else if (msg.type === 'selection_menu' && msg.data) {
+      setMenuSelection(msg.data)
     } else if (msg.type === 'tap_annotation' && msg.id) {
       const ann = annotations.find(a => a.id === msg.id)
       if (ann) {
@@ -496,6 +516,7 @@ export default function DocumentViewer() {
       setPendingSelection({ exact: '', prefix: '', suffix: '', pos_start: 0, pos_end: 0 })
       setAnnMode('create')
       setExistingAnnotation(undefined)
+      setAnnInitialNote('')
       setAnnVisible(true)
     } else if (msg.type === 'hl_tags' && msg.id) {
       setTagTargetId(msg.id)
@@ -592,6 +613,14 @@ export default function DocumentViewer() {
 
   const progressPct = Math.round(scrollProgress * 100)
 
+  // {{article_summary}} for the context menu's AI actions: the pipeline's summary
+  // Highlight when there is one, else the head of the body — a model asked about a
+  // sentence reads very differently when it knows what the article is.
+  const articleSummary = useMemo(() => {
+    const summary = highlights.find(h => h.kind === 'summary')
+    return (summary?.body ?? doc?.markdown ?? '').slice(0, 1200)
+  }, [highlights, doc])
+
   // Video/podcast Documents get a dedicated player + transcript screen.
   // Only trust doc/htmlContent when they belong to the CURRENT id — otherwise the
   // previous article flashes for a frame during navigation before the effect reloads.
@@ -684,10 +713,19 @@ export default function DocumentViewer() {
         mode={annMode}
         selection={pendingSelection}
         existing={existingAnnotation}
+        initialNote={annInitialNote}
         onSave={handleAnnSave}
         onDelete={annMode === 'edit' ? handleAnnDelete : undefined}
         onCancel={() => setAnnVisible(false)}
         onTag={handleOpenTagModal}
+      />
+
+      <SelectionActions
+        selection={menuSelection}
+        documentTitle={docForId?.title ?? ''}
+        articleSummary={articleSummary}
+        onSaveNote={handleSaveAiNote}
+        onClose={() => setMenuSelection(null)}
       />
 
       <TagSelectorModal

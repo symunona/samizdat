@@ -2,7 +2,7 @@
 created: 2026-08-13
 topic: Selection context menu + AI popout
 excerpt: A customizable "…" menu next to the Annotate button (copy · web search · translate · AI question), its editor in Settings, and a new AI popout module that composes a templated prompt, runs it through the LLM Router, and can save the answer as an Annotation.
-status: planned — not started
+status: built on feat/selection-context-menu — green (e2e · e2e-int · e2e-offline · lint · build) + verified against the real local LLM in the browser; awaiting review before squash-merge
 ---
 
 # Selection context menu + AI popout

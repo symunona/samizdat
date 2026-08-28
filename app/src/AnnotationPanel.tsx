@@ -18,6 +18,10 @@ export type PendingSelection = {
   suffix: string
   pos_start: number
   pos_end: number
+  // Wider surroundings the document viewer sends along for the context menu's
+  // {{selection_wider_context}}. NOT part of the anchor — prefix/suffix/pos_* are.
+  wide_prefix?: string
+  wide_suffix?: string
 }
 
 export type ExistingAnnotation = {
@@ -33,16 +37,18 @@ type Props = {
   /** The text being anchored, in create mode. Edit mode reads `existing.exact`. */
   selection?: PendingSelection
   existing?: ExistingAnnotation
+  /** Body the composer opens with in `create` mode — the AI popout's answer. */
+  initialNote?: string
   onSave: (data: { note: string; color: string }) => void
   onDelete?: () => void
   onCancel: () => void
   onTag?: (annotationId: string) => void
 }
 
-export default function AnnotationPanel({ visible, mode, selection, existing, onSave, onDelete, onCancel, onTag }: Props) {
+export default function AnnotationPanel({ visible, mode, selection, existing, initialNote, onSave, onDelete, onCancel, onTag }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
-  const [note, setNote] = useState(existing?.note ?? '')
+  const [note, setNote] = useState(existing?.note ?? initialNote ?? '')
   const [moreOpen, setMoreOpen] = useState(false)
   // The anchored text, so the composer shows WHAT you are annotating. Empty for a
   // doc-level or standalone note — then the block is not rendered at all.
@@ -76,10 +82,10 @@ export default function AnnotationPanel({ visible, mode, selection, existing, on
 
   useMemo(() => {
     if (visible) {
-      setNote(existing?.note ?? '')
+      setNote(existing?.note ?? initialNote ?? '')
       setMoreOpen(false)
     }
-  }, [visible, existing])
+  }, [visible, existing, initialNote])
 
   function handleSave() {
     Keyboard.dismiss()

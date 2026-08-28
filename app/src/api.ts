@@ -1035,11 +1035,36 @@ export type LanguagePrefs = {
   preserved_langs: string[]
 }
 
+// ContextMenuItem mirrors the server's ctxmenu.Item. Routing is a provider id +
+// a model name and nothing else — an endpoint or a key never lives here.
+export type ContextMenuKind = 'copy' | 'web_search' | 'translate' | 'ask'
+
+export type ContextMenuItem = {
+  id: string
+  kind: ContextMenuKind
+  title: string
+  enabled: boolean
+  /** Prompt (ask) or search URL (web_search). Both carry {{tokens}}. */
+  template?: string
+  lang?: string
+  engine?: 'llm' | 'browser'
+  model?: string
+  provider?: string
+}
+
+export type ContextMenuPrefs = {
+  master_prompt: string
+  items: ContextMenuItem[]
+}
+
 export type AppSettings = {
   polling_enabled: boolean
   auto_mark_read: boolean
   auto_archive_enabled: boolean
   language_prefs: LanguagePrefs
+  // The reader's selection context menu — see src/contextMenu.ts. Server-held (not
+  // a device pref) so a template authored on the desktop is the one the phone offers.
+  context_menu: ContextMenuPrefs
   llm_usage: LLMUsageSummary
 }
 

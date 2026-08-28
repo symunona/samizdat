@@ -9,6 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native'
@@ -40,6 +41,7 @@ import * as db from './db'
 import { useConnection } from './ConnectionContext'
 import { useToast } from './ToastContext'
 import AnnotationPanel from './AnnotationPanel'
+import SelectionActions from './SelectionActions'
 import IconButton from './IconButton'
 import type { PendingSelection, ExistingAnnotation } from './AnnotationPanel'
 import { buildTranscriptHtml } from './markdownToHtml'
@@ -58,6 +60,8 @@ type ParsedMsg = {
   ms?: number
   visible?: boolean
   key?: string
+  count?: number
+  index?: number
 }
 
 // Max on-screen width of the video/thumbnail so a wide desktop window keeps the
@@ -166,6 +170,10 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   // Whether the currently-playing transcript segment is on-screen (reported by the
   // WebView). When false on the transcript tab we float a "scroll to active" button.
   const [activeSegVisible, setActiveSegVisible] = useState(true)
+  // Transcript find bar: the query plus the viewer's reply (hit `index` of `count`).
+  const [findQuery, setFindQuery] = useState('')
+  const [findCount, setFindCount] = useState(0)
+  const [findIndex, setFindIndex] = useState(0)
   const [showVideo, setShowVideo] = useState(false)
   const [localUri, setLocalUri] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
@@ -341,6 +349,10 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const [annMode, setAnnMode] = useState<'create' | 'edit'>('create')
   const [pendingSelection, setPendingSelection] = useState<Selection | undefined>()
   const [existingAnnotation, setExistingAnnotation] = useState<ExistingAnnotation | undefined>()
+  // Body the composer opens with — set only when an AI answer is kept.
+  const [annInitialNote, setAnnInitialNote] = useState('')
+  // Selection context menu ("···" next to Annotate). Null = closed.
+  const [menuSelection, setMenuSelection] = useState<Selection | null>(null)
 
   const seekTo = useCallback((ms: number) => {
     try { seek(ms) } catch (e) { log.error('seek failed', e) }
@@ -366,6 +378,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     setExistingAnnotation({ id: ann.id, exact: ann.exact, note: ann.note, color: ann.color })
     setAnnMode('edit')
     setPendingSelection(undefined)
+    setAnnInitialNote('')
     setAnnVisible(true)
   }, [userSeek])
 
@@ -388,24 +401,55 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       setPendingSelection({ ...msg.data, media_ts_ms: msg.data.media_ts_ms ?? positionMs })
       setAnnMode('create')
       setExistingAnnotation(undefined)
+      setAnnInitialNote('')
       setAnnVisible(true)
+    } else if (msg.type === 'selection_menu' && msg.data) {
+      setMenuSelection({ ...msg.data, media_ts_ms: msg.data.media_ts_ms ?? positionMs })
     } else if (msg.type === 'segmentWindow' && msg.data) {
       setPendingSelection({ ...msg.data, media_ts_ms: msg.data.media_ts_ms ?? pendingMediaTsRef.current })
       setAnnMode('create')
       setExistingAnnotation(undefined)
+      setAnnInitialNote('')
       setAnnVisible(true)
     } else if (msg.type === 'tap_annotation' && msg.id) {
       const ann = annotations.find(a => a.id === msg.id)
       if (ann) openAnnotation(ann, true)
     } else if (msg.type === 'activeSegVisible') {
       setActiveSegVisible(msg.visible !== false)
+    } else if (msg.type === 'selection_start') {
+      // Selecting means the reader switched from listening to reading — stop the
+      // words moving under their finger. Resuming is an explicit ▶ (footer or the
+      // selection row's play-from-here).
+      pause()
+    } else if (msg.type === 'play_from' && typeof msg.ms === 'number') {
+      userSeek(msg.ms)
+      play()
+    } else if (msg.type === 'findResult') {
+      setFindCount(msg.count ?? 0)
+      setFindIndex(msg.index ?? 0)
     }
-  }, [doc.title, annotations, themeMsg, sendToWebView, userSeek, openAnnotation, positionMs])
+  }, [doc.title, annotations, themeMsg, sendToWebView, userSeek, openAnnotation, positionMs, pause, play])
 
   // Jump the transcript back to the currently-playing segment and resume auto-follow.
   const scrollToActive = useCallback(() => {
     sendToWebView({ type: 'scrollToActive' })
   }, [sendToWebView])
+
+  // Transcript search. A new query is step 0 (re-scan, then land on the hit nearest
+  // the playing line); ↑/↓ step through the hits already found.
+  const sendFind = useCallback((q: string, step: number) => {
+    sendToWebView({ type: 'findTranscript', q, step })
+  }, [sendToWebView])
+  const handleFindChange = useCallback((q: string) => { setFindQuery(q); sendFind(q, 0) }, [sendFind])
+  const handleFindStep = useCallback((step: number) => sendFind(findQuery, step), [sendFind, findQuery])
+  const handleFindClear = useCallback(() => { setFindQuery(''); sendFind('', 0) }, [sendFind])
+
+  // Go back to the position the last jump left — the amber scrub flag made it
+  // visible but nothing could act on it. Routed through userSeek, so the flag
+  // re-drops where we are now and the pill toggles between the two spots.
+  const handleJumpBack = useCallback(() => {
+    if (jumpFromMs != null) userSeek(jumpFromMs)
+  }, [jumpFromMs, userSeek])
 
   const handleMessage = useCallback((e: WebViewMessageEvent) => {
     try { handleParsedMessage(JSON.parse(e.nativeEvent.data) as ParsedMsg) } catch { /* ignore */ }
@@ -451,6 +495,16 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
         a.id === existingAnnotation.id ? { ...a, note: data.note, color: data.color } : a))
     }
   }, [annMode, pendingSelection, existingAnnotation, doc.id, positionMs])
+
+  // An AI answer the reader kept: a normal Annotation on the ORIGINAL selection,
+  // keeping the transcript segment's timestamp so it lands on the scrub bar too.
+  const handleSaveAiNote = useCallback((sel: PendingSelection, answer: string) => {
+    setPendingSelection(sel as Selection)
+    setAnnMode('create')
+    setExistingAnnotation(undefined)
+    setAnnInitialNote(answer)
+    setAnnVisible(true)
+  }, [])
 
   const handleAnnDelete = useCallback(() => {
     if (!existingAnnotation) return
@@ -788,6 +842,33 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
               <Ionicons name="arrow-down" size={20} color={theme.colors.background} />
             </Pressable>
           ) : null}
+          {/* Transcript find bar — the transcript is the one long text on this screen
+              and the browser's own find can't reach inside the WebView. */}
+          {tab === 'transcript' ? (
+            <View style={s.findBar}>
+              <Ionicons name="search" size={14} color={theme.colors.muted} />
+              <TextInput
+                style={s.findInput}
+                value={findQuery}
+                onChangeText={handleFindChange}
+                placeholder="Search transcript"
+                placeholderTextColor={theme.colors.muted}
+                returnKeyType="search"
+                onSubmitEditing={() => handleFindStep(1)}
+                testID="transcript-find-input"
+              />
+              {findQuery.trim() ? (
+                <>
+                  <Text style={s.findCount} testID="transcript-find-count">
+                    {findCount > 0 ? `${findIndex}/${findCount}` : 'none'}
+                  </Text>
+                  <IconButton name="chevron-up" onPress={() => handleFindStep(-1)} color={theme.colors.accent} size={18} />
+                  <IconButton name="chevron-down" onPress={() => handleFindStep(1)} color={theme.colors.accent} size={18} />
+                  <IconButton name="close" onPress={handleFindClear} color={theme.colors.muted} size={18} />
+                </>
+              ) : null}
+            </View>
+          ) : null}
           {/* Transcript language selector — only when more than one track exists. */}
           {tab === 'transcript' && langs.length > 1 ? (
             <View style={s.langBar}>
@@ -889,6 +970,15 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       {/* Backdrop closes the speed dropup on an outside tap (full-screen). */}
       {speedOpen ? <Pressable style={s.speedBackdrop} onPress={() => setSpeedOpen(false)} /> : null}
 
+      {/* Way back from a jump: after any seek the amber flag marks where we left —
+          this is the one tap that returns there (and back again). */}
+      {jumpFromMs != null ? (
+        <Pressable onPress={handleJumpBack} style={s.jumpBackBtn} hitSlop={8} testID="jump-back">
+          <Ionicons name="arrow-undo" size={14} color={MARK_JUMP} />
+          <Text style={s.jumpBackText}>Back to {fmtTime(jumpFromMs)}</Text>
+        </Pressable>
+      ) : null}
+
       {/* ── Pinned footer control bar (does not scroll) ── */}
       <View style={[s.footer, { paddingBottom: insets.bottom }]}>
         {/* Buttons row: skips · big play/pause · skips · note · sync · speed. */}
@@ -988,9 +1078,18 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
         mode={annMode}
         selection={pendingSelection}
         existing={existingAnnotation}
+        initialNote={annInitialNote}
         onSave={handleAnnSave}
         onDelete={annMode === 'edit' ? handleAnnDelete : undefined}
         onCancel={() => setAnnVisible(false)}
+      />
+
+      <SelectionActions
+        selection={menuSelection}
+        documentTitle={doc.title ?? ''}
+        articleSummary={(doc.markdown ?? '').slice(0, 1200)}
+        onSaveNote={handleSaveAiNote}
+        onClose={() => setMenuSelection(null)}
       />
     </View>
   )
@@ -1140,6 +1239,24 @@ function buildStyles(t: Theme) {
     tabPanelHidden: { display: 'none' },
     panelPad: { padding: t.spacing.lg, gap: t.spacing.md },
     // Transcript language selector pills (only shown with >1 track).
+    // Find bar above the transcript pane (same chrome as the language selector).
+    findBar: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      paddingHorizontal: t.spacing.md, paddingVertical: 4,
+      borderBottomWidth: 1, borderBottomColor: t.colors.border, backgroundColor: t.colors.surface,
+    },
+    // The bar IS the field (icon + input + controls on one line), so the browser's
+    // own focus ring around the bare input would draw a second, competing box.
+    findInput: { flex: 1, color: t.colors.text, fontSize: 13, paddingVertical: 4, outlineWidth: 0 },
+    findCount: { color: t.colors.muted, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
+    // Way back from a jump — sits just above the footer, in the amber of its flag.
+    jumpBackBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+      alignSelf: 'center', marginBottom: 4,
+      paddingVertical: 4, paddingHorizontal: 12, borderRadius: 12,
+      borderWidth: 1, borderColor: MARK_JUMP, backgroundColor: t.colors.surface,
+    },
+    jumpBackText: { color: MARK_JUMP, fontSize: 12, fontWeight: '700', fontVariant: ['tabular-nums'] },
     langBar: {
       flexDirection: 'row', flexWrap: 'wrap', gap: 6,
       paddingHorizontal: t.spacing.md, paddingVertical: 6,
@@ -1153,8 +1270,10 @@ function buildStyles(t: Theme) {
     langPillText: { color: t.colors.muted, fontSize: 11, fontWeight: '700' },
     langPillTextActive: { color: t.colors.background },
     // Floating "scroll to the playing line" button, top-right of the transcript.
+    // Cleared below the find bar (34px + gap) — the two both live in the transcript
+    // tab's top-right and would otherwise cover each other's controls.
     resumeBtn: {
-      position: 'absolute', top: t.spacing.md, right: t.spacing.md, zIndex: 10,
+      position: 'absolute', top: t.spacing.md + 34, right: t.spacing.md, zIndex: 10,
       width: 40, height: 40, borderRadius: 20, backgroundColor: t.colors.accent,
       alignItems: 'center', justifyContent: 'center',
       shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 6,

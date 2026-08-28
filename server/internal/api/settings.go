@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/symunona/samizdat/server/internal/ctxmenu"
 	"github.com/symunona/samizdat/server/internal/langpref"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
@@ -24,6 +25,7 @@ type settingsPayload struct {
 	AutoMarkRead       bool            `json:"auto_mark_read"`
 	AutoArchiveEnabled bool            `json:"auto_archive_enabled"`
 	LanguagePrefs      langpref.Prefs  `json:"language_prefs"`
+	ContextMenu        ctxmenu.Prefs   `json:"context_menu"`
 	LLMUsage           llmUsageSummary `json:"llm_usage"`
 }
 
@@ -42,12 +44,16 @@ func (h *settingsHandler) get(w http.ResponseWriter, r *http.Request) {
 	langRaw, _ := h.q.GetSetting(r.Context(), langpref.SettingKey)
 	prefs := langpref.Parse(langRaw)
 
+	menuRaw, _ := h.q.GetSetting(r.Context(), ctxmenu.SettingKey)
+	menu := ctxmenu.Parse(menuRaw)
+
 	usage := h.llmUsage(r)
 	writeJSON(w, http.StatusOK, settingsPayload{
 		PollingEnabled:     polling,
 		AutoMarkRead:       autoMarkRead,
 		AutoArchiveEnabled: autoArchive,
 		LanguagePrefs:      prefs,
+		ContextMenu:        menu,
 		LLMUsage:           usage,
 	})
 }
@@ -96,6 +102,7 @@ func (h *settingsHandler) put(w http.ResponseWriter, r *http.Request) {
 		AutoMarkRead       *bool           `json:"auto_mark_read"`
 		AutoArchiveEnabled *bool           `json:"auto_archive_enabled"`
 		LanguagePrefs      *langpref.Prefs `json:"language_prefs"`
+		ContextMenu        *ctxmenu.Prefs  `json:"context_menu"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
@@ -120,6 +127,15 @@ func (h *settingsHandler) put(w http.ResponseWriter, r *http.Request) {
 	if body.LanguagePrefs != nil {
 		blob, _ := json.Marshal(body.LanguagePrefs)
 		if h.q.UpsertSetting(r.Context(), store.UpsertSettingParams{Key: langpref.SettingKey, Value: string(blob)}) != nil {
+			writeErr(w, http.StatusInternalServerError, "db error")
+			return
+		}
+	}
+	if body.ContextMenu != nil {
+		// Normalized on the way in as well as on the way out: what is stored is what
+		// every device will execute, so a row the sheet could not run never lands.
+		blob, _ := json.Marshal(body.ContextMenu.Normalize())
+		if h.q.UpsertSetting(r.Context(), store.UpsertSettingParams{Key: ctxmenu.SettingKey, Value: string(blob)}) != nil {
 			writeErr(w, http.StatusInternalServerError, "db error")
 			return
 		}

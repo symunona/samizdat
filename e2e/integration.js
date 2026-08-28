@@ -16,7 +16,7 @@ import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
   newConnectedPage, seedTextDoc, seedTextDocs, seedVideoDoc, seedHighlight, seedLLMHealth,
   seedPipeline, seedJob,
-  startStubLLM, STUB_LLM_MODELS,
+  startStubLLM, STUB_LLM_MODELS, STUB_LLM_PORT,
   makeCleanup,
 } from './harness.js'
 
@@ -788,10 +788,11 @@ async function runSelectionLifecycle(token, deviceId) {
 
   await check('Annotate button appears at the selection', async () => {
     const disp = await page.evaluate(() => {
-      const b = document.querySelector('iframe').contentDocument.getElementById('ann-btn')
-      return b ? b.style.display : 'none'
+      const ifr = document.querySelector('iframe')
+      const row = ifr.contentDocument.getElementById('sel-actions')
+      return row ? ifr.contentWindow.getComputedStyle(row).display : 'none'
     })
-    return disp === 'block' ? null : `ann-btn display is "${disp}"`
+    return disp === 'flex' ? null : `sel-actions display is "${disp}"`
   })
 
   // 2. Click Annotate → parent opens the panel. Type a note, Save.
@@ -986,10 +987,11 @@ async function runHighlightSelectionLifecycle(token, deviceId) {
 
   await check('hl overlay: Annotate button appears', async () => {
     const disp = await page.evaluate(() => {
-      const b = document.querySelector('iframe').contentDocument.getElementById('ann-btn')
-      return b ? b.style.display : 'none'
+      const ifr = document.querySelector('iframe')
+      const row = ifr.contentDocument.getElementById('sel-actions')
+      return row ? ifr.contentWindow.getComputedStyle(row).display : 'none'
     })
-    return disp === 'block' ? null : `ann-btn display is "${disp}"`
+    return disp === 'flex' ? null : `sel-actions display is "${disp}"`
   })
 
   // 2. Click Annotate → the overlay's AnnotationPanel opens. Type a note, Save.
@@ -1549,6 +1551,533 @@ async function openAnnPanelOnSelection(page) {
   return selText.trim()
 }
 
+// ── Selection context menu + AI popout ────────────────────────────────────────
+// The "···" beside Annotate opens a configurable action sheet; two of its kinds
+// run an LLM call and land in a popout. The whole point of the feature is what
+// the reader SEES, so this drives it end to end: select → ··· → pick → answer →
+// keep it as an Annotation anchored to the ORIGINAL selection (the reload check
+// is what proves the anchor was not disturbed by the wide-context fields).
+const CTX_ASK_TITLE = 'E2E Explain'
+const CTX_DISABLED_TITLE = 'E2E Never Shown'
+const STUB_LLM_PROVIDER = `127.0.0.1:${STUB_LLM_PORT}`
+
+async function putContextMenu(token, menu) {
+  const res = await fetch(`${BASE_URL}/api/v1/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ context_menu: menu }),
+  })
+  if (!res.ok) throw new Error(`PUT context_menu: HTTP ${res.status}`)
+  return res.json()
+}
+
+async function llmCallCount(token) {
+  const res = await fetch(`${BASE_URL}/api/v1/settings`, { headers: { Authorization: `Bearer ${token}` } })
+  const body = await res.json()
+  return body.llm_usage?.total_calls ?? 0
+}
+
+// Select across the inline <a> — the hard case: the anchor spans several text
+// nodes. Leaves the action row up (the caller reads its geometry, then clicks).
+async function selectAcrossLink(page) {
+  const selText = await page.evaluate(() => {
+    const ifr = document.querySelector('iframe')
+    const d = ifr.contentDocument, w = ifr.contentWindow
+    const p = d.querySelector('#sam-article p')
+    const link = p.querySelector('a')
+    const r = d.createRange()
+    r.setStart(p.firstChild, 0)
+    const endNode = link.nextSibling && link.nextSibling.nodeType === 3 ? link.nextSibling : link.firstChild
+    r.setEnd(endNode, Math.min(5, (endNode.nodeValue || 'xxxxx').length))
+    const sel = w.getSelection(); sel.removeAllRanges(); sel.addRange(r)
+    const t = sel.toString()
+    d.dispatchEvent(new w.MouseEvent('mouseup', { bubbles: true }))
+    return t
+  })
+  await sleep(200)
+  return selText.trim()
+}
+
+async function clickSelMore(page) {
+  await page.evaluate(() => {
+    const ifr = document.querySelector('iframe')
+    ifr.contentDocument.getElementById('sel-more-btn')
+      .dispatchEvent(new ifr.contentWindow.MouseEvent('click', { bubbles: true }))
+  })
+  await sleep(500)
+}
+
+// Select + open the menu, for the second and later rounds (the first one reads
+// the button geometry in between).
+async function openSelectionMenu(page) {
+  const selText = await selectAcrossLink(page)
+  await clickSelMore(page)
+  return selText
+}
+
+async function runSelectionContextMenu(token, deviceId) {
+  await putContextMenu(token, {
+    master_prompt: 'You are terse.',
+    items: [
+      { id: 'copy', kind: 'copy', title: 'Copy to clipboard', enabled: true },
+      { id: 'web_search', kind: 'web_search', title: 'Web search', enabled: true },
+      {
+        id: 'e2e-ask', kind: 'ask', title: CTX_ASK_TITLE, enabled: true,
+        template: 'Context: {{selection_wider_context}}\n\nExplain: {{selection}}',
+        provider: STUB_LLM_PROVIDER, model: STUB_LLM_MODELS[0],
+      },
+      { id: 'e2e-off', kind: 'ask', title: CTX_DISABLED_TITLE, enabled: false, template: 'never {{selection}}' },
+    ],
+  })
+  const callsBefore = await llmCallCount(token)
+
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 900 })
+  await page.goto(`${BASE_URL}/document/${TEXT_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+
+  const selText = await selectAcrossLink(page)
+
+  await check('ctx menu: the selection under test crosses the inline link', async () =>
+    selText.includes('download page') ? null : `selection did not cross the link: "${selText}"`)
+
+  // Read the row BEFORE opening the menu — picking an action clears the selection
+  // and hides the row, so a geometry read after that measures a hidden button.
+  await check('ctx menu: ··· sits beside Annotate on a selection', async () => {
+    const geom = await page.evaluate(() => {
+      const d = document.querySelector('iframe').contentDocument
+      const a = d.getElementById('ann-btn'), m = d.getElementById('sel-more-btn')
+      if (!a || !m) return null
+      const ra = a.getBoundingClientRect(), rm = m.getBoundingClientRect()
+      return { ax: ra.left, mx: rm.left, ay: ra.top, my: rm.top, w: rm.width }
+    })
+    if (!geom) return 'no ··· button in the selection action row'
+    if (geom.w <= 0) return 'the ··· button has no size'
+    if (geom.mx <= geom.ax) return 'the ··· button is not to the right of Annotate'
+    if (Math.abs(geom.my - geom.ay) > 4) return 'the two buttons are not on the same row'
+    return null
+  })
+
+  await clickSelMore(page)
+
+  await check('ctx menu: the sheet lists the enabled actions only', async () => {
+    const txt = await page.evaluate(() => document.body.innerText)
+    for (const label of ['Copy to clipboard', 'Web search', CTX_ASK_TITLE]) {
+      if (!txt.includes(label)) return `"${label}" is missing from the sheet`
+    }
+    if (txt.includes(CTX_DISABLED_TITLE)) return 'a disabled action is offered in the sheet'
+    return null
+  })
+
+  await check('ctx menu: copy reports back to the reader', async () => {
+    await page.evaluate(() => {
+      document.querySelector('[data-testid="ctxmenu-copy"]')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    try {
+      await page.waitForFunction(() => /Copied|Copy failed/.test(document.body.innerText), { timeout: 4000 })
+    } catch { return 'no toast after the copy action' }
+    const txt = await page.evaluate(() => document.body.innerText)
+    return /Copy failed/.test(txt) ? 'the copy action reported a failure' : null
+  })
+  await sleep(600)
+
+  // The AI action: select again (the menu consumed the last selection), ask, and
+  // watch the popout go loading → answer.
+  await openSelectionMenu(page)
+  await page.evaluate(() => {
+    document.querySelector('[data-testid="ctxmenu-e2e-ask"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  })
+
+  await check('ctx menu: the AI popout opens and answers', async () => {
+    try {
+      await page.waitForFunction(() =>
+        document.querySelector('[data-testid="ai-popout-answer"]')?.innerText.includes('stub reply'),
+        { timeout: 15000 })
+      return null
+    } catch {
+      const err = await page.evaluate(() =>
+        document.querySelector('[data-testid="ai-popout-error"]')?.innerText ?? '(no answer, no error)')
+      return `the popout never rendered the reply: ${err}`
+    }
+  })
+
+  await check('ctx menu: the ask is metered like a pipeline call', async () =>
+    (await llmCallCount(token)) === callsBefore + 1
+      ? null
+      : `llm_usage.total_calls did not advance by exactly 1 (was ${callsBefore})`)
+
+  // Keep it: the answer becomes an Annotation on the ORIGINAL selection.
+  await page.evaluate(() => {
+    document.querySelector('[data-testid="ai-popout-save"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+  })
+
+  await check('ctx menu: Save hands the answer to the annotator, prefilled', async () => {
+    try {
+      await page.waitForFunction(() => document.querySelector('textarea')?.value.includes('stub reply'), { timeout: 6000 })
+      return null
+    } catch {
+      const v = await page.evaluate(() => document.querySelector('textarea')?.value ?? '(no textarea)')
+      return `the composer did not open with the answer: "${v}"`
+    }
+  })
+
+  // Same click shape as the plain selection lifecycle above — a proven press on
+  // the panel's Save. Then wait for the panel to close: if it is still up, the
+  // press never landed and every assertion below would blame the anchor instead.
+  await page.evaluate(() => {
+    const el = [...document.querySelectorAll('*')].find(e => e.innerText && e.innerText.trim() === 'Save' && e.offsetParent)
+    el.click()
+  })
+  await check('ctx menu: the composer saves', async () => {
+    try {
+      await page.waitForFunction(() => !document.querySelector('textarea'), { timeout: 6000 })
+      return null
+    } catch { return 'the annotation composer stayed open after Save' }
+  })
+
+  let aiAnnId = null
+  await check('ctx menu: the kept answer anchors to the original selection', async () => {
+    try {
+      await page.waitForFunction(() =>
+        document.querySelector('iframe').contentDocument.querySelectorAll('mark[data-ann-id]').length > 0,
+        { timeout: 6000 })
+    } catch { return 'no <mark> after saving the AI answer' }
+    // Group by annotation id: other checks' notes leave their own marks in this
+    // document, and joining every <mark> on the page would compare a mixture.
+    const info = await page.evaluate((want) => {
+      const d = document.querySelector('iframe').contentDocument
+      const byId = {}
+      for (const m of d.querySelectorAll('mark[data-ann-id]')) {
+        (byId[m.dataset.annId] = byId[m.dataset.annId] || []).push(m)
+      }
+      const groups = Object.entries(byId).map(([id, pieces]) => ({
+        id,
+        joined: pieces.map(m => m.innerText).join('').replace(/\s+/g, ' ').trim(),
+        touchesLink: pieces.some(m => m.closest('a') || m.querySelector('a')),
+      }))
+      return { groups, want: want.replace(/\s+/g, ' ').trim() }
+    }, selText)
+    const mine = info.groups.find(g => g.joined.includes(info.want.slice(0, 30)))
+    if (!mine) return `no mark matches the selection "${info.want}" (have ${JSON.stringify(info.groups.map(g => g.joined))})`
+    if (!mine.touchesLink) return 'the mark does not span the inline link — the anchor moved'
+    aiAnnId = mine.id
+    return null
+  })
+
+  // Cold reload: THIS annotation's anchor must still resolve (the wide-context
+  // fields must not have leaked into prefix/suffix/pos_*).
+  await page.reload({ waitUntil: 'networkidle2', timeout: 15000 })
+  await waitViewerReady(page)
+  await check('ctx menu: the AI note survives a reload with its anchor intact', async () => {
+    if (!aiAnnId) return 'no annotation id was captured before the reload'
+    try {
+      await page.waitForFunction((id) =>
+        document.querySelector('iframe').contentDocument.querySelectorAll(`mark[data-ann-id="${id}"]`).length > 0,
+        { timeout: 8000 }, aiAnnId)
+      return null
+    } catch { return 'the AI note did not re-anchor after reload' }
+  })
+
+  // Clean up: later checks read this document without this note. Target it by id —
+  // other checks' annotations mark the same page and must not be deleted here.
+  await page.evaluate((id) => {
+    const d = document.querySelector('iframe').contentDocument
+    d.querySelector(`mark[data-ann-id="${id}"]`).dispatchEvent(new d.defaultView.MouseEvent('click', { bubbles: true }))
+  }, aiAnnId)
+  await page.waitForSelector('textarea', { timeout: 6000 })
+  await clickByText(page, e => /^[.·]{3}$/.test((e.innerText || '').trim()), 'more-menu toggle')
+  await sleep(400)
+  await clickByText(page, e => /delete/i.test((e.innerText || '').trim()) && (e.innerText || '').trim().length < 20, 'Delete item')
+  await sleep(700)
+
+  if (errors.length) fail('ctx menu: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('ctx menu: no console/HTTP errors')
+
+  await page.close()
+}
+
+// The transcript screen is a SECOND host for the same WebView bundle: it renders
+// the ··· row from the shared viewer, so if it does not handle `selection_menu`
+// the button is there and does nothing. That is exactly how it shipped broken.
+async function runTranscriptContextMenu(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 900 })
+  await page.goto(`${BASE_URL}/document/${VIDEO_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction(() => {
+    const f = document.querySelector('iframe')
+    return f && f.contentDocument && f.contentDocument.querySelector('.seg')
+  }, { timeout: 15000 })
+
+  const selText = await page.evaluate(() => {
+    const f = document.querySelector('iframe')
+    const d = f.contentDocument, w = f.contentWindow
+    const seg = [...d.querySelectorAll('.seg')].find(x => x.innerText.trim().length > 10)
+    const node = seg.firstChild
+    const r = d.createRange()
+    r.setStart(node, 0)
+    r.setEnd(node, Math.min(20, node.nodeValue.length))
+    const s = w.getSelection(); s.removeAllRanges(); s.addRange(r)
+    d.dispatchEvent(new w.MouseEvent('mouseup', { bubbles: true }))
+    return s.toString()
+  })
+
+  await check('transcript: the ··· row appears on a transcript selection', async () => {
+    if (!selText.trim()) return 'nothing was selected in the transcript'
+    const info = await page.evaluate(() => {
+      const f = document.querySelector('iframe')
+      const row = f.contentDocument.getElementById('sel-actions')
+      if (!row) return null
+      const r = row.getBoundingClientRect()
+      return {
+        display: f.contentWindow.getComputedStyle(row).display,
+        inside: r.left >= 0 && r.top >= 0 && r.right <= f.contentWindow.innerWidth && r.bottom <= f.contentWindow.innerHeight,
+      }
+    })
+    if (!info) return 'no selection action row in the transcript viewer'
+    if (info.display !== 'flex') return `the action row is ${info.display}`
+    if (!info.inside) return 'the action row is positioned outside the transcript viewport'
+    return null
+  })
+
+  await check('transcript: ··· opens the same action sheet as the article viewer', async () => {
+    await clickSelMore(page)
+    const rows = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-testid^="ctxmenu-"]')].map(e => e.getAttribute('data-testid')))
+    return rows.includes('ctxmenu-copy')
+      ? null
+      : `the sheet did not open on the transcript screen (rows: ${JSON.stringify(rows)})`
+  })
+
+  await page.evaluate(() => {
+    const el = [...document.querySelectorAll('*')].find(e => e.innerText && e.innerText.trim() === 'Cancel' && e.offsetParent)
+    el && el.click()
+  })
+  await sleep(400)
+
+  if (errors.length) fail('transcript ctx menu: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('transcript ctx menu: no console/HTTP errors')
+
+  await page.close()
+}
+
+// Transcript interaction contract: a tap must NOT seek, a selection must stop
+// playback and offer "play from here", a jump must leave a way back, and the find
+// bar must actually mark segments. Asserted on the messages the iframe really posts
+// (a page-level collector), because a broken handler is a silent no-op that returns
+// no error and paints nothing.
+async function runTranscriptPlayback(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 900 })
+  await page.goto(`${BASE_URL}/document/${VIDEO_DOC_ID}`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForFunction(() => {
+    const f = document.querySelector('iframe')
+    return f && f.contentDocument && f.contentDocument.querySelector('.seg')
+  }, { timeout: 15000 })
+  // Collect what the viewer posts out. The host listens to the same events.
+  await page.evaluate(() => {
+    window.__vmsgs = []
+    window.addEventListener('message', e => {
+      try { window.__vmsgs.push(JSON.parse(typeof e.data === 'string' ? e.data : JSON.stringify(e.data))) } catch { /* not ours */ }
+    })
+  })
+  const msgs = () => page.evaluate(() => window.__vmsgs)
+  const clearMsgs = () => page.evaluate(() => { window.__vmsgs = [] })
+
+  await check('transcript: tapping a line does not seek', async () => {
+    await clearMsgs()
+    await page.evaluate(() => {
+      const f = document.querySelector('iframe')
+      const seg = [...f.contentDocument.querySelectorAll('.seg')][2]
+      seg.dispatchEvent(new f.contentWindow.MouseEvent('click', { bubbles: true }))
+    })
+    await sleep(300)
+    const seen = await msgs()
+    if (seen.some(m => m.type === 'seek')) return 'the tap still posted a seek — tap-to-seek was supposed to move to the ▶ button'
+    const time = await page.evaluate(() =>
+      [...document.querySelectorAll('*')].map(e => (e.childElementCount === 0 ? e.innerText : '')).find(t => /^\d+:\d\d$/.test(t || '')))
+    if (time !== '0:00') return `playback moved on a tap (time reads ${time})`
+    return null
+  })
+
+  await check('transcript: selecting stops playback and offers play-from-here', async () => {
+    await clearMsgs()
+    const selText = await page.evaluate(() => {
+      const f = document.querySelector('iframe')
+      const d = f.contentDocument, w = f.contentWindow
+      const seg = [...d.querySelectorAll('.seg')].find(x => x.innerText.trim().length > 10)
+      const node = seg.firstChild
+      const r = d.createRange()
+      r.setStart(node, 0)
+      r.setEnd(node, Math.min(20, node.nodeValue.length))
+      const s = w.getSelection(); s.removeAllRanges(); s.addRange(r)
+      d.dispatchEvent(new w.MouseEvent('mouseup', { bubbles: true }))
+      return s.toString()
+    })
+    if (!selText.trim()) return 'nothing was selected in the transcript'
+    await sleep(300)
+    const seen = await msgs()
+    if (!seen.some(m => m.type === 'selection_start')) return 'no selection_start — playback would keep running under the selection'
+    const btn = await page.evaluate(() => {
+      const f = document.querySelector('iframe')
+      const row = f.contentDocument.getElementById('sel-actions')
+      const play = f.contentDocument.getElementById('sel-play-btn')
+      if (!row || !play) return null
+      return { hasTime: row.classList.contains('has-time'), display: f.contentWindow.getComputedStyle(play).display }
+    })
+    if (!btn) return 'no play-from-here button in the selection row'
+    if (!btn.hasTime || btn.display === 'none') return 'the play-from-here button is hidden on a transcript selection'
+    return null
+  })
+
+  await check('transcript: ▶ plays from the selected line', async () => {
+    await clearMsgs()
+    const want = await page.evaluate(() => {
+      const f = document.querySelector('iframe')
+      const seg = [...f.contentDocument.querySelectorAll('.seg')].find(x => x.innerText.trim().length > 10)
+      f.contentDocument.getElementById('sel-play-btn')
+        .dispatchEvent(new f.contentWindow.MouseEvent('click', { bubbles: true }))
+      return Number(seg.dataset.startMs)
+    })
+    await sleep(300)
+    const hit = (await msgs()).find(m => m.type === 'play_from')
+    if (!hit) return 'the ▶ button posted nothing'
+    if (hit.ms !== want) return `play_from carried ${hit.ms}ms, expected the segment's ${want}ms`
+    return null
+  })
+
+  await check('transcript: a jump leaves a way back', async () => {
+    if (await page.$('[data-testid="jump-back"]')) return 'the back pill was showing before any jump'
+    await clickByText(page, e => (e.innerText || '').trim() === '+10s', '+10s skip')
+    await sleep(400)
+    const el = await page.$('[data-testid="jump-back"]')
+    if (!el) return 'no "back to" pill after a jump'
+    const label = await page.evaluate(e => e.innerText.replace(/\s+/g, ' ').trim(), el)
+    if (!/back to \d+:\d\d/i.test(label)) return `the pill reads "${label}"`
+    await el.click()
+    await sleep(300)
+    if (!(await page.$('[data-testid="jump-back"]'))) return 'the pill vanished on use — there is no way back from the way back'
+    return null
+  })
+
+  await check('transcript: search marks the matching lines', async () => {
+    await page.type('[data-testid="transcript-find-input"]', 'Second')
+    await sleep(500)
+    const one = await page.evaluate(() => {
+      const d = document.querySelector('iframe').contentDocument
+      return {
+        hits: d.querySelectorAll('.seg.find-hit').length,
+        current: d.querySelector('.seg.find-current')?.textContent ?? '',
+        label: document.querySelector('[data-testid="transcript-find-count"]')?.innerText ?? '',
+      }
+    })
+    if (one.hits !== 1) return `"Second" matched ${one.hits} segments, expected 1`
+    if (!one.current.includes('Second line')) return `the current hit is "${one.current}"`
+    if (one.label !== '1/1') return `the count reads "${one.label}"`
+    return null
+  })
+
+  // Enter is the same step the ↓ button posts (onSubmitEditing → findTranscript +1).
+  await check('transcript: stepping moves between hits', async () => {
+    await page.click('[data-testid="transcript-find-input"]', { clickCount: 3 })
+    await page.type('[data-testid="transcript-find-input"]', 'line')
+    await sleep(500)
+    const read = () => page.evaluate(() => ({
+      hits: document.querySelector('iframe').contentDocument.querySelectorAll('.seg.find-hit').length,
+      current: document.querySelector('iframe').contentDocument.querySelector('.seg.find-current')?.textContent ?? '',
+      label: document.querySelector('[data-testid="transcript-find-count"]')?.innerText ?? '',
+    }))
+    const before = await read()
+    if (before.hits !== 3) return `"line" matched ${before.hits} segments, expected 3`
+    if (!before.current) return 'no current hit to step from'
+    await page.keyboard.press('Enter')
+    await sleep(400)
+    const after = await read()
+    if (after.current === before.current) return `the step did not move (still "${after.current}")`
+    if (after.label === before.label) return `the count did not advance (still "${after.label}")`
+    return null
+  })
+
+  if (errors.length) fail('transcript playback: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('transcript playback: no console/HTTP errors')
+
+  await page.close()
+}
+
+// The editor half: what Settings writes has to be what the reader offers, and it
+// has to survive a reload (it is a server row, not screen state).
+async function runContextMenuSettings(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 1400 })
+  await settingsText(page)
+
+  await check('ctx settings: the Context Menu card is in Preferences and collapsed', async () => {
+    const txt = await page.evaluate(() => document.body.innerText)
+    const up = txt.toUpperCase()
+    const at = txt.indexOf('Context Menu')
+    if (at < 0) return 'no Context Menu card on Settings'
+    const prefs = up.indexOf('PREFERENCES'), dev = up.indexOf('DEVICE')
+    if (!(at > prefs && at < dev)) return `the card is outside the Preferences group (at ${at}, group ${prefs}..${dev})`
+    if (!/action\(s\) enabled/.test(txt)) return 'the collapsed card does not summarise how many actions are on'
+    return null
+  })
+
+  await openSettingsCard(page, 'context-menu')
+
+  await check('ctx settings: adding an AI question persists to the server', async () => {
+    await page.evaluate(() => {
+      document.querySelector('[data-testid="ctxmenu-add"]')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    await sleep(400)
+    // Name it, then blur — text fields commit on blur, not per keystroke.
+    const named = await page.evaluate((title) => {
+      const input = [...document.querySelectorAll('input')].find(i => i.value === 'New question')
+      if (!input) return false
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, title)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      // React listens for focusout (blur does not bubble), so a bare 'blur' event
+      // never reaches onBlur and the field would never commit.
+      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+      return true
+    }, 'E2E Settings Question')
+    if (!named) return 'the new question row did not render an editable title'
+    await sleep(800)
+    const res = await fetch(`${BASE_URL}/api/v1/settings`, { headers: { Authorization: `Bearer ${token}` } })
+    const body = await res.json()
+    const items = body.context_menu?.items ?? []
+    if (!items.some(i => i.title === 'E2E Settings Question')) {
+      return `the server does not have the new item: ${JSON.stringify(items.map(i => i.title))}`
+    }
+    return null
+  })
+
+  await check('ctx settings: the saved menu is still there after a reload', async () => {
+    await settingsText(page, { open: ['context-menu'] })
+    // An ask item's title is an editable field: its text lives in input.value, which
+    // innerText does not contain.
+    const titles = await page.evaluate(() => [...document.querySelectorAll('input')].map(i => i.value))
+    return titles.includes('E2E Settings Question')
+      ? null
+      : `the added question is gone after reloading Settings (fields: ${JSON.stringify(titles)})`
+  })
+
+  // Leave a minimal menu behind — a stray extra action would show up in the sheet
+  // any later check opens.
+  await putContextMenu(token, {
+    master_prompt: '',
+    items: [{ id: 'copy', kind: 'copy', title: 'Copy to clipboard', enabled: true }],
+  })
+
+  if (errors.length) fail('ctx settings: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('ctx settings: no console/HTTP errors')
+
+  await page.close()
+}
+
 async function runAnnotationSelectionContext(token, deviceId) {
   const { page, errors } = await newConnectedPage(browser, token, deviceId)
   await page.setViewport({ width: 900, height: 900 })
@@ -1734,10 +2263,11 @@ async function runPageMode(token, deviceId) {
     })
     if (!selText.includes('download page')) return `selection did not cross the link: "${selText}"`
     const disp = await page.evaluate(() => {
-      const b = document.querySelector('iframe').contentDocument.getElementById('ann-btn')
-      return b ? b.style.display : '(no button)'
+      const ifr = document.querySelector('iframe')
+      const row = ifr.contentDocument.getElementById('sel-actions')
+      return row ? ifr.contentWindow.getComputedStyle(row).display : '(no button)'
     })
-    if (disp !== 'block') return `ann-btn display is "${disp}" — selection broken by page mode`
+    if (disp !== 'flex') return `sel-actions display is "${disp}" — selection broken by page mode`
     await page.evaluate(() => {
       const w = document.querySelector('iframe').contentWindow
       w.getSelection().removeAllRanges()
@@ -2733,8 +3263,18 @@ async function main() {
     // Before runSettingsServices too: it reads the Settings screen with every
     // service still healthy.
     await runSettingsLayout(token, deviceId)
+    // Before runSettingsServices for the same reason: it reads Settings with every
+    // service healthy, and that one seeds a permanently broken provider.
+    await runContextMenuSettings(token, deviceId)
     await runSettingsServices(token, deviceId)
     await runPipelineStepsUi(token, deviceId)
+    // After runSettingsServices: this one makes a REAL completion through the stub
+    // box, and a real call lands in the provider-health registry — where in-memory
+    // rows beat seeded ones, so it would move the per-endpoint call counts that
+    // check asserts on.
+    await runSelectionContextMenu(token, deviceId)
+    await runTranscriptContextMenu(token, deviceId)
+    await runTranscriptPlayback(token, deviceId)
     // Last: the reading mode persists globally (AsyncStorage → shared localStorage),
     // so leaving it on Page would silently paginate every earlier check's viewer.
     await runPageMode(token, deviceId)

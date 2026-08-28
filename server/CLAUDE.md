@@ -536,6 +536,33 @@ flavor:
 - `anthropicBaseURL` is a `var`, not a const, so probe tests can point it at an httptest
   server (same trick as `extractor.substackAPIBase`). One real value.
 
+### Ad-hoc completions (`api/llm_ask.go`, `POST /api/v1/llm/ask`)
+
+The one path from a UI to the Router — the reader's selection context menu
+(translate / ask a question). Routing rules are a pipeline step's: a named
+`provider` is **pinned** (no fallback), an empty one uses the chain.
+
+- **There is no system role.** The Anthropic Messages API takes `system` as a
+  top-level field, not a turn, and both adapters share one `llm.Message` shape —
+  so the request's `system` (the user's master prompt) is PREPENDED to the user
+  message here, on one code path for both providers.
+- **Metered like any other call**: one `llm_usages` row per ask, with `job_id` and
+  `pipeline_run_id` nil (it belongs to neither). An ad-hoc ask spends real money,
+  so it belongs in the ledger the Settings spend summary reads.
+- Bounded: `askMaxRunes` (413 past it) and a 120s context — an unbounded paste must
+  not become an unbounded bill, and a box that stopped answering must fail the
+  popout rather than hold the request open. `ErrNoProvider` → 503, a provider error
+  → 502 with its reason (never a stack trace).
+
+### The context menu is a server setting (`internal/ctxmenu`)
+
+`server_settings.context_menu`, served + patched by `/api/v1/settings` beside
+`language_prefs`. It holds the master prompt and the menu items; `Normalize()` runs
+on **both** read and write, dropping rows the device could not execute (no id,
+unknown kind) and filling the per-kind blanks — a row that renders in the sheet and
+does nothing is worse than a missing one. Routing is a `provider` id + a `model`,
+never an endpoint or a key (same rule as a pipeline step).
+
 ### Model catalog (`models.go`)
 
 `GET /api/v1/llm/models` → groups of `{provider_id, provider_label, role, models[]}`,
