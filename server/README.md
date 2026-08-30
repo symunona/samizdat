@@ -1,11 +1,10 @@
 # server/
 
-The Samizdat engine: REST API + cron worker + storage, as one Go static binary.
+The engine: REST API + job worker + cron + storage. One Go binary.
 
-- **Stack:** Go · pure-Go SQLite (`modernc.org/sqlite`, no CGO) · CertMagic (in-binary TLS) · `sqlc` (portable SQL).
-- **Runs:** the HTTP API, the job-queue worker, the cron scheduler; embeds the Expo web build.
-- **Owns:** `app.db` (rebuildable index) + `vault/` (markdown = source of truth).
+- **Stack:** Go · `modernc.org/sqlite` (pure Go) · `sqlc` · CertMagic (in-binary TLS) · MuPDF via cgo (PDF figures).
+- **Runs:** HTTP API, job-queue worker, scheduler. Embeds the Expo web build.
+- **Owns:** `app.db` (rebuildable index) + `vault/` (markdown = truth).
+- **Does:** ingest (`Feed`/`Subscription`) → `Scraper`→`Document` → `Pipeline`→`Highlight`, jobs + cost metering, sync API, auth, LLM routing.
 
-Responsibilities: ingest (`Feed`/`Subscription`), `Scraper`→`Document` (dedup, LVL0), `Pipeline`→`Highlight`, jobs/metering, sync API, auth (passphrase + device tokens), provider routing (Anthropic + OpenAI-compatible/local).
-
-Not initialized yet. Bootstrap: `go mod init` → wire HTTP + worker + SQLite. See `../ARCHITECTURE.md` and `../CLAUDE.md`.
+Dev: `just dev`. Prod: `just build && just restart`. See `CLAUDE.md`.

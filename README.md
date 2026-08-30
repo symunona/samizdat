@@ -58,20 +58,15 @@ Full glossary: `ARCHITECTURE.md` and the design docs (see `CLAUDE.md`).
 
 ## Status
 
-Greenfield. Building **L0′** first: newsletter / news-portal ingest → unit breakdown → own reader → digest output. Podcast/transcript, voice notes, and the visual pipeline editor are parked (the data model stays forward-compatible).
-
-## Commit Rules
-Do not commit every little thing.
-Wait for features to be ready.
-If worktree is dirty, let the user know!
+Running daily. Shipped: newsletter + RSS + email ingest, PDF ingest (with rendered figures), YouTube/podcast ingest with transcripts, pipelines → highlights, annotations, tags, offline-first app (Android + web), vault export, browser clipper. Parked: digest publishing, voice notes, visual pipeline editor, embeddings.
 
 ## Quick start
 
 ```sh
 just            # list tasks
-just setup      # install per-component deps (once each component is initialized)
-just dev        # run the server in dev
-just app        # run the Expo app
+just dev        # build + run the server (dev, HTTP) — the web app is served with it
+just app        # run the Expo app on a device / Expo Go
+just status     # which server holds the port, and is it running the latest build?
 ```
 
 ## Philosophy
@@ -82,6 +77,10 @@ Capitalism's incentive is that you're locked in their ecosystem.
 
 Make your own feed, that serves you.
 
+## Docs
+
+`ARCHITECTURE.md` — the design. `docs/decisions.md` — why it is that way, and the bugs that taught us. `CLAUDE.md` in each component — working rules.
+
 ---
 
-License: MIT
+License: AGPL-3.0 (the server links MuPDF).

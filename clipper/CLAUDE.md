@@ -24,28 +24,18 @@ MV3 extension loading via agent-browser/Playwright-chromium is unreliable here �
 - Background script = service worker (`background.js`), not a persistent page
 - Site adapters are JSON config data shipped in the bundle, not remote JS
 
-## Extraction pipeline (client-side only)
-1. Defuddle — main content extraction (fork Obsidian Web Clipper patterns)
-2. Turndown — HTML → Markdown conversion
-3. Result POSTed to server as markdown; server never receives raw HTML
-
-## Offline queue
-IndexedDB queue for failed POSTs. Drain on next successful connection.
-Never lose a clip due to network failure.
+## Planned: capture (not built yet)
+Client-side only: Defuddle (extraction, Obsidian Web Clipper patterns) → Turndown (HTML→MD) → POST markdown. The server never receives raw HTML.
+Offline: an IndexedDB queue for failed POSTs, drained on the next connection. Never lose a clip to the network.
 
 ## API
 - `POST /api/v1/documents` — `{url, markdown, title, captured_at}`
 - Bearer token stored in `chrome.storage.local` — **never** `chrome.storage.sync` (token is a secret)
 
 ## Conventions
-- No frameworks in content scripts (plain DOM APIs)
-- Popup and options page may use a lightweight framework if needed (decide before first UI component)
-- Vite for bundling
-- Adapters = JSON files in `src/adapters/` — one per site domain pattern
+- No frameworks in content scripts (plain DOM APIs).
+- **No bundler today** — zero npm deps, so `build.js` = gen icons + copy + zip. Introduce Vite only when capture (Defuddle/Turndown) lands and real bundling is needed; not before.
+- Adapters = JSON files in `src/adapters/`, one per site domain pattern.
 
 ## Stack (locked — do not add without discussion)
-- MV3 APIs
-- Defuddle (content extraction)
-- Turndown (HTML→MD)
-- Vite (build)
-- IndexedDB (offline queue)
+MV3 APIs · Defuddle (extraction) · Turndown (HTML→MD) · IndexedDB (offline queue) · Vite (only once capture lands).

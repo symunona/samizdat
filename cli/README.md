@@ -1,8 +1,8 @@
 # cli/
 
-`sam` — the headless control surface. Every server command is available from the CLI; it runs on the server box, so it's local-trust (no network auth).
+`sam` — the headless control surface. Runs on the server box, so it is local-trust.
 
-- **Stack:** Go. Shares the engine packages with `server/`.
-- **Commands (planned):** `sam init [--reconfigure]` · `config get/set` · `providers scan/list/set` · `pair new` · `device list/revoke` · `sub add/list/rm` · `scraper list` · `pipeline run <doc>` · `job list/retry` · `reindex` (rebuild `app.db` from `vault/`) · `digest build <tag>` · `serve`.
+- **Stack:** Go, Cobra, pure static (`CGO_ENABLED=0`).
+- **Commands:** `setup` · `serve` · `connect`/`qr` (pair a device) · `sub` (subscriptions) · `yt` (ingest a video) · `login <domain>` (paywalled scrape auth) · `llm check`/`llm models` · `config`.
 
-Not initialized yet. Bootstrap: `go mod init`. See `../ARCHITECTURE.md` and `../CLAUDE.md`.
+See `CLAUDE.md`.
