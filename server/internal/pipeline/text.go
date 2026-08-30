@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -62,6 +64,78 @@ func StripCodeFence(md string) string {
 	return strings.TrimSpace(body[:close])
 }
 
+// UnwrapLLMReply strips a markdown code fence around a raw LLM reply (StripCodeFence)
+// and reports whether what remains is a bare top-level JSON array rather than an
+// object. A step whose documented schema is a single wrapper object (`{"highlights":
+// [...]}`) uses the bare flag to fall back to reading the array directly — see
+// DecodeLLMList. A step whose wrapper carries more than one field (llm_ai_newsletter)
+// can't auto-decode into it and inspects the flag itself.
+func UnwrapLLMReply(reply string) (unwrapped string, isBareArray bool) {
+	unwrapped = StripCodeFence(strings.TrimSpace(reply))
+	isBareArray = strings.HasPrefix(strings.TrimLeft(unwrapped, " \t\n\r"), "[")
+	return unwrapped, isBareArray
+}
+
+// DecodeLLMList parses reply as the documented `{wrapperKey: [...]}` shape, but
+// tolerates a bare top-level array too. Small local models (this project runs a 4B
+// model on-box) routinely return complete, correctly-shaped JSON for the list itself
+// while dropping the wrapper object the prompt asks for — the schema instruction in
+// the prompt does not reliably stop it, so this is belt-and-braces rather than a
+// second attempt at prompting. Fences are stripped first (UnwrapLLMReply), so a
+// caller gets both tolerances in one call.
+//
+// A wrapper object missing wrapperKey decodes to a nil slice with no error — same as
+// plain json.Unmarshal into a struct with an absent field, which is what every caller
+// did before this was factored out. errPrefix names the calling step so a genuine
+// parse failure (neither shape) reads exactly like that step's own error used to,
+// raw reply included.
+func DecodeLLMList[T any](reply, wrapperKey, errPrefix string) ([]T, error) {
+	unwrapped, bare := UnwrapLLMReply(reply)
+	if bare {
+		var items []T
+		if err := decodeFirstJSON(unwrapped, &items); err != nil {
+			return nil, fmt.Errorf("%s: parse llm json: %w\nraw: %s", errPrefix, err, unwrapped)
+		}
+		return items, nil
+	}
+	var wrapper map[string]json.RawMessage
+	if err := decodeFirstJSON(unwrapped, &wrapper); err != nil {
+		return nil, fmt.Errorf("%s: parse llm json: %w\nraw: %s", errPrefix, err, unwrapped)
+	}
+	raw, ok := wrapper[wrapperKey]
+	if !ok {
+		return nil, nil
+	}
+	var items []T
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("%s: parse llm json: %w\nraw: %s", errPrefix, err, unwrapped)
+	}
+	return items, nil
+}
+
+// dedupeByBody drops items whose body normalizes identical to one already kept,
+// keyed by body(items[i]). Needed only by the partition strategy (see
+// llm_long.go): its chunks overlap on purpose, so a boundary idea keeps its
+// context, but that overlap can hand the SAME verbatim idea/section to two
+// independent per-chunk calls, each of which correctly extracts it once. Body
+// text is the identity check because verbatim IS the contract these steps
+// extract under: two genuine duplicates are byte-identical after trimming, and
+// two different ideas essentially never coincide exactly. Order is preserved —
+// first occurrence wins.
+func dedupeByBody[T any](items []T, body func(T) string) []T {
+	seen := make(map[string]bool, len(items))
+	out := make([]T, 0, len(items))
+	for _, it := range items {
+		key := strings.TrimSpace(body(it))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, it)
+	}
+	return out
+}
+
 var sentenceEnd = regexp.MustCompile(`[.!?](\s|$)`)
 
 // firstSentenceTitle derives a Highlight title from a body: the first sentence,
@@ -81,4 +155,18 @@ func firstSentenceTitle(body string, maxWords int) string {
 		fields = fields[:maxWords]
 	}
 	return strings.TrimSpace(strings.Join(fields, " "))
+}
+
+// decodeFirstJSON reads the FIRST complete JSON value in s and ignores whatever
+// trails it. json.Unmarshal insists the whole string be that one value, which a
+// small model breaks in a way that has nothing to do with the data: qwen3-sum
+// opened the documented `{"highlights": ...}` wrapper, emitted a bare array
+// instead, then closed the brace anyway — a perfectly good six-item array plus
+// one stray `}`, rejected as `invalid character '}' after top-level value`.
+// Trailing noise is a formatting slip, not a content failure; a value that never
+// parses at all still errors.
+func decodeFirstJSON(s string, dst any) error {
+	//nolint:wrapcheck // every caller already prefixes "…: parse llm json:" and
+	// appends the raw reply; wrapping here would just double that prefix.
+	return json.NewDecoder(strings.NewReader(s)).Decode(dst)
 }

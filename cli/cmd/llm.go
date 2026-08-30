@@ -63,6 +63,20 @@ type llmProbeResult struct {
 	Error       string `json:"error"`
 }
 
+// llmPipelineMismatch is one stored pipeline step whose PINNED provider+model no
+// longer resolves on that provider — the exact failure mode that let four steps
+// keep pointing at a decommissioned Ollama model for days: a 404 on every call,
+// silently escalating to the fallback instead of failing loud (see
+// server/internal/api/llm_status.go checkPipelineModels).
+type llmPipelineMismatch struct {
+	PipelineID   string `json:"pipeline_id"`
+	PipelineName string `json:"pipeline_name"`
+	StepKind     string `json:"step_kind"`
+	Provider     string `json:"provider"`
+	Model        string `json:"model"`
+	Reason       string `json:"reason"`
+}
+
 func runLLMCheck(_ *cobra.Command, _ []string) error {
 	c, err := newAPIClient()
 	if err != nil {
@@ -77,7 +91,8 @@ func runLLMCheck(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("probe llm providers: %w", err)
 	}
 	var out struct {
-		Results []llmProbeResult `json:"results"`
+		Results            []llmProbeResult      `json:"results"`
+		PipelineMismatches []llmPipelineMismatch `json:"pipeline_mismatches"`
 	}
 	if err := decode(resp, &out); err != nil {
 		return err
@@ -88,10 +103,19 @@ func runLLMCheck(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("no llm providers")
 	}
 
-	fmt.Print(renderProbeTable(out.Results, resolveColor(llmCheckColor, os.Stdout)))
+	color := resolveColor(llmCheckColor, os.Stdout)
+	fmt.Print(renderProbeTable(out.Results, color))
+
+	if len(out.PipelineMismatches) > 0 {
+		fmt.Println()
+		fmt.Print(renderMismatchTable(out.PipelineMismatches, color))
+	}
 
 	if !chainUsable(out.Results) {
 		return fmt.Errorf("no usable provider in the routing chain")
+	}
+	if len(out.PipelineMismatches) > 0 {
+		return fmt.Errorf("%d pipeline step(s) pin a model that does not exist on its provider", len(out.PipelineMismatches))
 	}
 	return nil
 }
@@ -267,6 +291,47 @@ func renderProbeTable(results []llmProbeResult, color bool) string {
 			// the columns above stay aligned with the columns below.
 			b.WriteString("    " + paintIf(color, sgrRed, "! "+e) + "\n")
 		}
+	}
+	return b.String()
+}
+
+var mismatchHeaders = []string{"PIPELINE", "STEP", "PROVIDER", "MODEL", "REASON"}
+
+// renderMismatchTable lists every pinned pipeline step whose model does not
+// exist on its provider. Unlike the probe table this has no keyless/warn state —
+// a mismatch here means the NEXT run of that step 404s, so every row is red.
+func renderMismatchTable(mismatches []llmPipelineMismatch, color bool) string {
+	rows := make([][]cell, 0, len(mismatches))
+	for _, m := range mismatches {
+		rows = append(rows, []cell{
+			{m.PipelineName, sgrBold},
+			{m.StepKind, ""},
+			{m.Provider, ""},
+			{m.Model, sgrRed},
+			{m.Reason, sgrRed},
+		})
+	}
+
+	widths := make([]int, len(mismatchHeaders))
+	for i, h := range mismatchHeaders {
+		widths[i] = len(h)
+	}
+	for _, row := range rows {
+		for i, c := range row {
+			if n := utf8.RuneCountInString(c.text); n > widths[i] {
+				widths[i] = n
+			}
+		}
+	}
+
+	var b strings.Builder
+	header := make([]cell, len(mismatchHeaders))
+	for i, h := range mismatchHeaders {
+		header[i] = cell{h, sgrBold}
+	}
+	writeRow(&b, header, widths, color)
+	for _, row := range rows {
+		writeRow(&b, row, widths, color)
 	}
 	return b.String()
 }

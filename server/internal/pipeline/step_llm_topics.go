@@ -28,10 +28,6 @@ type topicHighlight struct {
 	Body  string `json:"body"`
 }
 
-type topicsResponse struct {
-	Highlights []topicHighlight `json:"highlights"`
-}
-
 // topicsDefaultPrompt splits ANY newsletter into its distinct sections/topics. Unlike
 // llm_summarize / llm_ai_newsletter, it does NOT summarize — each topic body is the
 // section's original text, verbatim. Source language is preserved.
@@ -82,25 +78,25 @@ func handleLLMTopics(ctx context.Context, q *store.Queries, run store.PipelineRu
 	// out.Note is deliberately dropped: this step's reply is parsed as JSON and
 	// splits into several Highlights, so there is no one body to disclose on. The
 	// cut is still recorded in each Highlight's provenance (`truncated`).
-	reply, meta := strings.TrimSpace(out.Reply), out.Meta
-	if strings.HasPrefix(reply, "```") {
-		reply = strings.TrimPrefix(reply, "```json")
-		reply = strings.TrimPrefix(reply, "```")
-		if idx := strings.LastIndex(reply, "```"); idx != -1 {
-			reply = reply[:idx]
+	meta := out.Meta
+	// AllReplies is one reply (small/big band) or one per chunk (partition band,
+	// the default for this step — see chunkStrategyFor); either way every reply
+	// is decoded and the results unioned, never folded.
+	var highlights []topicHighlight
+	for _, reply := range out.AllReplies() {
+		hs, err := DecodeLLMList[topicHighlight](reply, "highlights", "llm_topics")
+		if err != nil {
+			return StepResult{}, err
 		}
-		reply = strings.TrimSpace(reply)
+		highlights = append(highlights, hs...)
 	}
-
-	var parsed topicsResponse
-	if err := json.Unmarshal([]byte(reply), &parsed); err != nil {
-		return StepResult{}, fmt.Errorf("llm_topics: parse llm json: %w\nraw: %s", err, reply)
-	}
+	// Chunk overlap can hand the same section to two adjacent chunk calls.
+	highlights = dedupeByBody(highlights, func(h topicHighlight) string { return h.Body })
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if err := InsertTx(ctx, q, func(q *store.Queries) error {
-		for _, h := range parsed.Highlights {
+		for _, h := range highlights {
 			title := strings.TrimSpace(h.Title)
 			body := strings.TrimSpace(h.Body)
 			if title == "" || body == "" {

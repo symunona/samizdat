@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,10 +26,6 @@ type nl321Highlight struct {
 	Kind  string `json:"kind"`
 	Title string `json:"title"`
 	Body  string `json:"body"`
-}
-
-type nl321Response struct {
-	Highlights []nl321Highlight `json:"highlights"`
 }
 
 const nl321DefaultPrompt = `You parse James Clear's 3-2-1 newsletter. Return ONLY valid JSON, no prose, no markdown fences.
@@ -77,25 +72,25 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 	}
 	// out.Note dropped for the same reason as llm_topics: a parsed reply, many
 	// Highlights, no single body to disclose on. Provenance keeps `truncated`.
-	reply, meta := strings.TrimSpace(out.Reply), out.Meta
-	if strings.HasPrefix(reply, "```") {
-		reply = strings.TrimPrefix(reply, "```json")
-		reply = strings.TrimPrefix(reply, "```")
-		if idx := strings.LastIndex(reply, "```"); idx != -1 {
-			reply = reply[:idx]
+	meta := out.Meta
+	// AllReplies is one reply (small/big band) or one per chunk (partition band,
+	// the default for this step — see chunkStrategyFor); either way every reply
+	// is decoded and the results unioned, never folded.
+	var highlights []nl321Highlight
+	for _, reply := range out.AllReplies() {
+		hs, err := DecodeLLMList[nl321Highlight](reply, "highlights", "llm_321_newsletter")
+		if err != nil {
+			return StepResult{}, err
 		}
-		reply = strings.TrimSpace(reply)
+		highlights = append(highlights, hs...)
 	}
-
-	var parsed nl321Response
-	if err := json.Unmarshal([]byte(reply), &parsed); err != nil {
-		return StepResult{}, fmt.Errorf("llm_321_newsletter: parse llm json: %w\nraw: %s", err, reply)
-	}
+	// Chunk overlap can hand the same idea/quote to two adjacent chunk calls.
+	highlights = dedupeByBody(highlights, func(h nl321Highlight) string { return h.Body })
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	if err := InsertTx(ctx, q, func(q *store.Queries) error {
-		for _, h := range parsed.Highlights {
+		for _, h := range highlights {
 			if h.Kind == "" || h.Title == "" {
 				continue
 			}

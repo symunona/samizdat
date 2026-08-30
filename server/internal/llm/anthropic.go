@@ -83,7 +83,11 @@ func (c *anthropicClient) Complete(ctx context.Context, p Params, messages []Mes
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		Usage struct {
+		// StopReason is "max_tokens" when the completion cap cut the reply off
+		// mid-generation, "end_turn"/"stop_sequence"/etc when the model finished
+		// on its own. See Usage.Truncated.
+		StopReason string `json:"stop_reason"`
+		Usage      struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
 		} `json:"usage"`
@@ -98,6 +102,7 @@ func (c *anthropicClient) Complete(ctx context.Context, p Params, messages []Mes
 		OutputTokens: out.Usage.OutputTokens,
 		MaxTokens:    maxTokens,
 		Temp:         p.Temp,
+		Truncated:    out.StopReason == "max_tokens",
 	}
 	for _, c := range out.Content {
 		if c.Type == "text" {

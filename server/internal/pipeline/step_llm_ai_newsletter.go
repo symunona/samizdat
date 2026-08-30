@@ -102,6 +102,38 @@ type aiNewsletterResponse struct {
 	Highlights []aiNewsletterHighlight `json:"highlights"`
 }
 
+// aiNewsletterSummaryCap is the prompt's own "Max 7 bullets" instruction,
+// re-enforced here: a partitioned run concatenates one chunk-local summary per
+// chunk, which can run past what any single call was asked to keep to.
+const aiNewsletterSummaryCap = 7
+
+// parseAINewsletterReply decodes one reply — chunk-local under partition, or the
+// whole document's under the small/big/chunked bands — tolerating the same bare
+// top-level array DecodeLLMList tolerates.
+//
+// A bare array is ambiguous between "summary" and "highlights" for this step
+// only: its wrapper has two fields, unlike llm_321_newsletter/llm_topics, so it
+// can't just hand off to DecodeLLMList. Resolved as: the array IS the
+// highlights, with no summary. Reasoning: "summary" is a plain string[] (no
+// kind/title/body), so an array of {kind,title,body} objects only ever
+// schema-matches "highlights" — and a model that drops the wrapper key is
+// exactly the case skip_summary already handles on purpose (item highlights
+// only, no bulleted summary).
+func parseAINewsletterReply(reply string) (aiNewsletterResponse, error) {
+	unwrapped, bare := UnwrapLLMReply(reply)
+	var parsed aiNewsletterResponse
+	if bare {
+		if err := json.Unmarshal([]byte(unwrapped), &parsed.Highlights); err != nil {
+			return aiNewsletterResponse{}, fmt.Errorf("llm_ai_newsletter: parse llm json: %w\nraw: %s", err, unwrapped)
+		}
+		return parsed, nil
+	}
+	if err := json.Unmarshal([]byte(unwrapped), &parsed); err != nil {
+		return aiNewsletterResponse{}, fmt.Errorf("llm_ai_newsletter: parse llm json: %w\nraw: %s", err, unwrapped)
+	}
+	return parsed, nil
+}
+
 const aiNewsletterDefaultPrompt = `You analyze AI/ML newsletters. Return ONLY valid JSON, no prose, no markdown fences.
 
 Schema:
@@ -170,27 +202,42 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 	}
 	// out.Note dropped for the same reason as llm_topics: a parsed reply, many
 	// Highlights, no single body to disclose on. Provenance keeps `truncated`.
-	reply, meta := strings.TrimSpace(out.Reply), out.Meta
-	// Strip markdown fences if model wrapped response anyway.
-	if strings.HasPrefix(reply, "```") {
-		reply = strings.TrimPrefix(reply, "```json")
-		reply = strings.TrimPrefix(reply, "```")
-		if idx := strings.LastIndex(reply, "```"); idx != -1 {
-			reply = reply[:idx]
-		}
-		reply = strings.TrimSpace(reply)
-	}
+	meta := out.Meta
 
-	var parsed aiNewsletterResponse
-	if err := json.Unmarshal([]byte(reply), &parsed); err != nil {
-		return StepResult{}, fmt.Errorf("llm_ai_newsletter: parse llm json: %w\nraw: %s", err, reply)
+	// AllReplies is one reply (small/big band) or one per chunk (partition band —
+	// this step's default; see chunkStrategyFor and the doc comment below on the
+	// summary/highlights split). Every reply is parsed and merged; nothing is
+	// folded through a second model call.
+	var summary []string
+	var highlights []aiNewsletterHighlight
+	for _, reply := range out.AllReplies() {
+		parsed, err := parseAINewsletterReply(reply)
+		if err != nil {
+			return StepResult{}, err
+		}
+		summary = append(summary, parsed.Summary...)
+		highlights = append(highlights, parsed.Highlights...)
+	}
+	// Chunk overlap can hand the same tool/model to two adjacent chunk calls.
+	highlights = dedupeByBody(highlights, func(h aiNewsletterHighlight) string { return h.bodyString() })
+	// The prompt's contract is lossy prose ("max 7 bullets") for summary but
+	// verbatim extraction for highlights — the two fields don't share a
+	// strategy. Partitioning still asks each chunk for its own local summary
+	// (never fabricated: every bullet is grounded in text that chunk actually
+	// saw), so a multi-chunk run's concatenation can run past 7. A second LLM
+	// call to re-fold those bullets into one summary would reopen exactly the
+	// fabrication risk this whole change removes, so the cap is a plain
+	// truncation instead: cheap, deterministic, and honest about being a
+	// concatenation of per-chunk summaries rather than one global one.
+	if len(summary) > aiNewsletterSummaryCap {
+		summary = summary[:aiNewsletterSummaryCap]
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Build summary highlight body: bullet list + optional hero image. Strip a
 	// leading title echo so the card doesn't double the title.
-	summaryBody := StripLeadingTitle(buildBullets(parsed.Summary), doc.Title)
+	summaryBody := StripLeadingTitle(buildBullets(summary), doc.Title)
 	if assets, err2 := q.ListMediaAssetsByDocument(ctx, run.DocumentID); err2 == nil {
 		for _, a := range assets {
 			if a.Kind == "hero" {
@@ -219,7 +266,7 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 			}
 		}
 
-		for _, h := range parsed.Highlights {
+		for _, h := range highlights {
 			if h.Kind == "" || h.Title == "" {
 				continue
 			}

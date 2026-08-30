@@ -82,6 +82,11 @@ func (c *openAICompatClient) Complete(ctx context.Context, p Params, messages []
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			// FinishReason is "length" when the completion cap cut the reply off
+			// mid-generation, "stop"/"tool_calls"/etc when the model finished on
+			// its own. See Usage.Truncated. Ollama and other OpenAI-compat servers
+			// follow the same enum.
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
@@ -101,6 +106,7 @@ func (c *openAICompatClient) Complete(ctx context.Context, p Params, messages []
 		OutputTokens: out.Usage.CompletionTokens,
 		MaxTokens:    max(p.MaxTokens, 0),
 		Temp:         p.Temp,
+		Truncated:    out.Choices[0].FinishReason == "length",
 	}
 	return out.Choices[0].Message.Content, usage, nil
 }

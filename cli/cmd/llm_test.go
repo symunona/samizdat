@@ -241,3 +241,57 @@ func TestChainUsable(t *testing.T) {
 		}
 	}
 }
+
+// The exact real-world row this table exists to show: a step pinned to a
+// specific provider naming a model that provider no longer serves.
+func mismatchFixture() []llmPipelineMismatch {
+	return []llmPipelineMismatch{
+		{
+			PipelineID: "p1", PipelineName: "Latent Space – AI newsletter analysis",
+			StepKind: "llm_ai_newsletter", Provider: "xayah.tail7f475e.ts.net:11434",
+			Model: "qwen3:4b-instruct-ctx7k", Reason: "model not found on provider",
+		},
+	}
+}
+
+func TestRenderMismatchTablePlain(t *testing.T) {
+	out := renderMismatchTable(mismatchFixture(), false)
+	if strings.Contains(out, "\x1b[") {
+		t.Fatalf("color=false still emitted escapes:\n%s", out)
+	}
+	for _, want := range []string{
+		"PIPELINE", "STEP", "PROVIDER", "MODEL", "REASON",
+		"Latent Space – AI newsletter analysis", "llm_ai_newsletter",
+		"xayah.tail7f475e.ts.net:11434", "qwen3:4b-instruct-ctx7k", "model not found on provider",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("table is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// Same alignment discipline as the probe table: an SGR escape must never count
+// toward a column width, or a colored row drifts out of line with the header.
+func TestRenderMismatchTableColorsDoNotShiftColumns(t *testing.T) {
+	plain := renderMismatchTable(mismatchFixture(), false)
+	colored := renderMismatchTable(mismatchFixture(), true)
+
+	if !strings.Contains(colored, "\x1b[") {
+		t.Fatal("color=true emitted no escapes")
+	}
+	if visible(colored) != plain {
+		t.Fatalf("stripping color does not reproduce the plain table:\n--- colored (stripped) ---\n%s\n--- plain ---\n%s",
+			visible(colored), plain)
+	}
+}
+
+// A pipeline with no mismatches must not print an empty table, and must not turn
+// the command red — nothing in runLLMCheck's exit-code logic is exercised here,
+// only that an empty slice renders to just a header (no runtime panic on 0 rows).
+func TestRenderMismatchTableEmpty(t *testing.T) {
+	out := renderMismatchTable(nil, false)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("want exactly the header line for zero mismatches, got:\n%s", out)
+	}
+}

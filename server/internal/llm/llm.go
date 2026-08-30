@@ -48,6 +48,13 @@ type Usage struct {
 	// own — reporting "not set" beats inventing the provider's private default.
 	MaxTokens int
 	Temp      *float64
+	// Truncated is true when the provider cut the reply off at MaxTokens rather
+	// than the model choosing to stop (Anthropic stop_reason == "max_tokens" /
+	// OpenAI-compat finish_reason == "length"). The returned text is a PREFIX of
+	// the intended reply, not a complete one — a caller that parses it as JSON
+	// or writes it verbatim must treat this as a distinct failure, not silently
+	// hand a cut-off string downstream (see server/CLAUDE.md, job 461fce04).
+	Truncated bool
 }
 
 // Client is a provider-agnostic LLM interface. Routing lives one level up, in

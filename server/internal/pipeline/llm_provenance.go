@@ -58,8 +58,17 @@ type highlightProvenance struct {
 	Chunks int `json:"chunks,omitempty"`
 	Calls  int `json:"calls,omitempty"`
 	// Truncated is set when even the big model could not hold the document, so
-	// the tail was dropped. The body carries a visible note saying the same.
+	// the tail was dropped BEFORE the call ran (clampRunes). The body carries a
+	// visible note saying the same.
 	Truncated bool `json:"truncated,omitempty"`
+	// OutputTruncated is set when the provider cut the COMPLETION itself short at
+	// its max_tokens cap (llm.Usage.Truncated) — the reply is a prefix of what the
+	// model intended, a call-level failure rather than a pre-call input clamp, and
+	// MUST NOT be conflated with Truncated above. A JSON-parsing step fails the
+	// step outright on this (see llm_long.go's toleratesTruncatedReply); a prose
+	// step keeps the partial reply and discloses it the same way Truncated is
+	// disclosed.
+	OutputTruncated bool `json:"output_truncated,omitempty"`
 }
 
 // llmCall is the one path from a step to the LLM: it routes the call, writes the
@@ -108,7 +117,13 @@ type usageAcc struct {
 	tokensIn  int
 	tokensOut int
 	chunks    int
+	// truncated is the INPUT band (clampRunes cut the document before the call).
 	truncated bool
+	// outputTruncated is the OUTPUT band (the provider cut the completion at
+	// max_tokens). Set by the caller from the finishing call's llm.Usage.Truncated
+	// — see singleCall/reduceTick in llm_long.go — never by add(), because a
+	// truncated map chunk is not the reply that ends up in provenance.
+	outputTruncated bool
 
 	// last describes the call that produced the text the user will read — the
 	// reduce, or the only call. The map calls read the document; this one wrote
@@ -144,17 +159,18 @@ func (a *usageAcc) provenance(kind string, stepCfg llmStepConfig) string {
 		calls = a.calls
 	}
 	meta, _ := json.Marshal(highlightProvenance{
-		Model:     servedModel(a.last, c.Model),
-		Provider:  servedProvider(a.last, c.Provider),
-		Step:      kind,
-		MaxTokens: a.last.MaxTokens,
-		Temp:      a.last.Temp,
-		TokensIn:  a.tokensIn,
-		TokensOut: a.tokensOut,
-		PromptSHA: promptSHA(c.Prompt),
-		Chunks:    a.chunks,
-		Calls:     calls,
-		Truncated: a.truncated,
+		Model:           servedModel(a.last, c.Model),
+		Provider:        servedProvider(a.last, c.Provider),
+		Step:            kind,
+		MaxTokens:       a.last.MaxTokens,
+		Temp:            a.last.Temp,
+		TokensIn:        a.tokensIn,
+		TokensOut:       a.tokensOut,
+		PromptSHA:       promptSHA(c.Prompt),
+		Chunks:          a.chunks,
+		Calls:           calls,
+		Truncated:       a.truncated,
+		OutputTruncated: a.outputTruncated,
 	})
 	return string(meta)
 }

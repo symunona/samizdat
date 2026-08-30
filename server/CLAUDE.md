@@ -600,6 +600,46 @@ low is invisible while being wrong high is loud):
   `updated_at` fresh and makes a crash cost one chunk instead of all of them.
   `StepResult.Continue` skips `stepRetryDelay` for a tick that made progress (that delay is
   backoff, and progress is not a failure).
+- **map→reduce is for LOSSY steps ONLY. Extraction uses `partition`.** The fold never sees
+  the document — it sees five-bullet chunk summaries. That is correct for `llm_summarize`,
+  whose output is lossy prose by definition, and **catastrophic** for a step whose prompt
+  says "verbatim": the source text is gone by the fold, so the model invents plausible
+  replacements. On a real James Clear 3-2-1 issue it produced a Dolly Parton quote she never
+  said and attributed a Steve Jobs line to Carl Jung — both real, named people, written to
+  Highlights that sync to the phone and export to the vault. `partition` is the lossless
+  strategy: run the STEP's own prompt on each chunk and union the results. No map prompt, no
+  fold. `chunkStrategyFor(kind)` **defaults to `partition`** and only `llm_summarize` opts
+  out, so a new step kind is safe without remembering to opt in — same polarity as
+  `toleratesTruncatedReply`. Never route an extraction step through map→reduce.
+- **`planRun` returns an explicit `band`; nothing re-derives it.** It used to return `nil`
+  for four different reasons and `singleCall` guessed which from `EstimateTokens(content) >=
+  ChunkAbove` — a test that cannot tell "too small to chunk" from "chunked, but it came out
+  as ONE chunk". The second landed in the `big` role: a document that fits the local box in
+  one call was sent to the cloud with the big cap, which is how a 12067-rune newsletter met a
+  1024-token cap and truncated. The window was `[chunk_above*3, ChunkBudget(map) - overlap]`
+  runes, so **raising the local model's context made it bigger** and sent MORE work to the
+  cloud — and it is a design-rule-5 leak, routing paywalled content to a cloud LLM with no
+  gate and no log line.
+- **`CompactForLLM` (`llmtext.go`) runs before the band is chosen.** Link targets are
+  stripped from what the LLM sees; the stored Document is untouched. **76% of a real
+  newsletter was ConvertKit tracking URLs**, which cost twice: they tokenize ~1.7 runes/token
+  against `EstimateTokens`'s assumed 3 (so the estimate under-counts a link-heavy document by
+  up to 1.76x), and their bulk pushed a single-call newsletter into the chunking band — which
+  is what caused the fabrication above. That issue goes 23238 → 6651 runes, 7746 → 2217
+  estimated tokens, and stops chunking entirely. **Image syntax is left byte-identical**,
+  targets included: `llm_topics` copies bodies verbatim into Highlights the vault exports,
+  and the exporter keys its rewrite on `media_assets.original_url` / `/api/v1/media/<id>`.
+- **`EstimateTokens` (runes/3) is NOT always conservative.** `chunk.go` calls it "wrong in the
+  safe direction"; measured against the real qwen3 tokenizer that holds for prose (3000 runes
+  = 983 tokens) and fails for link-heavy markdown (18000 runes = 10546). Two errors currently
+  cancel: `qwen3-sum:latest` really serves **12288** tokens while `ctx_tokens` declares 7168,
+  and chunks sized off the under-declared window land inside the real one. **"Correcting"
+  `ctx_tokens` to 12288 alone would break it** — chunks would reach ~12800 real tokens and
+  the endpoint 400s. Fix the estimator before the declared window.
+- **Ollama 0.32.7 ERRORS on context overflow** — `exceed_context_size_error ... request
+  (13594 tokens) exceeds the available context size (12288 tokens)` — rather than silently
+  dropping the front of the prompt. The older "answers confidently about whatever survived"
+  warning still applies to the 4096 `num_ctx` default, not to overflow on a sized model.
 - **Chunk text is never stored.** `Split` is deterministic (guarded by a test), so each tick
   re-derives the chunks and takes the one it needs; `pipeline_runs.state` holds only the
   partials and the counters. Storing the chunks would put a copy of every long document in

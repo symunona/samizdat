@@ -241,5 +241,110 @@ func (h *llmStatusHandler) models(w http.ResponseWriter, r *http.Request) {
 // key from a valid key on an empty account.
 func (h *llmStatusHandler) probe(w http.ResponseWriter, r *http.Request) {
 	results := h.router.Probe(r.Context(), r.URL.Query().Get("deep") == "1")
-	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	mismatches := checkPipelineModels(r.Context(), h.q, h.router)
+	writeJSON(w, http.StatusOK, map[string]any{"results": results, "pipeline_mismatches": mismatches})
+}
+
+// pipelineModelMismatch is one pipeline step whose PINNED provider+model no
+// longer resolves — the concrete failure this check exists to catch: a model
+// id typed into a step's config, on a decommissioned or renamed provider model,
+// 404s three times and silently escalates to the fallback (see llm_long.go
+// callWithFallback) instead of failing loud. Only PINNED steps (both `provider`
+// and `model` set) are checked — an unpinned model resolves to whatever
+// provider it lands on and is validated by construction (the provider's own
+// default_model), so there is nothing stable to check it against.
+type pipelineModelMismatch struct {
+	PipelineID   string `json:"pipeline_id"`
+	PipelineName string `json:"pipeline_name"`
+	StepKind     string `json:"step_kind"`
+	Provider     string `json:"provider"`
+	Model        string `json:"model"`
+	Reason       string `json:"reason"`
+}
+
+// pipelineStepModelConfig is the sliver of a step's config this check reads.
+// Deliberately not pipeline.llmStepConfig: that type lives in the pipeline
+// package, which already imports llm, so llm-adjacent code importing it back
+// would cycle. The JSON shape is the stable contract, not the Go type.
+type pipelineStepModelConfig struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+type pipelineStep struct {
+	Kind   string                  `json:"kind"`
+	Config pipelineStepModelConfig `json:"config"`
+}
+
+// checkPipelineModels cross-checks every stored pipeline step's PINNED
+// provider+model against that provider's real model list. One unreachable or
+// keyless provider must not blank out mismatches for every other pipeline, so a
+// provider whose model list can't be fetched reports one row of its own instead
+// of being silently skipped.
+func checkPipelineModels(ctx context.Context, q *store.Queries, router *llm.Router) []pipelineModelMismatch {
+	mismatches := []pipelineModelMismatch{}
+	if router == nil || !router.Configured() {
+		return mismatches
+	}
+	pipelines, err := q.ListPipelines(ctx)
+	if err != nil {
+		return mismatches
+	}
+
+	// refresh=true: this runs from the manual, deep `sam llm check` path (see the
+	// probe handler below), which already spends a real round trip per provider —
+	// the 5-minute picker cache would just as happily hand back the stale catalog
+	// this check exists to catch a pipeline drifting behind.
+	groups := router.Models(ctx, true)
+	modelsByProvider := make(map[string]llm.ModelGroup, len(groups))
+	for _, g := range groups {
+		modelsByProvider[g.ProviderID] = g
+	}
+
+	for _, pl := range pipelines {
+		var steps []pipelineStep
+		if err := json.Unmarshal([]byte(pl.Steps), &steps); err != nil {
+			continue // malformed steps are a different problem (pipeline validation), not this one
+		}
+		for _, st := range steps {
+			if st.Config.Provider == "" || st.Config.Model == "" {
+				continue // unpinned: resolves to whatever provider serves it, nothing fixed to check
+			}
+			p, ok := router.Provider(st.Config.Provider)
+			if !ok {
+				mismatches = append(mismatches, pipelineModelMismatch{
+					PipelineID: pl.ID, PipelineName: pl.Name, StepKind: st.Kind,
+					Provider: st.Config.Provider, Model: st.Config.Model,
+					Reason: "provider not configured",
+				})
+				continue
+			}
+			g, ok := modelsByProvider[p.ID]
+			if !ok || g.Error != "" {
+				reason := "provider unreachable"
+				if g.Error != "" {
+					reason = "provider unreachable: " + g.Error
+				}
+				mismatches = append(mismatches, pipelineModelMismatch{
+					PipelineID: pl.ID, PipelineName: pl.Name, StepKind: st.Kind,
+					Provider: p.ID, Model: st.Config.Model, Reason: reason,
+				})
+				continue
+			}
+			found := false
+			for _, m := range g.Models {
+				if m.ID == st.Config.Model {
+					found = true
+					break
+				}
+			}
+			if !found {
+				mismatches = append(mismatches, pipelineModelMismatch{
+					PipelineID: pl.ID, PipelineName: pl.Name, StepKind: st.Kind,
+					Provider: p.ID, Model: st.Config.Model, Reason: "model not found on provider",
+				})
+			}
+		}
+	}
+	return mismatches
 }

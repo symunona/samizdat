@@ -60,6 +60,50 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 # first byte that spills to CPU roughly halves throughput. Prefer a non-thinking
 # ("instruct") build: a reasoning model spends most of its tokens on hidden thinking.
 
+# How much document an LLM step may send, and how big a reply it may get back. Three
+# bands by estimated input tokens: below `chunk_above` one plain call on the step's own
+# config; below `big_above` the document is split, summarized chunk by chunk (`map`) and
+# folded (`reduce`); above that it goes to `big` in one call, clamped to what that model
+# holds. Chunk size is DERIVED from ctx_tokens — there is no separate knob.
+#
+# ctx_tokens must match what the endpoint actually serves (see the num_ctx note above):
+# an oversized prompt does not error, it comes back as a confident answer about whatever
+# survived. max_tokens caps the REPLY. Size it to the step's output, not to the document:
+# a step returning JSON emits a whole structured object, and a cap that cuts it mid-array
+# fails the step outright (the reply's finish_reason is checked, and the error names this
+# key). Output tokens bill as generated, so headroom on the cap is free.
+# [llm.summarize]
+# chunk_above   = 4000
+# big_above     = 40000
+# max_chunks    = 12                       # more pieces than this → hand the whole doc to `big`
+# overlap_runes = 200
+# max_tries     = 3                        # per role, before escalating to `big`
+#
+# [llm.summarize.map]                      # per-chunk pass; a role naming no provider/model
+# provider   = "box.your-tailnet.ts.net:11434"   # keeps the step's own routing and changes
+# model      = "qwen3:4b-instruct-ctx7k"         # only HOW MUCH is sent
+# ctx_tokens = 7168
+# max_tokens = 300
+#
+# [llm.summarize.reduce]                   # the fold; carries the STEP's own prompt, because
+# provider   = "box.your-tailnet.ts.net:11434"   # the step's output contract is the point of
+# model      = "qwen3:4b-instruct-ctx7k"         # the step. Partials too big escalate to `big`.
+# ctx_tokens = 7168
+# max_tokens = 600
+#
+# [llm.summarize.big]                      # the escalation target, and the large band
+# provider   = "anthropic"
+# model      = "claude-haiku-4-5-20251001"
+# ctx_tokens = 200000
+# max_tokens = 4096
+#
+# Per-step overrides. The key is a step kind (`llm_summarize`, `llm_topics`,
+# `llm_ai_newsletter`, `llm_321_newsletter`); every unset field inherits the blocks above,
+# so a step that wants one different number writes one line, not a whole config.
+# [llm.summarize.steps.llm_topics.big]
+# max_tokens = 8192                        # llm_topics copies each section VERBATIM, so its
+#                                          # reply is roughly the size of its input
+
 # YouTube / podcast ingestion via yt-dlp. A datacenter VPS IP is bot-blocked by
 # YouTube, so list residential proxies in `proxies` (e.g. home nodes over Tailscale
 # running microsocks) or set `cookies` to an exported cookies.txt.

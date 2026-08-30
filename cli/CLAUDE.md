@@ -63,9 +63,17 @@ is the only way to tell a valid Anthropic key from a valid key on an empty accou
 this is a manual command; `--shallow` skips it. Exit code is gated on the **routing chain
 only**: an `available` provider with no key is information, not a failure.
 
-Output is a hand-laid table (`renderProbeTable`), **not** `text/tabwriter`, for two
-reasons: tabwriter counts ANSI escapes toward cell width (every colored row drifts), and a
-single-cell line ends its column block (an inline error would split the table in two).
+After the probe table, `sam llm check` also prints a **pipeline mismatch table** if any
+pipeline step has a pinned provider+model that no longer exists on that provider. This is
+the failure mode where a step silently 404s on every call and falls back, rather than
+failing loud (see `server/internal/api/llm_status.go checkPipelineModels`). The table is
+populated from `pipeline_mismatches` in the `/api/v1/llm/check` response. If any
+mismatches exist, the command exits non-zero even if the routing chain is healthy.
+
+Output is a hand-laid table (`renderProbeTable` / `renderMismatchTable`), **not**
+`text/tabwriter`, for two reasons: tabwriter counts ANSI escapes toward cell width (every
+colored row drifts), and a single-cell line ends its column block (an inline error would
+split the table in two).
 
 - **Green = usable, yellow = no key configured, red = unusable.** A keyless provider was
   never contacted, so its REACHABLE cell reads `—`, not `no` — and it is yellow, not red:
@@ -75,12 +83,19 @@ single-cell line ends its column block (an inline error would split the table in
   the credit numbers or the endpoint.
 - **Padding is measured on the unpainted text** (`cell{text, color}` + `paintIf`), in
   RUNES not bytes — the em dash a missing value renders as is 3 bytes and one column.
+- **The mismatch table has no warn/yellow state** — every row is red, because a mismatch
+  means the next run of that step will 404. Unlike the probe table there is no "keyless"
+  state to soften. The `renderMismatchTable` function shares the same `cell`/`writeRow`
+  primitives as `renderProbeTable`.
 - `--color auto|always|never`; auto honours `NO_COLOR`, `TERM=dumb`, and whether stdout is
   a terminal, so `just check-llm > out.txt` stays clean. Use `--color=always` to see the
   real thing through a pipe.
 - **The exit code needs `stateOK`, not "not red".** A chain provider with no key is not
   broken, but it cannot serve a call either — `chainUsable` is the single place that
   decides, and it is unit-tested.
+- **Two independent exit-code gates:** (1) `!chainUsable(out.Results)` — no usable routing
+  chain; (2) `len(out.PipelineMismatches) > 0` — a pinned model is gone. Both are checked;
+  either alone causes non-zero exit. Chain failure is checked first.
 
 `sam llm models` (`just list-models`) lists what each provider serves — the same catalog
 the app's model picker offers. `--provider <id>` filters, `--refresh` busts the server's
@@ -104,6 +119,7 @@ the app's model picker offers. `--provider <id>` filters, `--refresh` busts the 
 - URL validation for ingestion commands: validate before hitting the server (see `isYouTubeURL`)
 - Print user-facing "server not reachable" hint to stderr before returning the wrapped error
 - Credential env-var fallback pattern: check flag first, then `os.Getenv("SAM_LOGIN_*")` — use this for any future commands that accept secrets
+- **Table rendering pattern:** use `cell{text, color}` + `writeRow` + rune-counted widths — never `text/tabwriter`. New tables (like `renderMismatchTable`) must follow the same primitives. The mismatch table demonstrates the minimal case: no warn state, all-red rows, shared header/row rendering with the probe table.
 
 ## Stack
 - `github.com/spf13/cobra` — CLI dispatch

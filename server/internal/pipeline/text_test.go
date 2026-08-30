@@ -1,6 +1,9 @@
 package pipeline
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestStripLeadingTitle(t *testing.T) {
 	cases := []struct {
@@ -42,6 +45,84 @@ func TestStripCodeFence(t *testing.T) {
 	}
 }
 
+type dllItem struct {
+	Title string `json:"title"`
+}
+
+// TestDecodeLLMList covers the shape tolerance itself, independent of any one
+// step: the documented wrapper object still works, a bare top-level array (what
+// job 8cd52ad8 actually got back from qwen3-sum) is accepted as the same list, a
+// markdown fence around either shape is stripped first, and genuine garbage still
+// fails with the raw reply intact in the error.
+func TestDecodeLLMList(t *testing.T) {
+	cases := []struct {
+		name       string
+		reply      string
+		wantTitles []string
+		wantErr    bool
+	}{
+		{
+			name:       "wrapper object",
+			reply:      `{"items": [{"title": "a"}, {"title": "b"}]}`,
+			wantTitles: []string{"a", "b"},
+		},
+		{
+			name:       "bare array",
+			reply:      `[{"title": "a"}, {"title": "b"}]`,
+			wantTitles: []string{"a", "b"},
+		},
+		{
+			name:       "fenced wrapper object",
+			reply:      "```json\n{\"items\": [{\"title\": \"a\"}]}\n```",
+			wantTitles: []string{"a"},
+		},
+		{
+			name:       "fenced bare array",
+			reply:      "```json\n[{\"title\": \"a\"}]\n```",
+			wantTitles: []string{"a"},
+		},
+		{
+			name:       "wrapper object missing key decodes empty, no error",
+			reply:      `{"other": "field"}`,
+			wantTitles: nil,
+		},
+		{
+			name:    "genuine garbage still errors",
+			reply:   "not json at all",
+			wantErr: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := DecodeLLMList[dllItem](c.reply, "items", "test_step")
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("want error, got items %+v", got)
+				}
+				if !strings.Contains(err.Error(), "test_step: parse llm json:") || !strings.Contains(err.Error(), c.reply) {
+					t.Fatalf("error must name the step and carry the raw reply, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var titles []string
+			for _, it := range got {
+				titles = append(titles, it.Title)
+			}
+			if len(titles) != len(c.wantTitles) {
+				t.Fatalf("got titles %v, want %v", titles, c.wantTitles)
+			}
+			for i := range titles {
+				if titles[i] != c.wantTitles[i] {
+					t.Fatalf("got titles %v, want %v", titles, c.wantTitles)
+				}
+			}
+		})
+	}
+}
+
 func TestFirstSentenceTitle(t *testing.T) {
 	cases := []struct {
 		name, body string
@@ -58,6 +139,44 @@ func TestFirstSentenceTitle(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := firstSentenceTitle(c.body, c.max); got != c.want {
 				t.Errorf("firstSentenceTitle(%q, %d) = %q, want %q", c.body, c.max, got, c.want)
+			}
+		})
+	}
+}
+
+// A small model that opens the documented wrapper, emits a bare array anyway and
+// then closes the brace produces valid JSON plus one stray byte. That is a
+// formatting slip, not a content failure — job 090344f0 lost six correct,
+// verbatim highlights to it.
+func TestDecodeLLMListToleratesTrailingNoise(t *testing.T) {
+	type item struct {
+		Kind string `json:"kind"`
+		Body string `json:"body"`
+	}
+	for _, tc := range []struct {
+		name, reply string
+		want        int
+		wantErr     bool
+	}{
+		{"bare array with a stray closing brace", `[{"kind":"idea","body":"b"},{"kind":"quote","body":"c"}]}`, 2, false},
+		{"wrapper with trailing prose", `{"highlights":[{"kind":"idea","body":"b"}]} hope that helps!`, 1, false},
+		{"clean bare array still works", `[{"kind":"idea","body":"b"}]`, 1, false},
+		{"clean wrapper still works", `{"highlights":[{"kind":"idea","body":"b"}]}`, 1, false},
+		{"genuine garbage still errors", `not json at all`, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := DecodeLLMList[item](tc.reply, "highlights", "test_step")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("want an error, got %d items", len(got))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != tc.want {
+				t.Fatalf("got %d items, want %d", len(got), tc.want)
 			}
 		})
 	}
