@@ -18,6 +18,8 @@ package export
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -257,11 +259,15 @@ func (e *Exporter) sweep(ctx context.Context) {
 // assets, and one note per live annotation.
 func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 	doc, err := e.q.GetDocumentByID(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		// GetDocumentByID filters `deleted_at IS NULL`, so a tombstoned doc reads
+		// as no-rows — that IS the removal signal, not a failure. Checking
+		// doc.DeletedAt instead could never fire: the note stayed in the vault
+		// forever and every boot sweep warned + flagged the export errored.
+		return e.removeDoc(id)
+	}
 	if err != nil {
 		return fmt.Errorf("get document %s: %w", id, err)
-	}
-	if doc.DeletedAt != nil {
-		return e.removeDoc(id)
 	}
 
 	annos, err := e.q.ListAnnotationsByDocument(ctx, &id)

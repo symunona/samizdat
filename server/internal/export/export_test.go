@@ -291,3 +291,62 @@ func mtimes(t *testing.T, root string) map[string]time.Time {
 	}
 	return out
 }
+
+// TestTombstonedDocRemovesNote: deleting a document must take its vault note
+// with it. GetDocumentByID filters tombstones, so the sweep sees "no rows" —
+// treating that as a failure left the note behind and warned on every sweep.
+func TestTombstonedDocRemovesNote(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	q := store.New(db)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	nowTS := now.Format(time.RFC3339)
+	if _, err := q.UpsertDocument(ctx, store.UpsertDocumentParams{
+		ID: "doc-1", CanonicalUrl: "https://a.example/1", Title: "Doomed",
+		Markdown: "hello", FetchedAt: nowTS, MediaType: "article",
+		CreatedAt: nowTS, UpdatedAt: nowTS,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	e := New(q, dir, t.TempDir(), "weekly", linkWikilink)
+	for _, sub := range []string{docsSub, annsSub, assetsSub} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.sweep(ctx)
+
+	rel := e.docFiles["doc-1"]
+	if rel == "" {
+		t.Fatal("doc note was never written")
+	}
+	note := filepath.Join(dir, rel)
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("doc note not on disk: %v", err)
+	}
+
+	later := now.Add(time.Second).Format(time.RFC3339)
+	if err := q.SoftDeleteDocument(ctx, store.SoftDeleteDocumentParams{
+		DeletedAt: &later, UpdatedAt: later, ID: "doc-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.sweep(ctx)
+
+	if _, err := os.Stat(note); !os.IsNotExist(err) {
+		t.Errorf("note of tombstoned doc survived (err=%v)", err)
+	}
+	if _, ok := e.docFiles["doc-1"]; ok {
+		t.Error("tombstoned doc still in the export index")
+	}
+	if got := e.Snapshot().LastError; got != "" {
+		t.Errorf("removal reported as an export error: %q", got)
+	}
+}
