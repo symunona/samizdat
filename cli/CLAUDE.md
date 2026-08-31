@@ -60,7 +60,10 @@ The underlying flow it implements:
 (LAN/local Ollama, Anthropic, OpenRouter) and prints one row each: reachable, auth,
 credits, model count, latency. It runs **deep by default** — a 1-token ping (~$0.000001)
 is the only way to tell a valid Anthropic key from a valid key on an empty account, and
-this is a manual command; `--shallow` skips it. Exit code is gated on the **routing chain
+this is a manual command; `--shallow` skips it. The ping now goes to **every** provider,
+not just the cloud ones, which also makes `sam llm check` the CLI way to clear a stale
+red dot: it is the only path that writes the provider-health row (see
+`server/CLAUDE.md`). A `--shallow` run reports health it did not refresh. Exit code is gated on the **routing chain
 only**: an `available` provider with no key is information, not a failure.
 
 After the probe table, `sam llm check` also prints a **pipeline mismatch table** if any

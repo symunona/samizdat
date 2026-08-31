@@ -112,12 +112,15 @@ export default function SettingsScreen() {
   // drawer's degraded dot reads the same data (src/useServices.ts).
   const { data: proxyStatus, refetch: refetchProxy, isFetching: proxyFetching } = useProxyStatus()
   const { data: exportStats, refetch: refetchExport, isFetching: exportFetching } = useExportStats()
-  const { data: llmStatus } = useLLMStatus()
+  const { data: llmStatus, refetch: refetchLLM } = useLLMStatus()
   // The one client-side service: the local database's write path (src/store/persistHealth.ts).
   const persistFailure = usePersistHealth((st) => st.failure)
   // The LLM card is passive by default (status = the last real call's outcome, see
-  // server/CLAUDE.md). This is the one place that ACTIVELY asks — on a tap, never
-  // on a render, and shallow: no tokens are spent from a screen.
+  // server/CLAUDE.md), which also makes the dot STICKY: nothing but a real call
+  // can clear one that went red on a blip. This is the one place that ACTIVELY
+  // asks, and it asks deep — a real 1-token completion per provider — so the tap
+  // both reports and repairs. On a tap, never on a render: that is what makes
+  // spending a token from a screen honest.
   const [llmProbing, setLlmProbing] = useState(false)
   const [llmProbe, setLlmProbe] = useState<LLMProbeResult[] | null>(null)
   const [llmProbeError, setLlmProbeError] = useState<string | null>(null)
@@ -489,9 +492,13 @@ export default function SettingsScreen() {
     setLlmProbing(true)
     setLlmProbeError(null)
     try {
-      setLlmProbe(await probeLLMProviders(activeUrl, token))
+      setLlmProbe(await probeLLMProviders(activeUrl, token, true))
+      // The ping went through the normal client, so the server's health rows are
+      // now newer than the ones this screen is painted from — refetch or the dot
+      // keeps the colour the check just disproved.
+      await refetchLLM()
     } catch (e) {
-      setLlmProbeError(e instanceof Error ? e.message : 'Probe failed')
+      setLlmProbeError(e instanceof Error ? e.message : 'Check failed')
     } finally {
       setLlmProbing(false)
     }
@@ -522,8 +529,9 @@ export default function SettingsScreen() {
             : 'No calls yet'
 
   // One row per configured LLM endpoint: what it is, whether the LAST real call
-  // worked, and what went wrong if it didn't (there is no active probe — a
-  // health-check completion would cost money on every render).
+  // worked, and what went wrong if it didn't. Nothing here probes — a health-check
+  // completion would cost money on every render; the Check button is the one path
+  // that asks.
   const renderLLMProvider = (p: LLMProvider, last: boolean) => {
     const color = providerColor(p)
     const usage = providerUsage(p)
@@ -542,7 +550,7 @@ export default function SettingsScreen() {
         ) : null}
         {probe ? (
           <Text style={[s.providerProbe, !probe.reachable && { color: theme.colors.error }]} numberOfLines={2}>
-            {`Probed: ${probeSummary(probe)}${probe.latency_ms ? ` · ${probe.latency_ms}ms` : ''}`}
+            {`Checked: ${probeSummary(probe)}${probe.latency_ms ? ` · ${probe.latency_ms}ms` : ''}`}
           </Text>
         ) : null}
         {p.calls > 0 || usage ? (
@@ -691,7 +699,7 @@ export default function SettingsScreen() {
   const renderLLMCard = () => (
     <Accordion
       title="LLM Services"
-      subtitle="Status of the last call to each provider — pipelines route through these"
+      subtitle="Status of the last call to each provider — pipelines route through these. Check sends a 1-token test call."
       testID="llm-services"
       summary={llmLead
         ? (
@@ -708,11 +716,11 @@ export default function SettingsScreen() {
           onPress={handleProbeLLM}
           disabled={llmProbing}
           style={({ pressed }) => [s.refreshBtn, pressed && s.refreshBtnPressed, llmProbing && s.refreshBtnDisabled]}
-          accessibilityLabel="probe llm providers"
+          accessibilityLabel="check llm providers"
         >
           {llmProbing
             ? <ActivityIndicator size="small" color={theme.colors.accent} />
-            : <Text style={s.refreshBtnText}>Probe</Text>
+            : <Text style={s.refreshBtnText}>Check</Text>
           }
         </Pressable>
       }

@@ -89,6 +89,13 @@ export const STUB_LLM_PORT = 8767
 
 export const STUB_LLM_MODELS = ['stub-large', 'stub-small']
 
+// stubLLMFailing makes the stub refuse COMPLETIONS while still listing models.
+// That split is the point: /models answering is what a shallow probe sees, and a
+// box can pass it while every real call dies — which is exactly the state the
+// provider-health dot exists to report, and the one a deep probe has to detect.
+let stubLLMFailing = false
+export function setStubLLMFailing(on) { stubLLMFailing = on }
+
 // startStubLLM serves the OpenAI-compatible surface the Router probes and lists:
 // GET /v1/models and POST /v1/chat/completions.
 export function startStubLLM() {
@@ -99,6 +106,13 @@ export function startStubLLM() {
       return
     }
     if (req.url.startsWith('/v1/chat/completions')) {
+      if (stubLLMFailing) {
+        // 500, so llm.classify calls it a transport failure — the shape a box
+        // that is up but broken actually produces.
+        res.statusCode = 500
+        res.end(JSON.stringify({ error: { message: 'stub box is down' } }))
+        return
+      }
       res.end(JSON.stringify({
         choices: [{ message: { content: 'stub reply' } }],
         usage: { prompt_tokens: 1, completion_tokens: 1 },

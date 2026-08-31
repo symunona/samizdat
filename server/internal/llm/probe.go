@@ -18,6 +18,9 @@ import (
 //   - OpenRouter: GET /key — real credit numbers, no tokens.
 //   - Anthropic: GET /v1/models proves the key; credits have NO endpoint, so they
 //     come from the last recorded quota error, or (deep) from a 1-token completion.
+//
+// `deep` is the exception to "cheapest": it spends a real completion on every
+// provider, because that is what a human means by "check it now".
 
 // Auth states.
 const (
@@ -59,8 +62,9 @@ type ProbeResult struct {
 }
 
 // Probe checks every discovered provider concurrently. deep additionally spends a
-// 1-token completion on cloud providers that expose no balance endpoint — the only
-// way to tell "key is valid" from "key is valid but the account is empty".
+// 1-token completion on each one — the only way to tell "key is valid" from "key
+// is valid but the account is empty", and the only probe path that refreshes the
+// provider-health row behind the Settings dot (see deepPing).
 func (r *Router) Probe(ctx context.Context, deep bool) []ProbeResult {
 	if r == nil {
 		return []ProbeResult{}
@@ -121,9 +125,68 @@ func (r *Router) probeOne(ctx context.Context, p *Provider, deep bool) ProbeResu
 	case flavorOpenRouter:
 		r.fillOpenRouterCredits(ctx, p, &res)
 	case flavorAnthropic, flavorOpenAI:
-		r.fillCloudCredits(ctx, p, &res, deep)
+		if !deep {
+			r.inferCloudCredits(p, &res)
+		}
+	}
+	if deep {
+		r.deepPing(ctx, p, &res, models)
 	}
 	return res
+}
+
+// deepPing spends one real completion. It answers two different questions at
+// once, which is why it runs for EVERY flavor and not just the cloud ones:
+//
+//   - credits: a cloud key with no balance endpoint looks identical to a good one
+//     until something is actually billed.
+//   - health: Complete() feeds llm.Record, so this is the ONLY probe path that
+//     writes the provider-health row. health.go is passive by design, so a dot
+//     that went red on a one-off failure (xayah's 90s timeout on 2026-08-30)
+//     stays red until a pipeline happens to route there again. This is the
+//     manual "check it now" the Settings button needs, and a local box — the
+//     kind most likely to blip — is exactly the case the old cloud-only ping
+//     skipped.
+//
+// MaxTokens 1 keeps the cloud cost at the one token the note claims. A local box
+// still pays its model load (~25s cold on a 4GB card), which is why this is a
+// tap, never a render.
+//
+// `listed` is what the catalog call just returned, and it is load-bearing: a
+// DISCOVERED provider (the well-known localhost box) has no default_model, so
+// Complete would refuse before reaching the wire and Record would paint the row
+// red for a box that is up. Borrowing the first model it advertises makes the
+// ping mean what it says.
+func (r *Router) deepPing(ctx context.Context, p *Provider, res *ProbeResult, listed []Model) {
+	if res.Auth != AuthOK {
+		return
+	}
+	params := Params{MaxTokens: 1}
+	if p.Model == "" && len(listed) > 0 {
+		params.Model = listed[0].ID
+	}
+	_, _, err := p.client().Complete(ctx, params, []Message{{Role: "user", Content: "hi"}})
+	if err == nil {
+		// A box with no balance has no credits to verify — say what was actually
+		// established, which for it is the only thing that matters: a real call
+		// went through, so the health row is now green.
+		if res.Credits == CreditsNA {
+			res.CreditsNote = "1-token call OK"
+			return
+		}
+		res.Credits = CreditsOK
+		res.CreditsNote = "verified by 1-token ping"
+		return
+	}
+	kind := classify(err)
+	res.Error = truncErr(err.Error())
+	res.ErrorKind = kind
+	switch kind {
+	case KindQuota:
+		res.Credits = CreditsExhausted
+	case KindAuth:
+		res.Auth = AuthBadKey
+	}
 }
 
 // fillOpenRouterCredits reads the real numbers — OpenRouter is the one provider
@@ -156,29 +219,12 @@ func (r *Router) fillOpenRouterCredits(ctx context.Context, p *Provider, res *Pr
 	}
 }
 
-// fillCloudCredits answers for providers with no balance endpoint. Shallow: trust
-// the last real call (the registry already knows when a pipeline died of quota).
-// Deep: spend one token and know for certain.
-func (r *Router) fillCloudCredits(ctx context.Context, p *Provider, res *ProbeResult, deep bool) {
+// inferCloudCredits answers for providers with no balance endpoint without
+// spending anything: trust the last real call, which the registry already knows
+// about (a pipeline that died of quota recorded exactly that). The deep answer
+// is deepPing's job.
+func (r *Router) inferCloudCredits(p *Provider, res *ProbeResult) {
 	if res.Auth != AuthOK {
-		return
-	}
-	if deep {
-		_, _, err := p.client().Complete(ctx, Params{}, []Message{{Role: "user", Content: "hi"}})
-		if err == nil {
-			res.Credits = CreditsOK
-			res.CreditsNote = "verified by 1-token ping"
-			return
-		}
-		kind := classify(err)
-		res.Error = truncErr(err.Error())
-		res.ErrorKind = kind
-		switch kind {
-		case KindQuota:
-			res.Credits = CreditsExhausted
-		case KindAuth:
-			res.Auth = AuthBadKey
-		}
 		return
 	}
 	for _, h := range Snapshot() {

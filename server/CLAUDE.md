@@ -182,7 +182,7 @@ Deduped by `HealthKey`, in routing order: `[llm]` → `primary`, each `[[llm.fal
 
 ### Probe (`probe.go`) — the only thing that actively asks
 
-`POST /api/v1/llm/probe` → `just check-llm` + the Settings **Probe** button. Never on a render path; that is why `health.go` stays passive.
+`POST /api/v1/llm/probe` → `just check-llm` + the Settings **Check** button. Never on a render path; that is why `health.go` stays passive.
 
 | Flavor | Check | Credits |
 |---|---|---|
@@ -190,7 +190,8 @@ Deduped by `HealthKey`, in routing order: `[llm]` → `primary`, each `[[llm.fal
 | OpenRouter | `GET /api/v1/models` + `/api/v1/key` | real numbers |
 | Anthropic | `GET /v1/models` (proves the key) | no endpoint exists |
 
-- **Anthropic has no balance API.** Shallow → credits from the health registry's last `quota` error. `?deep=1` → a `max_tokens:1` completion settles it for ~$0.000001 and, going through the normal client, *updates* the registry, so probe and passive status agree by construction. `just check-llm` is deep by default (`--shallow` opts out); the Settings button is always shallow — it is one tap from a render.
+- **`?deep=1` pings EVERY provider, and that is the only way a red dot clears.** `deepPing` spends a `max_tokens:1` completion per provider; because it goes through the normal client it feeds `llm.Record`, so probe and passive status agree by construction. Health is otherwise the outcome of the last real call and nothing on a render path can move it — a provider that timed out once stays red until a pipeline happens to route there again (xayah, 2026-08-30: one 90s timeout, red for a day on a box that was fine). The ping was originally cloud-only (credits), which skipped `flavorLocal` — the one flavor whose dot actually goes stale. Both `just check-llm` and the Settings button are deep; `--shallow` opts out.
+- **A deep ping borrows a listed model when the provider has none.** A discovered box (well-known `localhost:11434`) has no `default_model`, so `Complete` refuses before the wire — and `Record` would then paint a *working* box red. `deepPing` takes the first model the catalog call just returned.
 - **Unreachable means nothing is listening.** A 4xx came back over a working connection: `reachable: true, auth: bad_key`. Only `ErrTransport` sets `reachable: false`.
 - A provider with **no key is never contacted** — claiming reachability we never established is a guess.
 - `anthropicBaseURL` is a `var` so probe tests can point it at an httptest server (same trick as `extractor.substackAPIBase`).

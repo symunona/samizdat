@@ -58,8 +58,11 @@ export async function fetchLLMModels(
 }
 
 // probeLLMProviders is the one path that actively contacts providers. `deep`
-// additionally spends a 1-token completion where no balance endpoint exists; the
-// Settings button never does, because it is one tap away from a render.
+// sends a real 1-token completion to each one: it settles credits where no
+// balance endpoint exists, and — because that completion goes through the normal
+// client — it is the ONLY thing that refreshes the provider-health row behind the
+// status dot. The dot is sticky by design (last real call wins), so a deep probe
+// is how a human clears one that went red on a blip.
 export async function probeLLMProviders(
   serverUrl: string, token: string, deep = false,
 ): Promise<LLMProbeResult[]> {

@@ -3,8 +3,10 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/symunona/samizdat/server/internal/config"
@@ -167,5 +169,123 @@ func TestProbeMissingKeyDoesNotGuess(t *testing.T) {
 	}
 	if hits != 0 {
 		t.Fatalf("probed %d times with no key to probe with", hits)
+	}
+}
+
+// The red-dot contract. A local box is the flavor most likely to blip (a cold
+// model load past the 90s cap), and the passive registry cannot clear itself —
+// only a real completion writes LastOKAt. So a DEEP probe has to ping a local
+// provider, not just the cloud ones it was originally written for.
+func TestDeepProbeClearsStaleHealthOnLocalBox(t *testing.T) {
+	clearLLMEnv(t)
+	resetHealth()
+	defer resetHealth()
+
+	box := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/chat/completions") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]any{"content": "ok"}}},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "qwen3:4b"}}})
+	}))
+	defer box.Close()
+
+	// The stale red state: one failed call, nothing since.
+	Record(transportOpenAI, box.URL+"/v1", transportErr(errors.New("context deadline exceeded")))
+	key := ProviderKey(transportOpenAI, box.URL+"/v1")
+	before := healthFor(t, key)
+	if !before.LastErrorAt.After(before.LastOKAt) {
+		t.Fatal("setup: want a red row (last_error_at after last_ok_at)")
+	}
+
+	r := NewRouter(config.LLMSection{
+		Provider: "openai_compat", BaseURL: box.URL + "/v1", DefaultModel: "qwen3:4b",
+	})
+	got := probeFor(r.Probe(context.Background(), true), hostOf(box.URL))
+	if got == nil || !got.Reachable {
+		t.Fatalf("want a reachable result, got %+v", got)
+	}
+	// A local box has no balance, so the ping must not invent credits for it.
+	if got.Credits != CreditsNA {
+		t.Fatalf("local box credits = %q, want %q", got.Credits, CreditsNA)
+	}
+
+	after := healthFor(t, key)
+	if !after.LastOKAt.After(after.LastErrorAt) {
+		t.Fatalf("deep probe left the row red: ok=%v err=%v", after.LastOKAt, after.LastErrorAt)
+	}
+}
+
+// The other half of the same contract: health.go stays passive. A SHALLOW probe
+// renders in Settings, so it must never write a health row — otherwise the dot
+// would report "the /models endpoint answered", not "a completion worked".
+func TestShallowProbeRecordsNoHealth(t *testing.T) {
+	clearLLMEnv(t)
+	resetHealth()
+	defer resetHealth()
+
+	box := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "qwen3:4b"}}})
+	}))
+	defer box.Close()
+
+	r := NewRouter(config.LLMSection{Provider: "openai_compat", BaseURL: box.URL + "/v1"})
+	r.Probe(context.Background(), false)
+
+	if snap := Snapshot(); len(snap) != 0 {
+		t.Fatalf("shallow probe wrote %d health rows, want 0: %+v", len(snap), snap)
+	}
+}
+
+// healthFor returns the registry row for key, failing the test when absent.
+func healthFor(t *testing.T, key string) ProviderHealth {
+	t.Helper()
+	for _, h := range Snapshot() {
+		if h.Key == key {
+			return h
+		}
+	}
+	t.Fatalf("no health row for %q", key)
+	return ProviderHealth{}
+}
+
+// A DISCOVERED box (the well-known localhost Ollama) is configured nowhere, so it
+// has no default_model. Complete would refuse before the wire and Record would
+// paint a working box red — the deep ping borrows a model the box just listed.
+func TestDeepProbeBorrowsListedModelWhenNoDefault(t *testing.T) {
+	clearLLMEnv(t)
+	resetHealth()
+	defer resetHealth()
+
+	var asked string
+	box := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/chat/completions") {
+			var body struct {
+				Model string `json:"model"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			asked = body.Model
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]any{"content": "ok"}}},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "granite4.1:3b"}}})
+	}))
+	defer box.Close()
+
+	r := NewRouter(config.LLMSection{Provider: "openai_compat", BaseURL: box.URL + "/v1"})
+	got := probeFor(r.Probe(context.Background(), true), hostOf(box.URL))
+	if got == nil || got.Error != "" {
+		t.Fatalf("want a clean result, got %+v", got)
+	}
+	if asked != "granite4.1:3b" {
+		t.Fatalf("pinged with model %q, want the listed one", asked)
+	}
+	h := healthFor(t, ProviderKey(transportOpenAI, box.URL+"/v1"))
+	if h.LastOKAt.IsZero() {
+		t.Fatal("deep ping did not record a healthy call")
 	}
 }

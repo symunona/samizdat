@@ -16,7 +16,7 @@ import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
   newConnectedPage, seedTextDoc, seedTextDocs, seedVideoDoc, seedHighlight, seedLLMHealth,
   seedPipeline, seedJob,
-  startStubLLM, STUB_LLM_MODELS, STUB_LLM_PORT,
+  startStubLLM, setStubLLMFailing, STUB_LLM_MODELS, STUB_LLM_PORT,
   makeCleanup,
 } from './harness.js'
 
@@ -2788,23 +2788,6 @@ async function runSettingsServices(token, deviceId) {
     return null
   })
 
-  // The probe is the ONE active path: a tap, never a render. It must tell the two
-  // failure shapes apart — a box with nothing listening vs a box that answered.
-  await check('settings: Probe reports each provider live, reachable and not', async () => {
-    await clickByText(page, e => e.innerText === 'Probe', 'Probe')
-    await page.waitForFunction(() => /Probed:/.test(document.body.innerText), { timeout: 15000 })
-    await sleep(300)
-    // Read in place: settingsText() re-navigates, and a remount clears the probe
-    // results (they are screen state — nothing probes on a render).
-    const t = await page.evaluate(() => document.body.innerText)
-    const llm = t.slice(t.indexOf('LLM Services'))
-    if (!/Probed: Unreachable/.test(llm)) return `the dead-port provider did not probe as unreachable: ${llm.slice(0, 500)}`
-    if (!new RegExp(`Probed: ${STUB_LLM_MODELS.length} models`).test(llm)) {
-      return `the stub box did not report its model count: ${llm.slice(0, 500)}`
-    }
-    return null
-  })
-
   await check('settings: a retired provider keeps its history without raising an alarm', async () => {
     if (!/retired/i.test(txt)) return 'the dropped provider is not marked retired'
     const dots = await page.$$('[data-testid="drawer-alert-dot"]')
@@ -2854,6 +2837,67 @@ async function runSettingsServices(token, deviceId) {
     for (const want of ['12 calls', '80% routed here', '3 calls', '20% routed here']) {
       if (!txt.includes(want)) return `missing "${want}" in: ${txt.slice(txt.indexOf('LLM Services'), txt.indexOf('LLM Services') + 400)}`
     }
+    return null
+  })
+
+  // Check is the ONE active path: a tap, never a render. It must tell the two
+  // failure shapes apart — a box with nothing listening vs a box that answered.
+  // It runs LAST for a reason: a deep probe writes real calls into the health
+  // registry, and routed_share is computed across every endpoint, so probing
+  // earlier would move the percentages the check above asserts.
+  await check('settings: Check reports each provider live, reachable and not', async () => {
+    await clickByText(page, e => e.innerText === 'Check', 'Check')
+    await page.waitForFunction(() => /Checked:/.test(document.body.innerText), { timeout: 20000 })
+    await sleep(300)
+    // Read in place: settingsText() re-navigates, and a remount clears the check
+    // results (they are screen state — nothing probes on a render).
+    const t = await page.evaluate(() => document.body.innerText)
+    const llm = t.slice(t.indexOf('LLM Services'))
+    if (!/Checked: Unreachable/.test(llm)) return `the dead-port provider did not check as unreachable: ${llm.slice(0, 500)}`
+    if (!new RegExp(`Checked: ${STUB_LLM_MODELS.length} models`).test(llm)) {
+      return `the stub box did not report its model count: ${llm.slice(0, 500)}`
+    }
+    return null
+  })
+
+  // The reason Check exists. The status dot is the outcome of the LAST REAL CALL
+  // and nothing on a render path can move it, so a provider that failed once
+  // stays red long after it recovered (xayah, 2026-08-30). Drive the full round
+  // trip through the real button: break the box, Check → red; heal it, Check →
+  // green. A shallow probe cannot do either — /models answers throughout.
+  // Just the stub's own row. A fixed-width slice bleeds into the NEXT provider
+  // (localhost:11434, which is always unreachable in the test config) and every
+  // "is it still red?" assertion then reads that row's status instead.
+  const STUB_ROW = () => {
+    const t = document.body.innerText
+    const at = t.indexOf('127.0.0.1:8767')
+    if (at < 0) return ''
+    const next = t.indexOf('localhost:11434', at)
+    return t.slice(at, next < 0 ? at + 200 : next)
+  }
+
+  await check('settings: Check paints a box that answers /models but fails calls', async () => {
+    setStubLLMFailing(true)
+    await clickByText(page, e => e.innerText === 'Check', 'Check')
+    await page.waitForFunction(
+      () => /127\.0\.0\.1:8767[\s\S]{0,80}Unreachable/.test(document.body.innerText),
+      { timeout: 20000 },
+    )
+    const row = await page.evaluate(STUB_ROW)
+    if (!/Unreachable/.test(row)) return `the broken stub did not go red: ${row}`
+    return null
+  })
+
+  await check('settings: Check clears the red dot once the box works again', async () => {
+    setStubLLMFailing(false)
+    await clickByText(page, e => e.innerText === 'Check', 'Check')
+    await page.waitForFunction(
+      () => /127\.0\.0\.1:8767[\s\S]{0,80}Working/.test(document.body.innerText),
+      { timeout: 20000 },
+    )
+    const row = await page.evaluate(STUB_ROW)
+    if (/Unreachable/.test(row)) return `the row stayed red after a successful check: ${row}`
+    if (!/Working/.test(row)) return `the recovered box does not read as working: ${row}`
     return null
   })
 
