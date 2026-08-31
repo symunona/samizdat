@@ -522,7 +522,14 @@ build-android-remote level="patch":
     cd "{{justfile_directory()}}"
     [ -f config/build-node.env ] || { echo "✗ no build node — run 'just setup-build-node <ssh-dest>'"; exit 1; }
     source config/build-node.env
-    ssh -o BatchMode=yes -o ConnectTimeout=5 "$BUILD_NODE_DEST" true 2>/dev/null || {
+    # Three tries at 15s, not one at 5s: a node on weak wifi answers in 2-5s and a
+    # single tight probe declares a perfectly good node dead, sending the build to the
+    # 35-minute local path. Only a node that misses all three is really unreachable.
+    reachable=""
+    for _ in 1 2 3; do
+      ssh -o BatchMode=yes -o ConnectTimeout=15 "$BUILD_NODE_DEST" true 2>/dev/null && { reachable=1; break; }
+    done
+    [ -n "$reachable" ] || {
       echo "✗ build node ${BUILD_NODE_DEST} unreachable — wake it, or 'just build-android-local' (~35 min)"; exit 1; }
     # Source travels as a git push over the ssh path that already works (diff-only, no
     # GitHub key needed on the node) — so the node builds HEAD, and an uncommitted change
