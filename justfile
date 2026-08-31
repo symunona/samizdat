@@ -8,6 +8,13 @@ _dev_port := `if [ -f config.toml ]; then grep -E '^\s*port\s*=' config.toml | g
 _config_flag := if path_exists("config.toml") == "true" { "--config " + justfile_directory() + "/config.toml" } else { "" }
 # Per-instance service name (multi-checkout installs): samizdat-<repo dir name>
 _instance := file_name(justfile_directory())
+# Every `pnpm install` that runs ON A BUILD NODE goes through this. pnpm's default 16
+# parallel fetches saturate a weak uplink until the registry resets the connections —
+# on a node behind poor wifi that turns the ~4GB app install into an ECONNRESET storm
+# that exhausts the retries and fails provisioning outright. Four connections and
+# longer, more patient retries cost a fast node a little wall-clock and make a slow
+# one possible at all.
+_pnpm_install := "npm_config_fetch_retries=5 npm_config_fetch_retry_maxtimeout=120000 npm_config_fetch_timeout=300000 pnpm install --network-concurrency=4"
 
 # List available recipes
 default:
@@ -210,7 +217,7 @@ setup-build-node dest ws="":
     cd "$WS"
     git reset -q --hard build
     echo "→ pnpm install (app, ~4GB — one time)"
-    (cd app && pnpm install --frozen-lockfile)
+    (cd app && {{_pnpm_install}} --frozen-lockfile)
     printf '%s' "$LOCK" > "$GRADLE_HOME/.pnpm-lock.stamp"
     # icongen carries its own node_modules (sharp) — the Expo tree can't install it.
     echo "→ npm install (tools/icongen)"
@@ -553,7 +560,7 @@ build-android-remote level="patch":
     # `git clean` above would delete it every build.
     if [ "$(cat "$GRADLE_HOME/.pnpm-lock.stamp" 2>/dev/null || true)" != "$LOCK" ]; then
       echo "→ pnpm install (lockfile changed)"
-      (cd app && pnpm install --frozen-lockfile)
+      (cd app && {{_pnpm_install}} --frozen-lockfile)
       printf '%s' "$LOCK" > "$GRADLE_HOME/.pnpm-lock.stamp"
     fi
     export GRADLE_USER_HOME="$GRADLE_HOME" ANDROID_HOME="$SDK" JAVA_HOME="$JDK"
