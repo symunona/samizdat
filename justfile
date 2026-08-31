@@ -651,6 +651,18 @@ _apk-gradle:
     # Install the canonical debug keystore AFTER prebuild, overwriting anything it
     # minted: that key is the APK's install-over identity (see _apk-keystore).
     just _apk-keystore
+    # The gradle WRAPPER bootstraps with a 10s read timeout of its own, long before
+    # any gradle.properties is read — and prebuild regenerates this file every build,
+    # so the value has to be re-applied here rather than committed. A ~130MB
+    # distribution cannot hold a 10s read window open on a slow node, so a first build
+    # there dies in the wrapper before gradle exists at all. Harmless on a fast node,
+    # and a no-op once the distribution is cached.
+    _wrapper_props=android/gradle/wrapper/gradle-wrapper.properties
+    if grep -q '^networkTimeout=' "$_wrapper_props"; then
+      sed -i 's/^networkTimeout=.*/networkTimeout=120000/' "$_wrapper_props"
+    else
+      echo 'networkTimeout=120000' >> "$_wrapper_props"
+    fi
     cd android
     # Phase 1 — JS bundle + Hermes bytecode ONLY. Runs Metro (node) while the
     # gradle JVM is idle, so node never coexists with the Kotlin/dex compile.
