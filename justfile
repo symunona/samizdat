@@ -58,7 +58,7 @@ setup-tooling:
     cd tooling && go mod download 2>/dev/null || echo "tooling/ not initialized yet"
 
 [group('setup')]
-[doc('Register + provision a remote Android build node (dest = ssh alias|ip|user@host): JDK17, SDK cmdline-tools, isolated gradle home, deps. Saves config/build-node.env → build-android then builds there')]
+[doc('Register + provision a remote Android build node (dest = ssh alias|ip|user@host): node/pnpm/just, JDK17, SDK cmdline-tools, isolated gradle home, deps. Saves config/build-node.env → build-android then builds there')]
 setup-build-node dest ws="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -69,16 +69,61 @@ setup-build-node dest ws="":
     WS="{{ws}}"
     [ -n "$WS" ] || WS=$(ssh "$DEST" 'echo $HOME/build/sam')
     GRADLE_HOME="$(dirname "$WS")/gradle-sam"
-    # Pin the node's JDK to taskbot's so both hosts compile with one toolchain.
+    # Pin the node's toolchain to taskbot's so both hosts compile with one of each.
     JDK_VER="jdk-17.0.19+10"
+    NODE_VER="v22.22.0"
+    PNPM_VER="10.33.2"
     echo "── provisioning ${DEST} (workspace ${WS}) ──"
-    ssh "$DEST" bash -s -- "$WS" "$GRADLE_HOME" "$JDK_VER" <<'REMOTE'
+    ssh "$DEST" bash -s -- "$WS" "$GRADLE_HOME" "$JDK_VER" "$NODE_VER" "$PNPM_VER" <<'REMOTE'
     set -euo pipefail
-    WS=$1; GRADLE_HOME=$2; JDK_VER=$3
+    WS=$1; GRADLE_HOME=$2; JDK_VER=$3; NODE_VER=$4; PNPM_VER=$5
     export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"   # non-login ssh shell
+
+    # Only the base tools have to come from the distro — they need root, and a box
+    # without them isn't provisionable anyway. Everything this build actually pins
+    # (node, pnpm, just, and the JDK/SDK below) installs under $HOME instead: no sudo,
+    # no apt, so the same recipe provisions any distro and can't disturb the node's
+    # own system toolchain.
     missing=""
-    for t in git node pnpm just unzip rsync curl; do command -v "$t" >/dev/null || missing="$missing $t"; done
-    [ -z "$missing" ] || { echo "✗ build node is missing:$missing"; exit 1; }
+    for t in git curl unzip rsync tar; do command -v "$t" >/dev/null || missing="$missing $t"; done
+    [ -z "$missing" ] || { echo "✗ build node needs these from its package manager:$missing"; exit 1; }
+    mkdir -p "$HOME/.local/bin"
+
+    # An existing node >= 22 is good enough (a distro one is fine); older or absent
+    # gets the official tarball. Symlinks, not a PATH edit — $HOME/.local/bin is
+    # already the PATH every remote block here exports.
+    have=$(node -v 2>/dev/null | sed 's/^v//;s/\..*//' || true)
+    if [ -z "$have" ] || [ "$have" -lt 22 ]; then
+      echo "→ installing node $NODE_VER"
+      curl -fsSL "https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-linux-x64.tar.xz" | tar xJ -C "$HOME/.local"
+      for b in node npm npx corepack; do
+        ln -sfn "$HOME/.local/node-$NODE_VER-linux-x64/bin/$b" "$HOME/.local/bin/$b"
+      done
+      hash -r
+    fi
+
+    if ! command -v pnpm >/dev/null; then
+      echo "→ installing pnpm $PNPM_VER"
+      if command -v corepack >/dev/null; then
+        # corepack ships with node and needs no rc-file edit, so it is the first choice.
+        corepack enable --install-directory "$HOME/.local/bin"
+        COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack prepare "pnpm@$PNPM_VER" --activate
+      else
+        # a distro node can ship without corepack (Debian splits it out)
+        curl -fsSL https://get.pnpm.io/install.sh | \
+          env PNPM_VERSION="$PNPM_VER" PNPM_HOME="$HOME/.local/bin" SHELL=bash sh -
+      fi
+      hash -r
+    fi
+
+    if ! command -v just >/dev/null; then
+      echo "→ installing just"
+      curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to "$HOME/.local/bin"
+      hash -r
+    fi
+    for t in node pnpm just; do
+      command -v "$t" >/dev/null || { echo "✗ $t is still missing after install"; exit 1; }
+    done
 
     # JDK 17 — RN 0.85's gradle plugin needs 17, and auto-provisioning stays OFF
     # because RN pins foojay-resolver 0.5.0, which crashes on Gradle 9.
@@ -118,6 +163,10 @@ setup-build-node dest ws="":
     cores=$(nproc); memgb=$(awk '/MemTotal/{printf "%d", $2/1048576}' /proc/meminfo)
     workers=$(( cores - 2 )); [ "$workers" -ge 1 ] || workers=1; [ "$workers" -le 8 ] || workers=8
     heap=$(( memgb / 4 )); [ "$heap" -ge 2 ] || heap=2; [ "$heap" -le 8 ] || heap=8
+    # Metro's heap is sized here too, and reported back in build-node.env: it runs
+    # *concurrently* with the gradle and kotlin daemons, so a fixed 6GB that suits a
+    # 32GB node puts an 8GB one into swap for the whole bundle task.
+    metro=$(( memgb * 384 )); [ "$metro" -ge 1536 ] || metro=1536; [ "$metro" -le 6144 ] || metro=6144
     cat > "$GRADLE_HOME/gradle.properties" <<EOF
     # Written by 'just setup-build-node' — sized for ${cores} cores / ${memgb}GB.
     org.gradle.java.installations.auto-download=false
@@ -138,9 +187,11 @@ setup-build-node dest ws="":
     # dependence on updateInstead (which balks whenever the node's tree is dirty).
     mkdir -p "$WS/secrets"
     [ -d "$WS/.git" ] || git -C "$WS" init -q -b main
+    echo "  node   : $(command -v node) $(node -v)   pnpm $(pnpm -v)   just $(just --version | cut -d' ' -f2)"
     echo "  jdk    : $JDK"
     echo "  sdk    : $SDK"
-    echo "  gradle : $GRADLE_HOME (${workers} workers, -Xmx${heap}g)"
+    echo "  gradle : $GRADLE_HOME (${workers} workers, -Xmx${heap}g, metro ${metro}m)"
+    echo "BUILD_NODE_METRO_MB=${metro}" > "$GRADLE_HOME/.metro-mb"
     echo "  space  : $(df -h --output=avail "$WS" | tail -1 | tr -d ' ') free at $WS"
     REMOTE
     # The keystore is gitignored, so it can only get there out-of-band. Without it the
@@ -173,6 +224,7 @@ setup-build-node dest ws="":
     BUILD_NODE_GRADLE_HOME=${GRADLE_HOME}
     BUILD_NODE_ANDROID_HOME=$(ssh "$DEST" 'echo ${ANDROID_HOME:-$HOME/Android/Sdk}')
     BUILD_NODE_JDK=$(ssh "$DEST" "echo \$HOME/.jdks/${JDK_VER}")
+    $(ssh "$DEST" "cat ${GRADLE_HOME}/.metro-mb")
     EOF
     echo ""
     echo "✓ build node ${DEST} ready — 'just build-android' now builds there."
@@ -488,9 +540,9 @@ build-android-remote level="patch":
     ssh "$BUILD_NODE_DEST" "mkdir -p ${BUILD_NODE_WS}/secrets"
     rsync -q secrets/debug.keystore "${BUILD_NODE_DEST}:${BUILD_NODE_WS}/secrets/debug.keystore"
     LOCK=$(sha256sum app/pnpm-lock.yaml | cut -d' ' -f1)
-    ssh "$BUILD_NODE_DEST" bash -s -- "$BUILD_NODE_WS" "$BUILD_NODE_GRADLE_HOME" "$BUILD_NODE_ANDROID_HOME" "$BUILD_NODE_JDK" "$LOCK" <<'REMOTE'
+    ssh "$BUILD_NODE_DEST" bash -s -- "$BUILD_NODE_WS" "$BUILD_NODE_GRADLE_HOME" "$BUILD_NODE_ANDROID_HOME" "$BUILD_NODE_JDK" "$LOCK" "${BUILD_NODE_METRO_MB:-6144}" <<'REMOTE'
     set -euo pipefail
-    WS=$1; GRADLE_HOME=$2; SDK=$3; JDK=$4; LOCK=$5
+    WS=$1; GRADLE_HOME=$2; SDK=$3; JDK=$4; LOCK=$5; METRO_MB=$6
     export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"   # non-login ssh shell
     cd "$WS"
     git reset -q --hard build
@@ -505,7 +557,9 @@ build-android-remote level="patch":
       printf '%s' "$LOCK" > "$GRADLE_HOME/.pnpm-lock.stamp"
     fi
     export GRADLE_USER_HOME="$GRADLE_HOME" ANDROID_HOME="$SDK" JAVA_HOME="$JDK"
-    export NODE_OPTIONS=--max-old-space-size=6144   # the node has RAM; let Metro use it
+    # Sized from the node's own RAM by setup-build-node, not fixed here — Metro runs
+    # alongside the gradle + kotlin daemons, so one number cannot fit every node.
+    export NODE_OPTIONS=--max-old-space-size=${METRO_MB}
     just _apk-gradle
     REMOTE
     just _apk-collect "${BUILD_NODE_DEST}:${BUILD_NODE_WS}/app/android/app/build/outputs/apk/release/app-release.apk"
