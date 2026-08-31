@@ -185,6 +185,12 @@ setup-build-node dest ws="":
     org.gradle.jvmargs=-Xmx${heap}g -XX:MaxMetaspaceSize=2g
     kotlin.compiler.execution.strategy=daemon
     kotlin.incremental=true
+    # Gradle's dependency downloader defaults to a 30s socket timeout. Single artifacts
+    # here run to tens of MB (kotlin-compiler-embeddable is ~60MB), which a node on weak
+    # wifi cannot pull inside that window — it fails the whole build with a bare
+    # "Read timed out", naming no network cause. Costs a healthy node nothing.
+    systemProp.org.gradle.internal.http.connectionTimeout=120000
+    systemProp.org.gradle.internal.http.socketTimeout=300000
     # The node is somebody's desktop — don't sit on ${heap}GB for gradle's default 3h.
     org.gradle.daemon.idletimeout=1800000
     EOF
