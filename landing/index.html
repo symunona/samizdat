@@ -595,21 +595,17 @@
         <section id="hero">
             <div class="container">
                 <div class="hero-eyebrow">
-                    Self-hostable · Open source · News feed
+                    Self-hosted · Open source · Offline-first · Lightweight
                 </div>
                 <h1 class="hero-headline">
                     Your sources.<br />Your pipeline.<br />Your
                     output.
                 </h1>
                 <p class="hero-sub">
-                    Turn newsletters, news sources into
-                    multi-level short form text.
-                    
-                    Annote track, refer to articles.
-
-                    Publish your own digest with citations. 
-                
-                    Say no to copy paste, third parties and enshitification.
+                    Samizdat turns newsletters and feeds into short,
+                    readable highlihts. Annotate them, track what you cite, and
+                    publish your own digest with the references already
+                    attached.
                 </p>
                 <div class="hero-ctas">
                     <a
@@ -678,13 +674,6 @@
                         </p>
                     </div>
                 </div>
-
-                <p>
-                    Samizdat collapses the read → curate → publish loop into a
-                    single pipeline that runs on hardware you control, stores
-                    everything as Markdown you own, and hands you a citable,
-                    publish-ready digest with one command.
-                </p>
             </div>
         </section>
 
@@ -706,42 +695,44 @@
                             </p>
                         </div>
                     </div>
+                    
                     <div class="step">
                         <div class="step-num">02</div>
                         <div class="step-body">
-                            <h4>Scrape once, deduplicate forever</h4>
+                            <h4>Break down with your locally hosted LLM</h4>
                             <p>
-                                Each canonical URL is fetched exactly once, not
-                                once per subscriber. The result is stored as
-                                Markdown in your vault. Scraping is expensive and
-                                ban-prone; Samizdat respects that.
+                                Your editable <code>Pipeline</code> runs over
+                                each <code>Document</code> and emits bite-sized
+                                <code>Highlights</code> — the key facts, quotes,
+                                and ideas, tagged and sorted. Customize to your needs.
                             </p>
                         </div>
                     </div>
                     <div class="step">
                         <div class="step-num">03</div>
                         <div class="step-body">
-                            <h4>Break down with your AI rules</h4>
+                            <h4>Read and curate on your phone</h4>
                             <p>
-                                Your editable <code>Pipeline</code> runs over
-                                each <code>Document</code> and emits bite-sized
-                                <code>Highlights</code> — the key facts, quotes,
-                                and ideas, tagged and sorted. The breakdown is
-                                personal; the document is shared.
+                                The mobile app syncs highlights offline-first.
+                                Swipe to curate. Every linked URL is tracked and
+                                openable. One tap to mark, annotate, or skip.
+                                Read articles, ad-free, watch podcasts transcribed
+                                annote time tagged.
                             </p>
                         </div>
                     </div>
                     <div class="step">
                         <div class="step-num">04</div>
                         <div class="step-body">
-                            <h4>Read and curate on your phone</h4>
+                            <h4>Sync to your markdown vault</h4>
                             <p>
-                                The mobile app syncs highlights offline-first.
-                                Swipe to curate. Every linked URL is tracked and
-                                openable. One tap to mark, annotate, or skip.
+                                Edit, refer, work in your favorite PKM tools:
+                                Preserve articles 1:1, refer them, link them, join them, quote them
+                                with your favorite IDE for your thoughts.
                             </p>
                         </div>
                     </div>
+                    
                     <div class="step">
                         <div class="step-num">05</div>
                         <div class="step-body">
@@ -817,61 +808,38 @@
         <section id="principles">
             <div class="container">
                 <h3>Design rules</h3>
-                <h2>Non-negotiables.</h2>
+                <h2>How it's built.</h2>
 
                 <div class="principles">
                     <div class="principle">
                         <div class="principle-icon">📄</div>
                         <p>
-                            <strong
-                                >Markdown vault is the source of truth.</strong
-                            >
-                            SQLite is a rebuildable index.
-                            <code>sam reindex</code> reconstructs the DB from
-                            your files at any time.
-                        </p>
-                    </div>
-                    <div class="principle">
-                        <div class="principle-icon">🔒</div>
-                        <p>
-                            <strong>Nothing lives only in a hosted DB.</strong>
-                            Everything has a Markdown path, and backups are yours
-                            to keep. One command snapshots it all:
-                            <code>sam archive current</code>.
+                            <strong>Your Markdown vault is the truth.</strong>
+                            SQLite is only an index;
+                            <code>sam reindex</code> rebuilds it from your files.
+                            Nothing exists solely in a database.
                         </p>
                     </div>
                     <div class="principle">
                         <div class="principle-icon">⚡</div>
                         <p>
-                            <strong>Scrape one URL once.</strong> Deduplication
-                            by canonical URL happens before any network request.
-                            Scraping is expensive; we respect that.
-                        </p>
-                    </div>
-                    <div class="principle">
-                        <div class="principle-icon">🧱</div>
-                        <p>
-                            <strong>Phase split is sacred.</strong>
-                            <code>Scraper → Document</code> is opinion-free and
-                            community-maintainable.
-                            <code>Pipeline → Highlight</code> is personal. Never
-                            mix them.
+                            <strong>Scrape one URL once.</strong> Dedup by
+                            canonical URL happens before any network request.
                         </p>
                     </div>
                     <div class="principle">
                         <div class="principle-icon">🏠</div>
                         <p>
                             <strong>Paywalled content stays local.</strong>
-                            Credentialed content never goes to a cloud LLM by
-                            default — it's routed to your local AI provider.
+                            Pick your own locally hosted LLM.
                         </p>
                     </div>
                     <div class="principle">
                         <div class="principle-icon">📦</div>
                         <p>
-                            <strong>One binary, no Docker, no nginx.</strong>
-                            <code>scp</code> it, run it. TLS is in-binary via
-                            CertMagic. The happy path has no moving parts.
+                            <strong>One binary.</strong> No Docker, no nginx, no
+                            Redis. <code>scp</code> it and run it; TLS is
+                            in-binary via CertMagic.
                         </p>
                     </div>
                 </div>
@@ -883,12 +851,12 @@
             <div class="container">
                 <h3>Philosophy</h3>
                 <h2>
-                    Anti-slop.<br />Anti-lock-in.<br />No-copy-paste.
+                    Anti-slop.<br />Anti-lock-in.<br /> Post-copy-paste
                 </h2>
 
                 <p>
-                    <em>Samizdat</em> — self-published, hand-passed, traceable
-                    writing. Underground, anti-corporate, self-rolled.
+                    <em>Samizdat</em> - self-published, hand-curated, traceable
+                    writing. Underground, self-rolled.
                 </p>
 
                 <blockquote>
@@ -899,17 +867,11 @@
                 </blockquote>
 
                 <p>
-                    Focus on what YOU care about, what you consume. The
-                    algorithm keeps you scrolling; gain control of it.
+                    No engagement metric. No recommendation engine. No "you
+                    might also like." Samizdat does what you configure it to do,
+                    and the configuration is a text file you own.
+                    The product are markdown files you own.
                 </p>
-
-                <p>
-                    Samizdat has no engagement metric. No recommendation engine.
-                    No "you might also like." It does exactly what you configure
-                    it to do — and the configuration is a text file you own.
-                </p>
-
-                <p>OSS-first. Self-hosted, and yours to fork.</p>
             </div>
         </section>
 
@@ -919,8 +881,9 @@
                 <div class="cta-block">
                     <h2>Start in two commands.</h2>
                     <p>
-                        Single static binary. No Docker, no database setup, no
-                        accounts, bring your own LLM.
+                        No accounts, no database setup. 
+                        Bring your own LLM, or use provider.
+                        Ollama & cloud friendly.
                     </p>
 
                     <div class="cta-shell">
