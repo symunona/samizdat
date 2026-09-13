@@ -167,6 +167,14 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	bodyBytes := []byte(htmlStr)
 	logScraper.Printf("fetched %d bytes HTML from %s", len(bodyBytes), canonical)
 
+	// Drop invisible chrome (consent dialogs, modals, templates) once, before any
+	// extractor runs — see html_noise.go. A CMP banner lives only in the rendered
+	// DOM, which is what every step below reads.
+	if stripped := stripInvisible(bodyBytes); len(stripped) != len(bodyBytes) {
+		logScraper.Printf("invisible-chrome strip: %d\u2192%d bytes", len(bodyBytes), len(stripped))
+		bodyBytes = stripped
+	}
+
 	// Optional per-domain prune: keep only the article-content node so trafilatura
 	// never swallows a trailing "recommended articles" block into the Document body.
 	if cfg, ok := reg.LookupByURL(canonical); ok && cfg.ArticleSelector != "" {
@@ -490,10 +498,7 @@ func extractLeadLists(rawHTML []byte, extractedMD string) string {
 	walk = func(n *html.Node, inExcluded bool) {
 		if n.Type == html.ElementNode {
 			tag := n.Data
-			// Skip structural noise zones entirely.
-			if tag == "nav" || tag == "header" || tag == "footer" ||
-				tag == "aside" || tag == "script" || tag == "style" ||
-				tag == "noscript" || tag == "form" {
+			if isRegionSkip(n) {
 				return
 			}
 			if tag == "ul" || tag == "ol" {
@@ -556,9 +561,15 @@ func normalizeForDedup(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
+// maxListItemRunes bounds a recoverable list item. A lead list is a handful of
+// sentences; anything longer is a prose block or a data table that happened to be
+// marked up as <li> (a cookie declaration runs 600–3000 chars per row), and
+// prepending it puts the tail of the page in front of the article.
+const maxListItemRunes = 400
+
 // listToMarkdown converts a <ul>/<ol> node to markdown if it looks like
-// content (≥2 items, each item ≥20 chars). Links inside items are converted
-// to [text](url) markdown rather than being dropped.
+// content (≥2 items, each item 20–maxListItemRunes chars). Links inside items are
+// converted to [text](url) markdown rather than being dropped.
 func listToMarkdown(n *html.Node, ordered bool) string {
 	var items []string
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
@@ -568,6 +579,9 @@ func listToMarkdown(n *html.Node, ordered bool) string {
 		text := strings.TrimSpace(nodeToMarkdown(c))
 		if len(text) < 20 {
 			return "" // too short = icon/badge label or nav item
+		}
+		if len([]rune(text)) > maxListItemRunes {
+			return "" // too long = prose/table, not a list the reader lost
 		}
 		items = append(items, text)
 	}
@@ -677,12 +691,6 @@ func pruneToArticle(rawHTML []byte, selector string) []byte {
 	return buf.Bytes()
 }
 
-// figureSkipZones are regions whose figures are boilerplate, never article content.
-var figureSkipZones = map[string]struct{}{
-	"nav": {}, "header": {}, "footer": {}, "aside": {},
-	"script": {}, "style": {}, "noscript": {},
-}
-
 // figImg is a content image lifted from a <figure>.
 type figImg struct{ src, alt string }
 
@@ -704,7 +712,7 @@ func unwrapFigureImages(rawHTML []byte, base *url.URL) []byte {
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
 		if n.Type == html.ElementNode {
-			if _, skip := figureSkipZones[n.Data]; skip {
+			if isRegionSkip(n) {
 				return
 			}
 			if n.Data == "figure" {
