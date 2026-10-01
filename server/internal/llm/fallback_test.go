@@ -87,3 +87,25 @@ func TestFallbackAllFail(t *testing.T) {
 		t.Fatalf("fallback should have been tried once, ran %d times", backup.callCount)
 	}
 }
+
+func TestAttemptHookNamesEachEndpointTried(t *testing.T) {
+	primary := &stubClient{name: "ollama", err: transportErr(errors.New("connection refused"))}
+	backup := &stubClient{name: "anthropic"}
+	c := &fallbackClient{entries: []entry{
+		{client: primary, id: "xayah:11434", model: ""},
+		{client: backup, id: "anthropic", model: "claude-haiku-4-5-20251001"},
+	}}
+
+	var got []Attempt
+	ctx := WithAttemptHook(context.Background(), func(a Attempt) { got = append(got, a) })
+	if _, _, err := c.Complete(ctx, Params{Model: "qwen3"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := []Attempt{
+		{Provider: "xayah:11434", Model: "qwen3"},
+		{Provider: "anthropic", Model: "claude-haiku-4-5-20251001", Fallback: true},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("attempts = %+v, want %+v", got, want)
+	}
+}

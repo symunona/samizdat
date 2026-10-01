@@ -2,12 +2,14 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/symunona/samizdat/server/internal/progress"
 	"github.com/symunona/samizdat/server/internal/proxypool"
 	"github.com/symunona/samizdat/server/internal/ytdlp"
 )
@@ -186,5 +188,54 @@ func TestClassifyBotBlockNamesTriedProxies(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message %q missing %q", msg, want)
 		}
+	}
+}
+
+// A download reports where it is while it runs, and the progress lines it
+// printed never reach the classifier — the error is still the last line.
+func TestDownloadReportsProgress(t *testing.T) {
+	script := `#!/bin/sh
+echo '[download] Destination: /m/a.en.vtt'
+echo '[download] 100% of 40.00KiB in 00:00'
+echo '[download] Destination: /m/a.webm'
+printf '[download]  12.5%% of 150.00MiB at 2.00MiB/s ETA 01:05\n'
+printf '[download]  42.5%% of 150.00MiB at 2.00MiB/s ETA 00:40\n'
+echo '[ExtractAudio] Destination: /m/a.m4a'
+echo 'ERROR: Postprocessing: ffmpeg not found'
+exit 1
+`
+	path := filepath.Join(t.TempDir(), "yt-dlp")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var states []progress.State
+	rep := progress.New("", func(raw string) {
+		var s progress.State
+		if err := json.Unmarshal([]byte(raw), &s); err != nil {
+			t.Errorf("progress %q: %v", raw, err)
+		}
+		states = append(states, s)
+	})
+	yt := ytdlpEnv{
+		tool: ytdlp.New(ytdlp.Options{Path: path}),
+		pool: proxypool.New([]string{"socks5h://pa:1080"}, nil),
+		runs: ytdlp.NewRunLog(nil),
+	}
+	ctx := progress.With(context.Background(), rep)
+	_, err := (ytdlpRun{what: "audio[en]", url: "https://www.youtube.com/watch?v=abc"}).exec(ctx, yt)
+	if err == nil || !strings.HasSuffix(err.Error(), "ERROR: Postprocessing: ffmpeg not found") {
+		t.Fatalf("err = %v, want the ffmpeg line (progress lines must not be the last line)", err)
+	}
+
+	first, last := states[0], states[len(states)-1]
+	if first.Phase != progress.PhaseDownload || first.Media != "audio" || first.Proxy != "pa" {
+		t.Fatalf("first state = %+v, want download/audio via pa", first)
+	}
+	if last.Phase != progress.PhaseConvert || last.Percent != 0 {
+		t.Fatalf("last state = %+v, want convert with the percent cleared", last)
+	}
+	if len(states) != 2 {
+		t.Fatalf("%d writes, want 2: percent lines inside the throttle window must not each write", len(states))
 	}
 }

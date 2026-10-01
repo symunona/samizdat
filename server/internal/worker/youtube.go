@@ -17,6 +17,7 @@ import (
 
 	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/langpref"
+	"github.com/symunona/samizdat/server/internal/progress"
 	"github.com/symunona/samizdat/server/internal/proxypool"
 	"github.com/symunona/samizdat/server/internal/store"
 	"github.com/symunona/samizdat/server/internal/transcript"
@@ -187,6 +188,12 @@ func (r ytdlpRun) walk(ctx context.Context, yt ytdlpEnv) ([]byte, string, []stri
 			label = proxypool.Label(px)
 		}
 		logScraper.Printf("yt-dlp %s %s (proxy=%s)", r.what, r.url, label)
+		rep := progress.From(ctx)
+		failed := append([]string(nil), tried...)
+		rep.Update(func(s *progress.State) {
+			s.Phase, s.Media = r.phase()
+			s.Proxy, s.Tried = label, failed
+		})
 		cmd := yt.tool.Command(ctx, args...)
 		var out []byte
 		var err error
@@ -196,7 +203,12 @@ func (r ytdlpRun) walk(ctx context.Context, yt ytdlpEnv) ([]byte, string, []stri
 				out = ee.Stderr // stdout held the JSON; classify against stderr
 			}
 		} else {
-			out, err = cmd.CombinedOutput()
+			// Same bytes CombinedOutput would return, minus the progress lines,
+			// which go to the reporter as they are printed.
+			w := &ytdlpOutput{rep: rep}
+			cmd.Stdout, cmd.Stderr = w, w
+			err = cmd.Run()
+			out = w.bytes()
 		}
 		if err == nil {
 			return out, label, tried, nil
@@ -231,6 +243,16 @@ func (r ytdlpRun) walk(ctx context.Context, yt ytdlpEnv) ([]byte, string, []stri
 	return lastOut, label, tried, lastErr
 }
 
+// phase maps the run label to what the job reports: the probe is its own phase,
+// everything else downloads the media its label names ("audio[en,hu]" → audio).
+func (r ytdlpRun) phase() (phase, media string) {
+	if r.what == "probe" {
+		return progress.PhaseProbe, ""
+	}
+	media, _, _ = strings.Cut(r.what, "[")
+	return progress.PhaseDownload, media
+}
+
 // handleYouTube ingests a YouTube URL into a video Document: audio-only download
 // via yt-dlp + transcript (manual subs → auto-subs → none). Errors from the
 // datacenter-IP bot wall are translated into an actionable message (docs link).
@@ -251,6 +273,10 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 	if err != nil {
 		return "", err
 	}
+	// Known now, minutes before the Document exists: how long a download to expect.
+	progress.From(ctx).Update(func(s *progress.State) {
+		s.DurationMs, s.Title = int64(info.Duration*1000), strings.TrimSpace(info.Title)
+	})
 	prefsRaw, _ := q.GetSetting(ctx, langpref.SettingKey)
 	prefs := langpref.Parse(prefsRaw)
 	wanted := prefs.Wanted(info.Language) // wanted[0] == primary (default/pipeline) track
@@ -268,7 +294,7 @@ func handleYouTube(ctx context.Context, q *store.Queries, job store.Job, canonic
 		"--write-subs", "--write-auto-subs",
 		"--sub-langs", buildSubLangs(wanted),
 		"--sub-format", "vtt", "--convert-subs", "vtt",
-		"--no-playlist", "--no-progress",
+		"--no-playlist", "--newline",
 		"-o", base + ".%(ext)s",
 	}
 
@@ -457,7 +483,7 @@ func fetchDocVideo(ctx context.Context, q *store.Queries, canonical, videoID, ca
 	args := []string{
 		"-f", "best[ext=mp4][vcodec!=none][acodec!=none][height<=720]/bv*[height<=480]+ba/best[height<=480]",
 		"--merge-output-format", "mp4",
-		"--no-playlist", "--no-progress",
+		"--no-playlist", "--newline",
 		"-o", base + ".%(ext)s",
 	}
 

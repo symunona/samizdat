@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at     TEXT    NOT NULL,
     rev            INTEGER NOT NULL DEFAULT 0,
     deleted_at     TEXT,
-    parent_job_id  TEXT
+    parent_job_id  TEXT,
+    -- Live state of a running job as JSON (internal/progress.State); '' = none.
+    progress       TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS jobs_status_run_after ON jobs(status, run_after);

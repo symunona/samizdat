@@ -109,7 +109,7 @@ func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string, include
 			SELECT j.* FROM jobs j JOIN desc d ON j.parent_job_id = d.id WHERE 1=1 ` + delFilter + `
 		)
 		SELECT id, kind, payload, status, attempts, run_after, last_error, result,
-		       duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id
+		       duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress
 		FROM desc ORDER BY updated_at DESC
 	`
 	rows, err := h.db.QueryContext(r.Context(), qry, string(idsJSON))
@@ -123,7 +123,7 @@ func (h *jobsHandler) listDescendants(r *http.Request, rootIDs []string, include
 		if err := rows.Scan(
 			&j.ID, &j.Kind, &j.Payload, &j.Status, &j.Attempts, &j.RunAfter,
 			&j.LastError, &j.Result, &j.DurationMs, &j.CreatedAt, &j.UpdatedAt, &j.Rev,
-			&j.DeletedAt, &j.ParentJobID,
+			&j.DeletedAt, &j.ParentJobID, &j.Progress,
 		); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}

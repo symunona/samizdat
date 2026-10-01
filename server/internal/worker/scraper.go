@@ -22,6 +22,7 @@ import (
 	"github.com/symunona/samizdat/server/internal/credstore"
 	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/pipeline"
+	"github.com/symunona/samizdat/server/internal/progress"
 	"github.com/symunona/samizdat/server/internal/store"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
@@ -120,6 +121,8 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 	if vid, ok := youtubeID(canonical); ok {
 		return handleYouTube(ctx, q, job, canonical, vid, cacheDir, ytdlp, p.Manual)
 	}
+
+	progress.From(ctx).Update(func(s *progress.State) { s.Phase = progress.PhaseFetch })
 
 	// PDFs take the plain-HTTP path → pdf Document. Chromium answers a PDF
 	// navigation with a download, not a page, so the browser can never fetch one.
@@ -328,12 +331,16 @@ func finishDocument(ctx context.Context, q *store.Queries, job store.Job, doc st
 
 	// Hold pipeline jobs if the scrape was from a manual poll — the user controls
 	// when pipeline jobs run in that case.
-	triggerPipelines(ctx, q, doc, now, &parentID, manual)
+	triggerPipelines(ctx, q, doc, now, &parentID, job.CreatedAt, manual)
 }
 
 // triggerPipelines checks all enabled on_new_document pipelines and enqueues runs for matches.
 // When hold is true the jobs are inserted as paused so the user can review before resuming.
-func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document, now string, parentJobID *string, hold bool) {
+//
+// addedAt is when the resource entered the queue (the scrape job's created_at).
+// It rides the payload so the app can show how long a Document has been in the
+// works without walking the job tree.
+func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document, now string, parentJobID *string, addedAt string, hold bool) {
 	pipelines, err := q.ListEnabledPipelines(ctx)
 	if err != nil {
 		logScraper.Errorf("pipeline trigger: list pipelines: %v", err)
@@ -364,6 +371,7 @@ func triggerPipelines(ctx context.Context, q *store.Queries, doc store.Document,
 			"document_id":    doc.ID,
 			"pipeline_name":  pl.Name,
 			"document_title": doc.Title,
+			"added_at":       addedAt,
 		})
 		jobID := uuid.NewString()
 		if hold {

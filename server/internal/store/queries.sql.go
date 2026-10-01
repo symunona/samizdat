@@ -71,7 +71,7 @@ WHERE id = (
     ORDER BY j2.created_at
     LIMIT 1
 )
-RETURNING id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id
+RETURNING id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress
 `
 
 type ClaimNextJobParams struct {
@@ -97,6 +97,7 @@ func (q *Queries) ClaimNextJob(ctx context.Context, arg ClaimNextJobParams) (Job
 		&i.Rev,
 		&i.DeletedAt,
 		&i.ParentJobID,
+		&i.Progress,
 	)
 	return i, err
 }
@@ -626,7 +627,7 @@ func (q *Queries) GetFeedItem(ctx context.Context, id string) (FeedItem, error) 
 }
 
 const getJob = `-- name: GetJob :one
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE id = ? AND deleted_at IS NULL LIMIT 1
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
 
 func (q *Queries) GetJob(ctx context.Context, id string) (Job, error) {
@@ -647,6 +648,7 @@ func (q *Queries) GetJob(ctx context.Context, id string) (Job, error) {
 		&i.Rev,
 		&i.DeletedAt,
 		&i.ParentJobID,
+		&i.Progress,
 	)
 	return i, err
 }
@@ -792,7 +794,7 @@ func (q *Queries) GetLatestDoneRunForDoc(ctx context.Context, arg GetLatestDoneR
 }
 
 const getLatestScrapeJobForURL = `-- name: GetLatestScrapeJobForURL :one
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE kind = 'scrape_url' AND json_extract(payload, '$.url') = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE kind = 'scrape_url' AND json_extract(payload, '$.url') = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1
 `
 
 // Latest non-deleted scrape_url job for a URL (any status): drives idempotent
@@ -815,6 +817,7 @@ func (q *Queries) GetLatestScrapeJobForURL(ctx context.Context, payload string) 
 		&i.Rev,
 		&i.DeletedAt,
 		&i.ParentJobID,
+		&i.Progress,
 	)
 	return i, err
 }
@@ -1408,9 +1411,9 @@ func (q *Queries) InsertHighlightTag(ctx context.Context, arg InsertHighlightTag
 }
 
 const insertJob = `-- name: InsertJob :one
-INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, parent_job_id)
-VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, 0, ?)
-RETURNING id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id
+INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, parent_job_id, progress)
+VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, 0, ?, ?)
+RETURNING id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress
 `
 
 type InsertJobParams struct {
@@ -1421,6 +1424,7 @@ type InsertJobParams struct {
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
 	ParentJobID *string `json:"parent_job_id"`
+	Progress    string  `json:"progress"`
 }
 
 func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, error) {
@@ -1432,6 +1436,7 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, erro
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.ParentJobID,
+		arg.Progress,
 	)
 	var i Job
 	err := row.Scan(
@@ -1449,6 +1454,7 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, erro
 		&i.Rev,
 		&i.DeletedAt,
 		&i.ParentJobID,
+		&i.Progress,
 	)
 	return i, err
 }
@@ -1456,7 +1462,7 @@ func (q *Queries) InsertJob(ctx context.Context, arg InsertJobParams) (Job, erro
 const insertJobPaused = `-- name: InsertJobPaused :one
 INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, parent_job_id)
 VALUES (?, ?, ?, 'paused', 0, ?, ?, ?, 0, ?)
-RETURNING id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id
+RETURNING id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress
 `
 
 type InsertJobPausedParams struct {
@@ -1495,6 +1501,7 @@ func (q *Queries) InsertJobPaused(ctx context.Context, arg InsertJobPausedParams
 		&i.Rev,
 		&i.DeletedAt,
 		&i.ParentJobID,
+		&i.Progress,
 	)
 	return i, err
 }
@@ -2803,7 +2810,7 @@ func (q *Queries) ListHighlightsSince(ctx context.Context, updatedAt string) ([]
 }
 
 const listJobs = `-- name: ListJobs :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
 `
 
 func (q *Queries) ListJobs(ctx context.Context) ([]Job, error) {
@@ -2830,6 +2837,7 @@ func (q *Queries) ListJobs(ctx context.Context) ([]Job, error) {
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -2845,7 +2853,7 @@ func (q *Queries) ListJobs(ctx context.Context) ([]Job, error) {
 }
 
 const listJobsByKind = `-- name: ListJobsByKind :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
 `
 
 func (q *Queries) ListJobsByKind(ctx context.Context, kind string) ([]Job, error) {
@@ -2872,6 +2880,7 @@ func (q *Queries) ListJobsByKind(ctx context.Context, kind string) ([]Job, error
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -2887,7 +2896,7 @@ func (q *Queries) ListJobsByKind(ctx context.Context, kind string) ([]Job, error
 }
 
 const listJobsByKindPage = `-- name: ListJobsByKindPage :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
 
 type ListJobsByKindPageParams struct {
@@ -2920,6 +2929,7 @@ func (q *Queries) ListJobsByKindPage(ctx context.Context, arg ListJobsByKindPage
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -2935,7 +2945,7 @@ func (q *Queries) ListJobsByKindPage(ctx context.Context, arg ListJobsByKindPage
 }
 
 const listJobsByPipelineId = `-- name: ListJobsByPipelineId :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE json_extract(payload, '$.pipeline_id') = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
 
 type ListJobsByPipelineIdParams struct {
@@ -2968,6 +2978,7 @@ func (q *Queries) ListJobsByPipelineId(ctx context.Context, arg ListJobsByPipeli
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -2983,7 +2994,7 @@ func (q *Queries) ListJobsByPipelineId(ctx context.Context, arg ListJobsByPipeli
 }
 
 const listJobsByStatus = `-- name: ListJobsByStatus :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
 `
 
 func (q *Queries) ListJobsByStatus(ctx context.Context, status string) ([]Job, error) {
@@ -3010,6 +3021,7 @@ func (q *Queries) ListJobsByStatus(ctx context.Context, status string) ([]Job, e
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -3025,7 +3037,7 @@ func (q *Queries) ListJobsByStatus(ctx context.Context, status string) ([]Job, e
 }
 
 const listJobsByStatusAndKind = `-- name: ListJobsByStatusAndKind :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100
 `
 
 type ListJobsByStatusAndKindParams struct {
@@ -3057,6 +3069,7 @@ func (q *Queries) ListJobsByStatusAndKind(ctx context.Context, arg ListJobsBySta
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -3072,7 +3085,7 @@ func (q *Queries) ListJobsByStatusAndKind(ctx context.Context, arg ListJobsBySta
 }
 
 const listJobsByStatusAndKindPage = `-- name: ListJobsByStatusAndKindPage :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
 
 type ListJobsByStatusAndKindPageParams struct {
@@ -3111,6 +3124,7 @@ func (q *Queries) ListJobsByStatusAndKindPage(ctx context.Context, arg ListJobsB
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -3126,7 +3140,7 @@ func (q *Queries) ListJobsByStatusAndKindPage(ctx context.Context, arg ListJobsB
 }
 
 const listJobsByStatusPage = `-- name: ListJobsByStatusPage :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
 
 type ListJobsByStatusPageParams struct {
@@ -3159,6 +3173,7 @@ func (q *Queries) ListJobsByStatusPage(ctx context.Context, arg ListJobsByStatus
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -3175,7 +3190,7 @@ func (q *Queries) ListJobsByStatusPage(ctx context.Context, arg ListJobsByStatus
 
 const listJobsPage = `-- name: ListJobsPage :many
 
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
 
 type ListJobsPageParams struct {
@@ -3208,6 +3223,7 @@ func (q *Queries) ListJobsPage(ctx context.Context, arg ListJobsPageParams) ([]J
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -3439,7 +3455,7 @@ func (q *Queries) ListRecentTopicHighlightsByFeed(ctx context.Context, arg ListR
 }
 
 const listRootJobsByKindPage = `-- name: ListRootJobsByKindPage :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE parent_job_id IS NULL AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE parent_job_id IS NULL AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
 
 type ListRootJobsByKindPageParams struct {
@@ -3472,6 +3488,7 @@ func (q *Queries) ListRootJobsByKindPage(ctx context.Context, arg ListRootJobsBy
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -3487,7 +3504,7 @@ func (q *Queries) ListRootJobsByKindPage(ctx context.Context, arg ListRootJobsBy
 }
 
 const listRootJobsByStatusAndKindPage = `-- name: ListRootJobsByStatusAndKindPage :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE parent_job_id IS NULL AND status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE parent_job_id IS NULL AND status = ? AND kind = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
 
 type ListRootJobsByStatusAndKindPageParams struct {
@@ -3526,6 +3543,7 @@ func (q *Queries) ListRootJobsByStatusAndKindPage(ctx context.Context, arg ListR
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -3541,7 +3559,7 @@ func (q *Queries) ListRootJobsByStatusAndKindPage(ctx context.Context, arg ListR
 }
 
 const listRootJobsByStatusPage = `-- name: ListRootJobsByStatusPage :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE parent_job_id IS NULL AND status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE parent_job_id IS NULL AND status = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
 
 type ListRootJobsByStatusPageParams struct {
@@ -3574,6 +3592,7 @@ func (q *Queries) ListRootJobsByStatusPage(ctx context.Context, arg ListRootJobs
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -3590,7 +3609,7 @@ func (q *Queries) ListRootJobsByStatusPage(ctx context.Context, arg ListRootJobs
 
 const listRootJobsPage = `-- name: ListRootJobsPage :many
 
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE parent_job_id IS NULL AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE parent_job_id IS NULL AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
 
 type ListRootJobsPageParams struct {
@@ -3623,6 +3642,7 @@ func (q *Queries) ListRootJobsPage(ctx context.Context, arg ListRootJobsPagePara
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -3638,7 +3658,7 @@ func (q *Queries) ListRootJobsPage(ctx context.Context, arg ListRootJobsPagePara
 }
 
 const listRootJobsPageInclDeleted = `-- name: ListRootJobsPageInclDeleted :many
-SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id FROM jobs WHERE parent_job_id IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs WHERE parent_job_id IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?
 `
 
 type ListRootJobsPageInclDeletedParams struct {
@@ -3671,6 +3691,7 @@ func (q *Queries) ListRootJobsPageInclDeleted(ctx context.Context, arg ListRootJ
 			&i.Rev,
 			&i.DeletedAt,
 			&i.ParentJobID,
+			&i.Progress,
 		); err != nil {
 			return nil, err
 		}
@@ -4465,6 +4486,23 @@ type UpdateHighlightPinnedParams struct {
 
 func (q *Queries) UpdateHighlightPinned(ctx context.Context, arg UpdateHighlightPinnedParams) error {
 	_, err := q.db.ExecContext(ctx, updateHighlightPinned, arg.Pinned, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const updateJobProgress = `-- name: UpdateJobProgress :exec
+UPDATE jobs SET progress = ?, updated_at = ? WHERE id = ?
+`
+
+type UpdateJobProgressParams struct {
+	Progress  string `json:"progress"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+// Bumping updated_at is deliberate: it is the heartbeat that keeps ResetStuckJobs
+// off a job that is slow but alive (a long download reports for minutes).
+func (q *Queries) UpdateJobProgress(ctx context.Context, arg UpdateJobProgressParams) error {
+	_, err := q.db.ExecContext(ctx, updateJobProgress, arg.Progress, arg.UpdatedAt, arg.ID)
 	return err
 }
 

@@ -55,9 +55,14 @@ INSERT INTO server_settings (key, value) VALUES (?, ?)
 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 
 -- name: InsertJob :one
-INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, parent_job_id)
-VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, 0, ?)
+INSERT INTO jobs (id, kind, payload, status, attempts, run_after, created_at, updated_at, rev, parent_job_id, progress)
+VALUES (?, ?, ?, 'queued', 0, ?, ?, ?, 0, ?, ?)
 RETURNING *;
+
+-- name: UpdateJobProgress :exec
+-- Bumping updated_at is deliberate: it is the heartbeat that keeps ResetStuckJobs
+-- off a job that is slow but alive (a long download reports for minutes).
+UPDATE jobs SET progress = ?, updated_at = ? WHERE id = ?;
 
 -- name: ClaimNextJob :one
 UPDATE jobs

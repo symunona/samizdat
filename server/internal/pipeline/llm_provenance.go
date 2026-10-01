@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/symunona/samizdat/server/internal/llm"
+	"github.com/symunona/samizdat/server/internal/progress"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -85,6 +86,16 @@ func llmCall(ctx context.Context, q *store.Queries, run store.PipelineRun,
 		Provider: c.Provider,
 		Params:   llm.Params{Model: c.Model, MaxTokens: c.MaxTokens, Temp: c.Temp},
 	}
+	// The endpoint is reported as the Router picks it, not after the reply: a
+	// local model can take minutes, and that wait is what the reader is watching.
+	rep := progress.From(ctx)
+	ctx = llm.WithAttemptHook(ctx, func(a llm.Attempt) {
+		rep.Update(func(s *progress.State) {
+			s.Phase, s.Step = progress.PhaseLLM, kind
+			s.Provider, s.Model = a.Provider, a.Model
+			s.Fallback = s.Fallback || a.Fallback
+		})
+	})
 	reply, usage, err := router.CompleteRoute(ctx, route, []llm.Message{{Role: "user", Content: userMsg}})
 	if err != nil {
 		return "", fmt.Errorf("%s: llm call: %w", kind, err)

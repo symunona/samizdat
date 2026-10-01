@@ -141,6 +141,7 @@ type Job struct {
 	Rev         int64   `json:"rev"`
 	DeletedAt   *string `json:"deleted_at"`
 	ParentJobID *string `json:"parent_job_id"`
+	Progress    string  `json:"progress"`
 }
 
 type LlmUsage struct {

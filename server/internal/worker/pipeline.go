@@ -11,6 +11,7 @@ import (
 	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/pipeline"
+	"github.com/symunona/samizdat/server/internal/progress"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -22,6 +23,8 @@ type runPipelinePayload struct {
 	DocumentID    string `json:"document_id"`
 	PipelineName  string `json:"pipeline_name,omitempty"`
 	DocumentTitle string `json:"document_title,omitempty"`
+	// AddedAt is when the resource entered the queue; display only.
+	AddedAt string `json:"added_at,omitempty"`
 	// Force bypasses the content-hash skip guard (set by the rerun endpoint).
 	Force bool `json:"force,omitempty"`
 }
@@ -31,6 +34,7 @@ type runPipelineStepPayload struct {
 	PipelineName  string `json:"pipeline_name,omitempty"`
 	DocumentID    string `json:"document_id,omitempty"`
 	DocumentTitle string `json:"document_title,omitempty"`
+	AddedAt       string `json:"added_at,omitempty"`
 	StepIndex     int    `json:"step_index,omitempty"`
 }
 
@@ -115,6 +119,7 @@ func handleRunPipeline(ctx context.Context, q *store.Queries, db *sql.DB, job st
 		PipelineName:  p.PipelineName,
 		DocumentID:    p.DocumentID,
 		DocumentTitle: p.DocumentTitle,
+		AddedAt:       p.AddedAt,
 		StepIndex:     0,
 	})
 	parentID := job.ID
@@ -216,6 +221,7 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 			PipelineName:  p.PipelineName,
 			DocumentID:    p.DocumentID,
 			DocumentTitle: p.DocumentTitle,
+			AddedAt:       p.AddedAt,
 			StepIndex:     int(nextIdx),
 		})
 		_, err = q.InsertJob(ctx, store.InsertJobParams{
@@ -266,6 +272,7 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 		PipelineName:  p.PipelineName,
 		DocumentID:    p.DocumentID,
 		DocumentTitle: p.DocumentTitle,
+		AddedAt:       p.AddedAt,
 		StepIndex:     int(run.StepIndex),
 	})
 	_, err = q.InsertJob(ctx, store.InsertJobParams{
@@ -276,6 +283,9 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ParentJobID: job.ParentJobID,
+		// The next tick is a new row; it starts where this one stopped rather
+		// than blank, so a poller never sees a chunked run lose its state.
+		Progress: progress.From(ctx).JSON(),
 	})
 	if err != nil {
 		return `{"status":"waiting"}`, fmt.Errorf("requeue step: %w", err)

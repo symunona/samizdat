@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -48,17 +49,17 @@ func NewRouter(cfg config.LLMSection) *Router {
 		switch p.Role {
 		case "primary":
 			// The primary serves the caller's model: tier routing is the caller's call.
-			entries = append(entries, entry{client: c, model: ""})
+			entries = append(entries, entry{client: c, id: p.ID, def: p.Model, model: ""})
 		case "fallback":
 			// A fallback overrides with its own model — the caller's tier model does
 			// not exist on a different provider.
-			entries = append(entries, entry{client: c, model: p.Model})
+			entries = append(entries, entry{client: c, id: p.ID, def: p.Model, model: p.Model})
 		}
 	}
 	switch len(entries) {
 	case 0:
 	case 1:
-		r.chain = entries[0].client
+		r.chain = announced(entries[0])
 	default:
 		r.chain = &fallbackClient{entries: entries}
 	}
@@ -126,6 +127,7 @@ func (r *Router) CompleteRoute(ctx context.Context, route Route, msgs []Message)
 	if p == nil {
 		return "", Usage{}, fmt.Errorf("llm: unknown provider %q (have %s)", route.Provider, r.ids())
 	}
+	notifyAttempt(ctx, Attempt{Provider: p.ID, Model: cmp.Or(route.Params.Model, p.Model)})
 	reply, usage, err := r.clients[p.ID].Complete(ctx, route.Params, msgs)
 	if err != nil {
 		// Name the pin in the error: a pinned route has no fallback, so this IS the
@@ -171,7 +173,44 @@ func (r *Router) ids() string {
 // caller's model when this entry serves the request.
 type entry struct {
 	client Client
+	id     string // Provider.ID, for the attempt hook
+	def    string // the provider's default_model, likewise
 	model  string
+}
+
+// Attempt is one endpoint about to be asked. Model is what the call names, or
+// the provider's default_model when it names none — empty only if neither is
+// known.
+type Attempt struct {
+	Provider string
+	Model    string
+	// Fallback is true once the chain has moved past its primary.
+	Fallback bool
+}
+
+type attemptHookKey struct{}
+
+// WithAttemptHook has the Router call fn before every endpoint it tries for a
+// call made with ctx. It is how a caller learns WHERE a call is going while it
+// is still in flight — Usage only says so after the reply.
+func WithAttemptHook(ctx context.Context, fn func(Attempt)) context.Context {
+	return context.WithValue(ctx, attemptHookKey{}, fn)
+}
+
+func notifyAttempt(ctx context.Context, a Attempt) {
+	if fn, ok := ctx.Value(attemptHookKey{}).(func(Attempt)); ok {
+		fn(a)
+	}
+}
+
+// announced is a chain of one: nothing to fall back to, but the attempt hook
+// still learns which endpoint the call went to.
+type announced entry
+
+func (a announced) Complete(ctx context.Context, p Params, msgs []Message) (string, Usage, error) {
+	notifyAttempt(ctx, Attempt{Provider: a.id, Model: cmp.Or(p.Model, a.def)})
+	//nolint:wrapcheck // a pass-through: the adapter's error is the caller's error
+	return a.client.Complete(ctx, p, msgs)
 }
 
 // fallbackClient tries each entry in order, falling through to the next only on
@@ -187,6 +226,7 @@ func (f *fallbackClient) Complete(ctx context.Context, p Params, msgs []Message)
 		if e.model != "" {
 			ep.Model = e.model // provider-specific model (caller's tier model won't exist here)
 		}
+		notifyAttempt(ctx, Attempt{Provider: e.id, Model: cmp.Or(ep.Model, e.def), Fallback: i > 0})
 		reply, usage, err := e.client.Complete(ctx, ep, msgs)
 		if err == nil {
 			if i > 0 {

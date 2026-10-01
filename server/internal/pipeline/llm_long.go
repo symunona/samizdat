@@ -12,6 +12,7 @@ import (
 	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/logger"
+	"github.com/symunona/samizdat/server/internal/progress"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -358,6 +359,13 @@ func chunkedTick(ctx context.Context, q *store.Queries, run store.PipelineRun,
 		st = freshChunkState(strategy, req, len(chunks))
 	}
 
+	// Chunk is 1-based and stops at Chunks: the reduce pass runs after the last
+	// chunk was read, and reads as "n/n" rather than a chunk that does not exist.
+	progress.From(ctx).Update(func(s *progress.State) {
+		s.Phase, s.Step = progress.PhaseLLM, req.Kind
+		s.Chunk, s.Chunks = min(st.Next+1, st.Chunks), st.Chunks
+	})
+
 	var acc usageAcc
 	switch st.Phase {
 	case phaseMap:
@@ -604,9 +612,17 @@ func callWithFallback(ctx context.Context, q *store.Queries, run store.PipelineR
 	if tries < 1 {
 		tries = 1
 	}
-	attempt := func(c llmStepConfig, role string) (string, error) {
+	rep := progress.From(ctx)
+	attempt := func(c llmStepConfig, role string, escalated bool) (string, error) {
 		var last error
 		for i := 1; i <= tries; i++ {
+			// The endpoint and Fallback are reset per try: llmCall's hook names
+			// whichever endpoint the Router picks for THIS call.
+			rep.Update(func(s *progress.State) {
+				s.Phase, s.Step = progress.PhaseLLM, kind
+				s.Try, s.Tries, s.Fallback = i, tries, escalated
+				s.Provider, s.Model = "", ""
+			})
 			reply, err := llmCall(ctx, q, run, kind, c, userMsg, router, acc)
 			if err == nil {
 				if strict && acc.last.Truncated {
@@ -627,7 +643,7 @@ func callWithFallback(ctx context.Context, q *store.Queries, run store.PipelineR
 		return "", last
 	}
 
-	reply, err := attempt(primary, primaryRole)
+	reply, err := attempt(primary, primaryRole, false)
 	if err == nil {
 		return reply, nil
 	}
@@ -635,7 +651,7 @@ func callWithFallback(ctx context.Context, q *store.Queries, run store.PipelineR
 		return "", err
 	}
 	logChunk.Warnf("%s: %d attempts failed (%v); escalating to %s", kind, tries, err, endpointName(*fb))
-	reply, fbErr := attempt(*fb, "big")
+	reply, fbErr := attempt(*fb, "big", true)
 	if fbErr != nil {
 		return "", fmt.Errorf("%s: primary failed (%w) and fallback failed: %w", kind, err, fbErr)
 	}

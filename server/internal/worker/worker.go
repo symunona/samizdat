@@ -15,6 +15,7 @@ import (
 	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/pipeline"
+	"github.com/symunona/samizdat/server/internal/progress"
 	"github.com/symunona/samizdat/server/internal/proxypool"
 	"github.com/symunona/samizdat/server/internal/store"
 	"github.com/symunona/samizdat/server/internal/ytdlp"
@@ -237,6 +238,19 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	// Make the DB handle available to pipeline steps so they can wrap their
 	// highlight inserts in a transaction (idempotent retries — no duplicates).
 	ctx = pipeline.WithDB(ctx, w.db)
+
+	// Whatever the handler reports lands on the row as it happens. Seeded from
+	// the row so a chunked step's next tick continues the same phase clock.
+	jobCtx := ctx
+	ctx = progress.With(ctx, progress.New(job.Progress, func(state string) {
+		if e := w.q.UpdateJobProgress(jobCtx, store.UpdateJobProgressParams{
+			Progress:  state,
+			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			ID:        job.ID,
+		}); e != nil {
+			logWorker.Errorf("job %s progress: %v", job.ID[:8], e)
+		}
+	}))
 
 	var (
 		result string

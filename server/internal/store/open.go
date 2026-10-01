@@ -317,6 +317,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE documents ADD COLUMN author TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE jobs ADD COLUMN last_error TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE jobs ADD COLUMN result TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE jobs ADD COLUMN progress TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE documents ADD COLUMN source_feed_id TEXT`,
 		// Pipeline tables — additive; CREATE TABLE IF NOT EXISTS handles new installs.
 		// These ALTER TABLE lines are no-ops on fresh DBs but keep old DBs current.
