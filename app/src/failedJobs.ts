@@ -95,6 +95,15 @@ export function documentErrorText(doc: DocumentMeta | null | undefined, failed: 
   return f ? `${f.label}: ${f.message}` : ''
 }
 
+// documentErrorAt is WHEN the error in documentErrorText happened: the dead
+// job's last update (the attempt that gave up), or for a flagged false-parse the
+// fetch that produced it. '' = healthy.
+export function documentErrorAt(doc: DocumentMeta | null | undefined, failed: FailedJob[]): string {
+  if (!doc) return ''
+  if (doc.error_reason) return doc.fetched_at
+  return failureForDocument(doc, failed)?.job.updated_at ?? ''
+}
+
 // orphanScrapeFailures are failed scrapes that produced no readable Document, so
 // nothing in the list represents them — they need their own row. A failure whose
 // URL did land a Document (e.g. a flagged false-parse) is dropped here: that

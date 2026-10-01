@@ -17,7 +17,8 @@ import type { Feed, Job } from '../../src/api'
 import type { DocumentMeta } from '../../src/db'
 import { useConnection } from '../../src/ConnectionContext'
 import { useToast } from '../../src/ToastContext'
-import { useFailedJobs, documentErrorText, orphanScrapeFailures } from '../../src/failedJobs'
+import { useFailedJobs, documentErrorText, documentErrorAt, orphanScrapeFailures } from '../../src/failedJobs'
+import { formatWhen } from '../../src/relativeTime'
 import type { FailedJob } from '../../src/failedJobs'
 import { useDocuments, useSyncStatus } from '../../src/db'
 import { useShareStore } from '../../src/store/shareStore'
@@ -309,6 +310,7 @@ export default function DocumentsScreen() {
                 <Text style={s.failedLabel} numberOfLines={expanded ? undefined : 2}>
                   {f.label}: {f.message}
                 </Text>
+                <Text style={s.failedWhen}>{formatWhen(f.job.updated_at)}</Text>
               </Pressable>
               <Pressable
                 style={({ pressed }) => [s.failedBtn, (busy || pressed) && s.failedBtnPressed]}
@@ -339,6 +341,7 @@ export default function DocumentsScreen() {
     const displayTitle = item.title?.trim() ? item.title : item.canonical_url
     const pending = pendingDeletes[item.id]
     const errorText = documentErrorText(item, failed)
+    const errorAt = documentErrorAt(item, failed)
 
     if (pending) {
       return (
@@ -367,7 +370,8 @@ export default function DocumentsScreen() {
           <Text style={s.itemDate}>Fetched {formatDate(item.fetched_at)}</Text>
           {errorText ? (
             <View style={s.errorBadge}>
-              <Text style={s.errorBadgeText} numberOfLines={2}>⚠ {errorText}</Text>
+              {errorAt ? <Text style={s.errorBadgeWhen}>⚠ {formatWhen(errorAt)}</Text> : null}
+              <Text style={s.errorBadgeText} numberOfLines={2}>{errorAt ? '' : '⚠ '}{errorText}</Text>
             </View>
           ) : null}
           {((item.highlight_count && item.highlight_count > 0) || (item.annotation_count && item.annotation_count > 0)) ? (
@@ -695,6 +699,7 @@ function buildStyles(t: Theme) {
     },
     failedIcon: { color: t.colors.error, fontSize: 14, flexShrink: 0 },
     failedLabel: { color: t.colors.error, fontSize: 11, fontWeight: '700', marginTop: 1 },
+    failedWhen: { color: t.colors.muted, fontSize: 10, marginTop: 2 },
     failedBtn: {
       flexShrink: 0,
       paddingHorizontal: t.spacing.sm,
@@ -743,6 +748,7 @@ function buildStyles(t: Theme) {
       borderColor: t.colors.error + '55',
     },
     errorBadgeText: { color: t.colors.error, fontSize: 11, fontWeight: '700' },
+    errorBadgeWhen: { color: t.colors.error, fontSize: 10, fontWeight: '600', opacity: 0.8, marginBottom: 1 },
     annBadge: { color: '#e8743b', fontSize: 11, fontWeight: '600' },
     hlBadge: { color: '#7dd3fc', fontSize: 11, fontWeight: '600' },
     itemRow: {

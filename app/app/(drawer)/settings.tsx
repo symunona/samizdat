@@ -12,6 +12,7 @@ import { APP_VERSION, APP_VERSION_CODE, isUpdateAvailable } from '../../src/appV
 import { useLatestBuild } from '../../src/useUpdate'
 import { useProxyStatus, useExportStats, useLLMStatus } from '../../src/useServices'
 import { proxyLabel, type YtdlpProxyEntry } from '../../src/proxyStatus'
+import { formatRelative } from '../../src/relativeTime'
 import { llmErrorLabel, llmProviderLabel } from '../../src/llmStatus'
 import type { LLMProvider } from '../../src/llmStatus'
 import { probeLLMProviders, probeSummary } from '../../src/llmModels'
@@ -42,20 +43,6 @@ function formatTime(d: Date | null): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-function formatRelative(iso: string): string {
-  try {
-    const diff = Date.now() - new Date(iso).getTime()
-    const secs = Math.floor(diff / 1000)
-    if (secs < 60) return 'just now'
-    const mins = Math.floor(secs / 60)
-    if (mins < 60) return `${mins}m ago`
-    const hrs = Math.floor(mins / 60)
-    if (hrs < 24) return `${hrs}h ago`
-    const days = Math.floor(hrs / 24)
-    if (days < 7) return `${days}d ago`
-    return formatDate(iso)
-  } catch { return iso }
-}
 
 // browserLangs derives base language codes from the platform locale (navigator on
 // web/RN-Web; empty on native, where the user seeds the list manually).
