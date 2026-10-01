@@ -66,13 +66,28 @@ var configAPKPathCmd = &cobra.Command{
 	},
 }
 
+// configDBPathCmd prints the SQLite path the server opens, so shell recipes
+// (`just status`) read the same database without re-deriving the default.
+var configDBPathCmd = &cobra.Command{
+	Use:   "db-path",
+	Short: "Print the path of the server's SQLite database (db_path)",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		c, err := cfg.Load(flagConfig)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		fmt.Println(c.DBPath)
+		return nil
+	},
+}
+
 func init() {
 	defaultCfg, _ := cfg.DefaultPath()
 	rootCmd.PersistentFlags().StringVar(&flagConfig, "config", defaultCfg, "config file")
 	rootCmd.PersistentFlags().IntVar(&flagPort, "port", 0, "override listen port")
 	rootCmd.PersistentFlags().StringVar(&flagWebDir, "webdir", "", "path to Expo web build")
 	rootCmd.PersistentFlags().StringVar(&flagExtensionZip, "extension-zip", "", "path to built Chrome extension zip (served at /extension/sam-chrome.zip)")
-	configCmd.AddCommand(configAPKPathCmd)
+	configCmd.AddCommand(configAPKPathCmd, configDBPathCmd)
 	rootCmd.AddCommand(serveCmd, configCmd)
 }
 

@@ -53,7 +53,7 @@ export function useLLMStatus() {
 }
 
 // useServiceAlert is true when a service the user relies on is degraded — the
-// signal behind the drawer dot. A provider dropped from config ("retired") is
+// signal behind the drawer dot (a failed last yt-dlp download included). A provider dropped from config ("retired") is
 // history, not an alert. The one client-side member of the set is the offline
 // replica's write path: when it fails the app keeps working but stops saving.
 export function useServiceAlert(): boolean {
@@ -65,6 +65,8 @@ export function useServiceAlert(): boolean {
   // A stale yt-dlp breaks every video ingest on every proxy, so it belongs in
   // the same dot — it is a broken service, just not a broken proxy.
   const ytdlpStale = !!proxy?.ytdlp?.stale
+  // The last real download failed: every probe can be green while ingest is not.
+  const ytdlpFailed = proxy?.last_run?.ok === false
   const exportBroken = !!exp?.enabled && !!exp.last_error
   // Only the routing chain can break a pipeline: a 'retired' provider is history
   // and an 'available' one (discovered from an env key, nothing routes to it) is
@@ -72,5 +74,5 @@ export function useServiceAlert(): boolean {
   const llmBroken = !!llm?.providers.some(
     (p) => (p.role === 'primary' || p.role === 'fallback') && p.status === 'error',
   )
-  return persistBroken || proxyDown || ytdlpStale || exportBroken || llmBroken
+  return persistBroken || proxyDown || ytdlpStale || ytdlpFailed || exportBroken || llmBroken
 }

@@ -131,6 +131,7 @@ export default function SettingsScreen() {
   const proxyChecking = !proxyStatus || proxyRechecking || (proxyFetching && !proxyStatus.ok)
   const proxyOnlineCount = proxyStatus?.proxies.filter((p) => p.ok).length ?? 0
   const ytdlpVersion = proxyStatus?.ytdlp
+  const lastRun = proxyStatus?.last_run
   // Distinct EXIT IPs, not entries: that is how many addresses YouTube can ban.
   const proxyExitIPCount = new Set((proxyStatus?.proxies ?? []).filter((p) => p.ok && p.exit_ip).map((p) => p.exit_ip)).size
   const [deviceNameInput, setDeviceNameInput] = useState('')
@@ -615,6 +616,12 @@ export default function SettingsScreen() {
       {ytdlpVersion?.stale ? (
         <Text style={s.proxyWarnTitle}>yt-dlp is out of date — run `yt-dlp -U`</Text>
       ) : null}
+      {lastRun ? (
+        <Text style={lastRun.ok ? s.connectionDetail : s.proxyWarnTitle}>
+          {`Last download ${lastRun.ok ? 'ok' : 'failed'} ${formatRelative(lastRun.at)} via ${lastRun.proxy || 'direct'}`}
+          {lastRun.tried?.length ? ` (after ${lastRun.tried.join(', ')} failed)` : ''}
+        </Text>
+      ) : null}
     </>
   )
 
@@ -892,6 +899,14 @@ export default function SettingsScreen() {
         {proxySummary}
         {!proxyStatus || !proxyStatus.configured ? null : (
           <>
+            {lastRun && !lastRun.ok ? (
+              // Probes and the version check can both pass while every real
+              // download fails — this is the only place that failure shows.
+              <View style={s.proxyWarn}>
+                <Text style={s.proxyWarnTitle}>Last download failed</Text>
+                <Text style={s.proxyWarnBody}>{lastRun.error}</Text>
+              </View>
+            ) : null}
             {ytdlpVersion?.stale ? (
               // Its own warning, not a red proxy dot: swapping nodes cannot fix
               // a signature-scheme change, and every proxy fails identically.

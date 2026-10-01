@@ -72,7 +72,7 @@ Non-additive (relax NOT NULL, change type) → SQLite table rebuild: create `_ne
 
 Data migrations needing engine code do NOT go in `migrate()` (import cycle: the catalog lives in `pipeline`, which imports `store`). They run in `main.go` after `store.Open`, guarded by a `server_settings` key — see `pipeline.BackfillStepPrompts`.
 
-`server_settings` keys in use: `passphrase_hash`, `ytdlp_proxy_last_ok`, `llm_provider_health`, `pipeline_step_prompts_backfilled`, `auto_archive_enabled`, `transcripts_reparsed_rollup`, `language_prefs`, `context_menu`.
+`server_settings` keys in use: `passphrase_hash`, `ytdlp_proxy_last_ok`, `ytdlp_last_run`, `llm_provider_health`, `pipeline_step_prompts_backfilled`, `auto_archive_enabled`, `transcripts_reparsed_rollup`, `language_prefs`, `context_menu`.
 
 ## Job enqueue is idempotent (`POST /api/v1/jobs`)
 
@@ -254,7 +254,8 @@ Three bands in **estimated** tokens (`EstimateTokens` = runes/3, a third of the 
 
 - **Sticky active.** `Current()` keeps the active entry while healthy, else the first healthy, else `list[0]`. Not "best of the healthy" — re-picking per probe reshuffles which IP YouTube sees mid-session, and an unprobed pool must still be usable.
 - **`Attempts()` ends with the UNHEALTHY entries.** A stale probe must never take the pool out of service.
-- **Only a bot wall rotates.** `ytdlpRun.exec` retries the next proxy for `isBotBlock(output)`, returns immediately otherwise — a private video would cost one full wait per proxy for the same error.
+- **Rotation is by distinct exit IP, and by failure kind** (`ytdlpRun.walk`). Bot wall / network failure (`isNetworkFailure`, incl. a silent death) → demote that proxy, walk every remaining egress. Stale-looking or unrecognized → ONE more egress: the same failure on two exit IPs is the verdict, a third only repeats it. Private/removed video or missing binary → stop at once (one full wait per proxy for the same answer). A proxy sharing an exit IP with one that already failed is skipped.
+- **The last run is recorded** (`ytdlp.RunLog`, `server_settings.ytdlp_last_run`, served as `last_run`). Probes and the version check can both be green while every download fails — this is the only witness, and it raises the app's alert dot and shows in `just status`. A definitive answer about the video (private/removed) is not recorded: it is not a broken service.
 - **Every yt-dlp invocation goes through `ytdlpRun`** (probe `-J`, audio, video). The three sites used to hand-roll `--proxy`/`--cookies`/exec/classify; a fourth copy would silently never rotate.
 - **Distinct exit IPs are the number that matters.** Two nodes in one household share one address, so failing between them buys nothing — `Probe` returns the exit IP and the app tags duplicates.
 - Probe transport is chosen by scheme (`socks5*` vs `http(s)`) — probing an `http://` entry with a SOCKS dialer reports a working proxy as dead.
@@ -263,8 +264,8 @@ Three bands in **estimated** tokens (`EstimateTokens` = runes/3, a third of the 
 
 The two ways video ingest dies have the same symptom and opposite fixes. YouTube rotates its player/signature scheme every few weeks; a behind-by-one `yt-dlp` then 403s on the media fetch — on EVERY proxy. Read as an IP ban that costs an afternoon swapping healthy nodes (it did: the reported "proxy broke" was a 2.5-month-old binary, all seven proxies fine).
 
-- **It never rotates.** `exec` checks `isStaleBinaryFailure` BEFORE `isBotBlock`.
-- **Its message names the versions and says "not a proxy problem"** — including when the version check says current, because that diagnosis holds either way. What it must NOT do then is assert staleness.
+- **It is confirmed on ONE other exit IP, never the whole pool.** A lone 403 is not proof: on 2026-08-27 one cleared on retry (job a7dc3d84), so it was that IP. Two egresses failing alike is.
+- **Its message names the versions and says "not a proxy problem"** — when the version check says stale, or when it was seen on two egresses. With only one egress tried it says neither. Never assert staleness when the version check says current.
 - **`Checker.Get` is cached 6h** against the GitHub release list. Offline it falls back to age (`StaleAfter` 30d): being unable to check must never turn a current binary into a reported problem, but a year-old one still is. Equal-to-latest is current however old — yt-dlp going quiet is not the operator's problem.
 - Served in `GET /api/v1/ytdlp/status` as `ytdlp`, beside the proxies; raises the app's alert dot.
 

@@ -380,6 +380,12 @@ status:
         echo "  verdict    : ✗ STALE — running ${lc}, HEAD is ${head}. Restart: 'just dev' (dev) or 'just restart' (service)"
       fi
     fi
+    # Last real yt-dlp download: probes can be green while every download fails.
+    db=$(server/bin/samizdat {{_config_flag}} config db-path 2>/dev/null || true)
+    run=$([ -f "${db}" ] && sqlite3 -readonly "${db}" "SELECT value FROM server_settings WHERE key='ytdlp_last_run'" 2>/dev/null || true)
+    if [ -n "${run}" ]; then
+      echo "  yt-dlp     : $(node -e 'const r = JSON.parse(process.argv[1]); console.log((r.ok ? "✓ last download ok " : "✗ last download FAILED ") + r.at + " via " + (r.proxy || "direct") + (r.tried?.length ? " (after " + r.tried.join(", ") + " failed)" : "") + (r.ok ? "" : " — " + r.error))' "${run}")"
+    fi
 
 [group('dev')]
 [doc('Build + run the sam CLI with args (e.g. just sam connect)')]

@@ -1,10 +1,15 @@
 package worker
 
 import (
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/symunona/samizdat/server/internal/config"
+	"github.com/symunona/samizdat/server/internal/proxypool"
 	"github.com/symunona/samizdat/server/internal/ytdlp"
 )
 
@@ -92,14 +97,86 @@ func TestClassifyNamesTheStaleVersion(t *testing.T) {
 		}
 	}
 
-	// Binary already current: still not a proxy problem, and it must not claim
-	// an update would help.
-	msg = classifyYTDLPError(errors.New("exit status 1"), out, []string{"papi"}, ytdlp.Info{}).Error()
-	if !strings.Contains(msg, "Not a proxy problem") {
-		t.Errorf("current-binary message %q should still exonerate the proxy", msg)
+	// Binary already current, same failure on two egresses: still not a proxy
+	// problem, and it must not claim an update would help.
+	msg = classifyYTDLPError(errors.New("exit status 1"), out, []string{"papi", "piri"}, ytdlp.Info{}).Error()
+	if !strings.Contains(msg, "Not a proxy problem") || !strings.Contains(msg, "papi, piri") {
+		t.Errorf("current-binary message %q should exonerate the proxies it was seen on", msg)
 	}
 	if strings.Contains(msg, "is out of date:") {
 		t.Errorf("current-binary message %q must not assert staleness", msg)
+	}
+
+	// One egress proves nothing: a lone 403 can be that IP.
+	msg = classifyYTDLPError(errors.New("exit status 1"), out, []string{"papi"}, ytdlp.Info{}).Error()
+	if strings.Contains(msg, "Not a proxy problem") {
+		t.Errorf("single-egress message %q must not exonerate the proxy", msg)
+	}
+}
+
+// fakeYTDLP writes a yt-dlp stand-in that answers per proxy host: the script
+// looks up the host's canned reply and exits 0 only for "ok".
+func fakeYTDLP(t *testing.T, replies map[string]string) string {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\nfor a; do case \"$a\" in\n")
+	for host, reply := range replies {
+		if reply == "ok" {
+			b.WriteString("*" + host + "*) echo ok; exit 0;;\n")
+		} else {
+			b.WriteString("*" + host + "*) echo '" + reply + "'; exit 1;;\n")
+		}
+	}
+	b.WriteString("esac; done\nexit 1\n")
+	path := filepath.Join(t.TempDir(), "yt-dlp")
+	if err := os.WriteFile(path, []byte(b.String()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestExecRotation(t *testing.T) {
+	const (
+		stale   = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+		network = "ERROR: Unable to connect to proxy"
+		private = "ERROR: [youtube] abc: Private video"
+	)
+	cases := []struct {
+		name      string
+		replies   map[string]string
+		wantOK    bool
+		wantProxy string   // egress the final attempt ran on
+		wantTried []string // egresses that failed before it
+		wantRun   bool     // recorded as the last run
+	}{
+		{"403 clears on another egress", map[string]string{"pa": stale, "pb": "ok"}, true, "pb", []string{"pa"}, true},
+		{"same failure twice is the verdict", map[string]string{"pa": stale, "pb": stale, "pc": "ok"}, false, "pb", []string{"pa"}, true},
+		{"network failure walks the pool", map[string]string{"pa": network, "pb": network, "pc": "ok"}, true, "pc", []string{"pa", "pb"}, true},
+		{"private video stops at once", map[string]string{"pa": private, "pb": "ok"}, false, "", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			runs := ytdlp.NewRunLog(nil)
+			yt := ytdlpEnv{
+				cfg:  config.YTDLPSection{Path: fakeYTDLP(t, c.replies)},
+				pool: proxypool.New([]string{"socks5h://pa:1080", "socks5h://pb:1080", "socks5h://pc:1080"}, nil),
+				runs: runs,
+			}
+			_, err := (ytdlpRun{what: "audio", url: "https://www.youtube.com/watch?v=abc"}).exec(context.Background(), yt)
+			if (err == nil) != c.wantOK {
+				t.Fatalf("err = %v, want ok=%v", err, c.wantOK)
+			}
+			last := runs.Last()
+			if !c.wantRun {
+				if last != nil {
+					t.Fatalf("recorded %+v; a definitive answer about the video is not a broken service", last)
+				}
+				return
+			}
+			if last == nil || last.OK != c.wantOK || last.Proxy != c.wantProxy || strings.Join(last.Tried, ",") != strings.Join(c.wantTried, ",") {
+				t.Fatalf("last run = %+v, want ok=%v proxy=%s tried=%v", last, c.wantOK, c.wantProxy, c.wantTried)
+			}
+		})
 	}
 }
 

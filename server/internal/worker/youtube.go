@@ -107,6 +107,7 @@ type ytdlpEnv struct {
 	cfg     config.YTDLPSection
 	pool    *proxypool.Pool
 	version *ytdlp.Checker
+	runs    *ytdlp.RunLog
 }
 
 // versionInfo is the cached yt-dlp version state, or a zero Info when no
@@ -136,19 +137,48 @@ type ytdlpRun struct {
 	stdoutOnly bool
 }
 
-// exec runs yt-dlp, walking the proxy pool: a run that trips YouTube's bot wall
-// demotes that egress IP and retries on the next proxy, so one blocked
-// residential address cannot fail a job while the others are healthy. Any other
-// failure returns immediately — retrying a private video on six proxies is six
-// times the wait for the same error.
+// exec runs yt-dlp, walking the proxy pool by distinct exit IP:
+//   - bot wall / network failure: egress-specific, so it demotes that proxy and
+//     moves on through every remaining exit IP.
+//   - stale-looking or unrecognized failure: tried on ONE more exit IP. The same
+//     failure on two egresses is the verdict (a 403 that clears on another IP
+//     was never a stale binary); a third would only repeat it.
+//   - definitive answer (private/removed video, binary missing): stops at once.
+//
+// The final outcome is recorded in yt.runs, so the status card can show a
+// failed download that every health probe missed.
 func (r ytdlpRun) exec(ctx context.Context, yt ytdlpEnv) ([]byte, error) {
+	out, label, tried, err := r.walk(ctx, yt)
+	if ctx.Err() == nil && (err == nil || !isVideoUnavailable(string(out))) {
+		run := ytdlp.Run{OK: err == nil, What: r.what, URL: r.url, Proxy: label, Tried: tried}
+		if err != nil {
+			run.Error = err.Error()
+		}
+		yt.runs.Record(ctx, run)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// walk is exec's rotation loop. It returns the final attempt's output, the
+// label it ran on, and the labels that failed before it.
+func (r ytdlpRun) walk(ctx context.Context, yt ytdlpEnv) ([]byte, string, []string, error) {
 	attempts := yt.pool.Attempts()
 	if len(attempts) == 0 {
 		attempts = []string{""} // unconfigured: a single direct run
 	}
 	var tried []string
 	var lastErr error
+	var lastOut []byte
+	failedIPs := map[string]bool{}
+	confirmed := 0 // egresses that failed with a non-egress-specific error
 	for _, px := range attempts {
+		ip := yt.pool.ExitIP(px)
+		if ip != "" && failedIPs[ip] {
+			continue // same egress as one that already failed
+		}
 		args := append([]string{}, r.args...)
 		if px != "" {
 			args = append(args, "--proxy", px)
@@ -175,20 +205,36 @@ func (r ytdlpRun) exec(ctx context.Context, yt ytdlpEnv) ([]byte, error) {
 			out, err = cmd.CombinedOutput()
 		}
 		if err == nil {
-			return out, nil
+			return out, label, tried, nil
 		}
 		tried = append(tried, label)
+		lastOut = out
 		lastErr = classifyYTDLPError(err, string(out), tried, yt.versionInfo(ctx))
-		// Only a bot wall is worth another egress IP. A stale-binary signature
-		// failure looks identical on every proxy, so rotating burns the whole
-		// pool to arrive at the same error.
-		if ctx.Err() != nil || px == "" || isStaleBinaryFailure(string(out)) || !isBotBlock(string(out)) {
-			return nil, lastErr
+		text := string(out)
+		if ctx.Err() != nil || px == "" || isVideoUnavailable(text) {
+			break
 		}
-		yt.pool.MarkFailed(px, "youtube bot check")
-		logScraper.Printf("yt-dlp %s: proxy %s hit the bot wall — rotating", r.what, label)
+		if _, notFound := err.(*exec.Error); notFound {
+			break
+		}
+		if ip != "" {
+			failedIPs[ip] = true
+		}
+		if isBotBlock(text) || isNetworkFailure(text) {
+			yt.pool.MarkFailed(px, "yt-dlp: "+lastLine(text))
+		} else if confirmed++; confirmed >= 2 {
+			break
+		}
+		logScraper.Printf("yt-dlp %s: failed on %s (%s) — retrying on another exit IP", r.what, label, lastLine(text))
 	}
-	return nil, lastErr
+	label := ""
+	if len(tried) > 0 {
+		label, tried = tried[len(tried)-1], tried[:len(tried)-1]
+	}
+	if len(tried) == 0 {
+		tried = nil
+	}
+	return lastOut, label, tried, lastErr
 }
 
 // handleYouTube ingests a YouTube URL into a video Document: audio-only download
@@ -592,11 +638,14 @@ func classifyYTDLPError(err error, output string, tried []string, ver ytdlp.Info
 	if isStaleBinaryFailure(output) {
 		// Named as its own condition even when the version check says current:
 		// swapping proxies cannot fix a signature failure, and saying so is the
-		// whole point of splitting it out from the bot-block message.
+		// whole point of splitting it out from the bot-block message. One egress
+		// is not enough to say so — a lone 403 can be that IP.
 		if advice := ver.Advice(); advice != "" {
 			return fmt.Errorf("yt-dlp is out of date: %s. YouTube changed its player/signature scheme — this fails on EVERY proxy, so it is not a proxy problem", advice)
 		}
-		return fmt.Errorf("yt-dlp could not extract the media (YouTube player/signature change). Not a proxy problem — it fails the same on every egress IP. Update the binary (`yt-dlp -U`); if it is already current, the extractor fix has not shipped yet")
+		if len(tried) >= 2 {
+			return fmt.Errorf("yt-dlp could not extract the media (YouTube player/signature change) — same failure on %s. Not a proxy problem. Update the binary (`yt-dlp -U`); if it is already current, the extractor fix has not shipped yet", strings.Join(tried, ", "))
+		}
 	}
 	if isBotBlock(output) {
 		hint := "this server's IP is blocked by YouTube (bot check)."
@@ -608,15 +657,49 @@ func classifyYTDLPError(err error, output string, tried []string, ver ytdlp.Info
 		}
 		return fmt.Errorf("youtube unavailable: %s See docs/youtube-ingest.md", hint)
 	}
-	low := strings.ToLower(output)
-	if strings.Contains(low, "video unavailable") || strings.Contains(low, "private video") {
+	if isVideoUnavailable(output) {
 		return fmt.Errorf("youtube video unavailable (private/removed/region-locked)")
 	}
-	// Surface the last line of yt-dlp output for context.
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	last := ""
-	if len(lines) > 0 {
-		last = lines[len(lines)-1]
+	msg := lastLine(output)
+	if msg == "" {
+		msg = err.Error() // killed or timed out before printing anything
 	}
-	return fmt.Errorf("yt-dlp failed: %s", last)
+	if len(tried) > 0 {
+		return fmt.Errorf("yt-dlp failed via %s: %s", strings.Join(tried, ", "), msg)
+	}
+	return fmt.Errorf("yt-dlp failed: %s", msg)
+}
+
+// isVideoUnavailable reports a definitive answer about the video itself — the
+// same on every egress, so never worth another proxy and never a broken service.
+func isVideoUnavailable(output string) bool {
+	low := strings.ToLower(output)
+	return strings.Contains(low, "video unavailable") || strings.Contains(low, "private video")
+}
+
+// isNetworkFailure reports a failure of the route rather than of yt-dlp: the
+// proxy dropped, timed out, or YouTube throttled that address. Another exit IP
+// is the fix. Empty output counts — a run that died silently said nothing
+// about the video.
+func isNetworkFailure(output string) bool {
+	low := strings.ToLower(strings.TrimSpace(output))
+	if low == "" {
+		return true
+	}
+	for _, s := range []string{
+		"timed out", "connection reset", "connection refused", "connection aborted",
+		"unable to connect", "network is unreachable", "temporary failure in name resolution",
+		"socks", "proxy", "remote end closed", "incompleteread", "http error 429", "http error 5",
+	} {
+		if strings.Contains(low, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastLine is the last non-empty line of yt-dlp output — where it puts ERROR:.
+func lastLine(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }

@@ -51,8 +51,12 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	// fails identically on every proxy — so the worker and the status card read
 	// one cached answer rather than each guessing.
 	ytdlpVer := ytdlp.NewChecker(ytdlpCfg.Path)
+	// Probes and the version check both pass while downloads fail; the last
+	// real run is the only witness, so the worker records it and the card reads it.
+	ytdlpRuns := ytdlp.NewRunLog(settingsPersist{q: q})
+	ytdlpRuns.Seed(ctx)
 
-	w := worker.New(q, db, cacheDir, extractorDir, ytdlpCfg, llmRouter, proxies, ytdlpVer, creds)
+	w := worker.New(q, db, cacheDir, extractorDir, ytdlpCfg, llmRouter, proxies, ytdlpVer, ytdlpRuns, creds)
 	w.Start(ctx)
 
 	mux := http.NewServeMux()
@@ -156,7 +160,7 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	mux.HandleFunc("GET /api/v1/settings", bearerAuth(q, settingsH.get))
 	mux.HandleFunc("PUT /api/v1/settings", bearerAuth(q, settingsH.put))
 
-	ytStatusH := newYtdlpStatusHandler(ctx, proxies, ytdlpVer)
+	ytStatusH := newYtdlpStatusHandler(ctx, proxies, ytdlpVer, ytdlpRuns)
 	mux.HandleFunc("GET /api/v1/ytdlp/status", bearerAuth(q, ytStatusH.get))
 
 	llmStatusH := newLLMStatusHandler(ctx, q, llmRouter)

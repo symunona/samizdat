@@ -25,6 +25,18 @@ export interface YtdlpVersion {
   checked_at: string
 }
 
+// The most recent real yt-dlp run. Probes and the version check can both pass
+// while every download fails; this is the field that sees it.
+export interface YtdlpRun {
+  ok: boolean
+  at: string
+  what: string     // probe | audio[en] | video
+  url: string
+  proxy: string    // egress label the final attempt ran on ('' = direct)
+  tried?: string[] // egresses that failed before it
+  error?: string
+}
+
 export interface YtdlpProxyStatus {
   configured: boolean
   // The flat fields describe the ACTIVE proxy — they predate the pool and stay
@@ -37,6 +49,7 @@ export interface YtdlpProxyStatus {
   last_ok_at: string
   proxies: YtdlpProxyEntry[] // every configured proxy, in preference order
   ytdlp?: YtdlpVersion       // absent from a pre-pool server
+  last_run?: YtdlpRun | null // null before the first run; absent from an older server
 }
 
 export async function fetchYtdlpProxyStatus(serverUrl: string, token: string): Promise<YtdlpProxyStatus> {

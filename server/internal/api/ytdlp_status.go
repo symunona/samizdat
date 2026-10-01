@@ -27,6 +27,9 @@ type ytdlpStatus struct {
 	// purpose: a stale yt-dlp fails every ingest on every egress IP, which reads
 	// as "the proxy broke" unless the card says otherwise.
 	Ytdlp ytdlp.Info `json:"ytdlp"`
+	// LastRun is the most recent real download. Probes and the version check
+	// can both pass while every download fails; this is the field that sees it.
+	LastRun *ytdlp.Run `json:"last_run"`
 }
 
 // settingsPersist adapts store.Queries to proxypool.Persist, keeping the pool
@@ -54,13 +57,14 @@ func (s settingsPersist) Set(ctx context.Context, key, value string) error {
 type ytdlpStatusHandler struct {
 	pool *proxypool.Pool
 	ver  *ytdlp.Checker
+	runs *ytdlp.RunLog
 }
 
-func newYtdlpStatusHandler(ctx context.Context, pool *proxypool.Pool, ver *ytdlp.Checker) *ytdlpStatusHandler {
+func newYtdlpStatusHandler(ctx context.Context, pool *proxypool.Pool, ver *ytdlp.Checker, runs *ytdlp.RunLog) *ytdlpStatusHandler {
 	if pool.Configured() {
 		go pool.Run(ctx, 60*time.Second)
 	}
-	return &ytdlpStatusHandler{pool: pool, ver: ver}
+	return &ytdlpStatusHandler{pool: pool, ver: ver, runs: runs}
 }
 
 func (h *ytdlpStatusHandler) get(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +73,7 @@ func (h *ytdlpStatusHandler) get(w http.ResponseWriter, r *http.Request) {
 	h.pool.Check(r.Context())
 	st := h.status()
 	st.Ytdlp = h.ver.Get(r.Context()) // cached; the release list is checked at most every 6h
+	st.LastRun = h.runs.Last()
 	writeJSON(w, http.StatusOK, st)
 }
 

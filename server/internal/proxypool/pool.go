@@ -174,6 +174,18 @@ func (p *Pool) MarkFailed(proxyURL, reason string) {
 	}
 }
 
+// ExitIP is the public address a proxy last probed out of, "" when unknown.
+// The worker rotates by exit IP, not by node: two nodes in one household are
+// one egress, and a failure on one says nothing new on the other.
+func (p *Pool) ExitIP(proxyURL string) string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if st, ok := p.state[proxyURL]; ok {
+		return st.ExitIP
+	}
+	return ""
+}
+
 // Statuses returns every entry's health in configured order.
 func (p *Pool) Statuses() []Status {
 	p.mu.RLock()
