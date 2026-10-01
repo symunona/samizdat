@@ -31,6 +31,7 @@ Why things are the way they are. One line each. Detail lives in the component
 | 22 | Concrete paired checks, not a generic registry (`spec parity`). | Abstract before the second case exists and you get a framework with one user. |
 | 23 | yt-dlp egress = ordered proxy pool, sticky active entry. | One home node blinking used to kill every video ingest. |
 | 24 | Name a self-hosted box by MagicDNS, never by IP. | A `providerID` is `host:port` — the identity every pipeline step pins. Rebuilding a box moves the IP. |
+| 25 | yt-dlp runs sandboxed (Landlock + seccomp, self re-exec) and updates itself only from a signed, 3-day-old release. | It is the one piece of third-party code that must auto-update, and it ran with the SSH key, `.env` and the vault in reach. No sudo/bwrap needed; still one binary. |
 
 ## Traps — bugs that already cost a day
 

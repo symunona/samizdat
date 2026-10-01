@@ -40,7 +40,18 @@ type ExportSection struct {
 // (e.g. a home node over Tailscale) is required for the happy path.
 // See docs/youtube-ingest.md.
 type YTDLPSection struct {
-	Path string `toml:"path"` // yt-dlp binary; default "yt-dlp" (PATH lookup)
+	// Path is the operator's yt-dlp (default "yt-dlp", PATH lookup). With
+	// AutoUpdate it only runs until the first managed copy is installed.
+	Path string `toml:"path"`
+	// AutoUpdate keeps a signature-verified copy under <data_dir>/ytdlp, checked
+	// at most once a day before a run. Default true.
+	AutoUpdate bool `toml:"auto_update"`
+	// Channel is the release channel AutoUpdate follows: "stable" (default) or
+	// "nightly", where YouTube fixes land first.
+	Channel string `toml:"channel"`
+	// Sandbox confines every yt-dlp run (Landlock + seccomp, Linux only) to
+	// system dirs read-only and the media dir read-write. Default true.
+	Sandbox bool `toml:"sandbox"`
 	// Proxies is the ordered egress pool: the first healthy entry carries jobs,
 	// and one that trips YouTube's bot wall is demoted mid-job so the next takes
 	// over. A single-valued pool is a pool of one — when that node blinked,
@@ -218,7 +229,7 @@ func Defaults() *Config {
 		ExtractorsDir: filepath.Join(home, "dev", "sam", "extractors"),
 		Server:        ServerSection{Port: 8765},
 		Export:        ExportSection{Grouping: "weekly", ImageLinks: "wikilink"},
-		YTDLP:         YTDLPSection{Path: "yt-dlp"},
+		YTDLP:         YTDLPSection{Path: "yt-dlp", AutoUpdate: true, Channel: "stable", Sandbox: true},
 		LLM:           LLMSection{Summarize: DefaultSummarize()},
 	}
 }

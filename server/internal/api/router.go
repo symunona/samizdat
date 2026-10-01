@@ -50,13 +50,19 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	// The binary's own version is the OTHER thing that fails every ingest, and it
 	// fails identically on every proxy — so the worker and the status card read
 	// one cached answer rather than each guessing.
-	ytdlpVer := ytdlp.NewChecker(ytdlpCfg.Path)
+	ytdlpTool := ytdlp.New(ytdlp.Options{
+		Path: ytdlpCfg.Path, Cookies: ytdlpCfg.Cookies,
+		AutoUpdate: ytdlpCfg.AutoUpdate, Channel: ytdlpCfg.Channel, Sandbox: ytdlpCfg.Sandbox,
+		DataDir: dataDir, MediaDir: filepath.Join(cacheDir, "media"),
+		Persist: settingsPersist{q: q},
+	})
+	ytdlpVer := ytdlp.NewChecker(ytdlpTool)
 	// Probes and the version check both pass while downloads fail; the last
 	// real run is the only witness, so the worker records it and the card reads it.
 	ytdlpRuns := ytdlp.NewRunLog(settingsPersist{q: q})
 	ytdlpRuns.Seed(ctx)
 
-	w := worker.New(q, db, cacheDir, extractorDir, ytdlpCfg, llmRouter, proxies, ytdlpVer, ytdlpRuns, creds)
+	w := worker.New(q, db, cacheDir, extractorDir, ytdlpCfg, llmRouter, proxies, ytdlpTool, ytdlpVer, ytdlpRuns, creds)
 	w.Start(ctx)
 
 	mux := http.NewServeMux()

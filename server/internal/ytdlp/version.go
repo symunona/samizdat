@@ -8,11 +8,7 @@ package ytdlp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -28,27 +24,34 @@ const StaleAfter = 30 * 24 * time.Hour
 // weekly at most, and GitHub rate-limits unauthenticated callers.
 const checkTTL = 6 * time.Hour
 
-// releasesURL is a var so tests can point it at an httptest server.
-var releasesURL = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
-
 // versionRe matches yt-dlp's date-based version (2026.08.19), optionally with a
 // nightly/dev suffix.
 var versionRe = regexp.MustCompile(`^(\d{4})\.(\d{2})\.(\d{2})`)
 
 // Info is the binary's version state, as served to the app.
 type Info struct {
-	Installed string `json:"installed"`  // e.g. "2026.08.19"; empty if the binary did not run
-	Latest    string `json:"latest"`     // newest published release, "" when the check failed
-	AgeDays   int    `json:"age_days"`   // days since the installed release date
-	Stale     bool   `json:"stale"`      // a newer release exists, or no check + older than StaleAfter
-	Error     string `json:"error"`      // why the check failed, if it did
-	CheckedAt string `json:"checked_at"` // RFC3339 of the last check
+	Installed string `json:"installed"` // e.g. "2026.08.19"; empty if the binary did not run
+	Latest    string `json:"latest"`    // newest published release, "" when the check failed
+	AgeDays   int    `json:"age_days"`  // days since the installed release date
+	Stale     bool   `json:"stale"`     // a newer release exists, or no check + older than StaleAfter
+	Error     string `json:"error"`     // why the check failed, if it did
+	// Managed is true when the server keeps the binary updated itself; a stale
+	// one is then waiting on the next daily attempt, not on the operator.
+	Managed     bool   `json:"managed"`
+	UpdateError string `json:"update_error"` // why the last update attempt failed, if it did
+	CheckedAt   string `json:"checked_at"`   // RFC3339 of the last check
 }
 
 // Advice is the one-line operator instruction for a stale binary, or "".
 func (i Info) Advice() string {
 	if !i.Stale {
 		return ""
+	}
+	if i.Managed {
+		if i.UpdateError != "" {
+			return fmt.Sprintf("yt-dlp %s is out of date (latest %s) — auto-update failed: %s", i.Installed, i.Latest, i.UpdateError)
+		}
+		return fmt.Sprintf("yt-dlp %s is out of date (latest %s) — auto-update installs it within a day", i.Installed, i.Latest)
 	}
 	if i.Latest != "" && i.Installed != "" {
 		return fmt.Sprintf("yt-dlp %s is out of date (latest %s) — run `yt-dlp -U`", i.Installed, i.Latest)
@@ -63,18 +66,15 @@ func (i Info) Advice() string {
 // Results are cached: the binary is on disk and the release list is remote, so
 // re-asking on every render would be a subprocess plus an API call per paint.
 type Checker struct {
-	bin string
+	tool *Tool
 
 	mu     sync.Mutex
 	last   Info
 	lastAt time.Time
 }
 
-func NewChecker(bin string) *Checker {
-	if bin == "" {
-		bin = "yt-dlp"
-	}
-	return &Checker{bin: bin}
+func NewChecker(tool *Tool) *Checker {
+	return &Checker{tool: tool}
 }
 
 // Get returns the cached Info, refreshing it when older than checkTTL.
@@ -101,21 +101,20 @@ func (c *Checker) check(ctx context.Context) Info {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, c.bin, "--version").Output()
+	info.Managed, info.UpdateError = c.tool.opts.AutoUpdate, c.tool.updateError()
+	installed, err := c.tool.Version(ctx)
 	if err != nil {
-		info.Error = fmt.Sprintf("yt-dlp --version failed: %v", err)
+		info.Error = err.Error()
 		return info
 	}
-	// First line only: yt-dlp prints one, but a wrapper script that prints a
-	// banner would otherwise make the whole blob the "version".
-	info.Installed = strings.TrimSpace(strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0])
+	info.Installed = installed
 
 	released, ok := releaseDate(info.Installed)
 	if ok {
 		info.AgeDays = int(time.Since(released).Hours() / 24)
 	}
 
-	latest, err := latestRelease(ctx)
+	latest, err := fetchRelease(ctx, c.tool.releaseURL())
 	if err != nil {
 		// No release list: fall back to age. Being offline must not turn a
 		// current binary into a reported problem, but a year-old one still is.
@@ -123,8 +122,10 @@ func (c *Checker) check(ctx context.Context) Info {
 		info.Stale = ok && time.Since(released) > StaleAfter
 		return info
 	}
-	info.Latest = latest
-	info.Stale = latest != info.Installed
+	info.Latest = latest.Tag
+	// A release still in its cooldown is deliberately not installed yet.
+	cooling := info.Managed && time.Since(latest.PublishedAt) < Cooldown
+	info.Stale = latest.Tag != info.Installed && !cooling
 	return info
 }
 
@@ -139,30 +140,4 @@ func releaseDate(version string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return t, true
-}
-
-func latestRelease(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releasesURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
-	if err != nil {
-		return "", fmt.Errorf("release check unreachable: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("release check http %d", resp.StatusCode)
-	}
-	var body struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body); err != nil {
-		return "", fmt.Errorf("decode release: %w", err)
-	}
-	if body.TagName == "" {
-		return "", fmt.Errorf("release check returned no tag")
-	}
-	return body.TagName, nil
 }

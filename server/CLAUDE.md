@@ -31,7 +31,7 @@ internal/
   transcript/           vtt.go — WebVTT → sentences
   ctxmenu/              selection context-menu prefs
   export/               vault mirror
-  ytdlp/                binary staleness checker
+  ytdlp/                THE door to yt-dlp: tool.go (Command) · sandbox_linux.go · update.go · version.go (staleness) · runlog.go
   worker/               youtube.go · pdf.go · pdffig.go · pdfrender.go
 ```
 
@@ -72,7 +72,7 @@ Non-additive (relax NOT NULL, change type) → SQLite table rebuild: create `_ne
 
 Data migrations needing engine code do NOT go in `migrate()` (import cycle: the catalog lives in `pipeline`, which imports `store`). They run in `main.go` after `store.Open`, guarded by a `server_settings` key — see `pipeline.BackfillStepPrompts`.
 
-`server_settings` keys in use: `passphrase_hash`, `ytdlp_proxy_last_ok`, `ytdlp_last_run`, `llm_provider_health`, `pipeline_step_prompts_backfilled`, `auto_archive_enabled`, `transcripts_reparsed_rollup`, `language_prefs`, `context_menu`.
+`server_settings` keys in use: `passphrase_hash`, `ytdlp_proxy_last_ok`, `ytdlp_last_run`, `ytdlp_update`, `llm_provider_health`, `pipeline_step_prompts_backfilled`, `auto_archive_enabled`, `transcripts_reparsed_rollup`, `language_prefs`, `context_menu`.
 
 ## Job enqueue is idempotent (`POST /api/v1/jobs`)
 
@@ -268,6 +268,19 @@ The two ways video ingest dies have the same symptom and opposite fixes. YouTube
 - **Its message names the versions and says "not a proxy problem"** — when the version check says stale, or when it was seen on two egresses. With only one egress tried it says neither. Never assert staleness when the version check says current.
 - **`Checker.Get` is cached 6h** against the GitHub release list. Offline it falls back to age (`StaleAfter` 30d): being unable to check must never turn a current binary into a reported problem, but a year-old one still is. Equal-to-latest is current however old — yt-dlp going quiet is not the operator's problem.
 - Served in `GET /api/v1/ytdlp/status` as `ytdlp`, beside the proxies; raises the app's alert dot.
+
+### yt-dlp is sandboxed and self-updating (`ytdlp.Tool`)
+
+`Tool.Command(ctx, args…)` is the ONLY way to run yt-dlp. The worker never sees the sandbox or the updater.
+
+- **Sandbox = self re-exec.** Go cannot run code between fork and exec, so the command is `/proc/self/exe ytdlp-sandbox --rw … --ro … -- <yt-dlp> args`; that hidden subcommand (`SandboxMain`) applies Landlock + seccomp to its own thread and `exec`s. `/proc/self/exe`, not `os.Executable()` — after a rebuild the latter reads `… (deleted)`.
+- **Landlock alone is not enough on this kernel (6.8).** It does not see unix sockets, and the systemd user bus (`/run/user/<uid>/bus`) runs any command for the same uid. The seccomp filter denies `socket(AF_UNIX)`, io_uring (opens sockets behind seccomp) and the x32 syscall range.
+- **The environment is built from nothing** — the unit's `EnvironmentFile` puts the LLM keys in the server's env. `HOME`/`XDG_*`/`TMPDIR` point into `<data_dir>/ytdlp/home`.
+- **Writable: `<cache>/media`, the scratch home, the cookies file.** A new yt-dlp output location needs a rule in `Tool.command`, or the run fails with `Permission denied`.
+- **Update is checked on invocation, at most once a day**, attempt time persisted (`ytdlp_update`) BEFORE any network I/O. A failed update never fails the job; the previous binary runs. Gates, in order: 3-day cooldown → `SHA2-256SUMS` signed by the pinned key (`release-key.asc`, fingerprint asserted by `TestPinnedReleaseKey`) → SHA-256 of the download → `--version` equals the tag, run in the sandbox.
+- **Managed binaries are versioned files** (`<data_dir>/ytdlp/bin/yt-dlp-<version>`), never replaced in place: a zipapp swapped under a running download breaks its lazy imports. The previous version is kept one cycle.
+- `[ytdlp] path` runs only until the first managed copy exists (or always with `auto_update = false`). `Checker` reads the same `Tool`, and a release still in its cooldown is not "stale".
+- Tests re-exec the TEST binary as the sandbox (`TestMain` in `sandbox_test.go`). `ytdlp.New(Options{Path: …})` with zero options = plain exec, no update — what the worker tests use.
 
 ## Scraper paywall auth (per-domain login)
 

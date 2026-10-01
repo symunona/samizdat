@@ -105,6 +105,7 @@ type ytMediaMetadata struct {
 // cookie jar, and the residential egress pool it rotates through.
 type ytdlpEnv struct {
 	cfg     config.YTDLPSection
+	tool    *ytdlp.Tool
 	pool    *proxypool.Pool
 	version *ytdlp.Checker
 	runs    *ytdlp.RunLog
@@ -118,13 +119,6 @@ func (y ytdlpEnv) versionInfo(ctx context.Context) ytdlp.Info {
 		return ytdlp.Info{}
 	}
 	return y.version.Get(ctx)
-}
-
-func (y ytdlpEnv) bin() string {
-	if y.cfg.Path != "" {
-		return y.cfg.Path
-	}
-	return "yt-dlp"
 }
 
 // ytdlpRun is one yt-dlp invocation: args WITHOUT --proxy/--cookies/URL, which
@@ -193,7 +187,7 @@ func (r ytdlpRun) walk(ctx context.Context, yt ytdlpEnv) ([]byte, string, []stri
 			label = proxypool.Label(px)
 		}
 		logScraper.Printf("yt-dlp %s %s (proxy=%s)", r.what, r.url, label)
-		cmd := exec.CommandContext(ctx, yt.bin(), args...)
+		cmd := yt.tool.Command(ctx, args...)
 		var out []byte
 		var err error
 		if r.stdoutOnly {

@@ -133,9 +133,12 @@ exactly like an IP ban. It is not, and swapping nodes cannot fix it.
 - The pool **does not rotate** on it. Retrying a signature failure across seven
   nodes costs seven waits for one answer.
 
-Fix: `yt-dlp -U` on the server, then restart (`just restart`). If the binary is
-already current, the extractor fix has not shipped yet — cookies (Option B) are
-the workaround.
+Fix: nothing, normally — the server keeps its own verified copy up to date (see
+"Updates and sandbox" below) and installs a new release within a day of its
+cooldown ending. If the binary is already current, the extractor fix has not
+shipped to that channel yet — `channel = "nightly"` gets it first; cookies
+(Option B) are the other workaround. Only with `auto_update = false` is it the
+operator's job: `yt-dlp -U` on the server.
 
 ### Option B — cookies (fallback / auth)
 
@@ -162,7 +165,31 @@ proxies = [                          # ordered pool; first healthy entry carries
 ]
 proxy   = "socks5h://100.x.y.z:1080" # legacy single-valued key; appended to `proxies`
 cookies = ""                         # optional Netscape cookies.txt path
+auto_update = true                   # keep a verified copy in <data_dir>/ytdlp; `path` runs until it exists
+channel     = "stable"               # or "nightly" — YouTube fixes land there first
+sandbox     = true                   # confine every run (Linux: Landlock + seccomp)
 ```
+
+### Updates and sandbox
+
+yt-dlp is third-party code that has to change every few weeks, and it runs as
+the server's user. Two guards, both on by default:
+
+- **Sandbox.** Every run is confined: system directories read-only, `<cache_dir>/media`
+  and a private scratch home (`<data_dir>/ytdlp/home`) read-write, nothing else —
+  not your home directory, not the vault, not `.env`. The environment is rebuilt
+  from scratch, so no API key is inherited. Unix sockets and io_uring are
+  blocked. Network is **not** restricted: yt-dlp needs it.
+- **Verified updates.** Before a run, if the last update attempt is more than a
+  day old, the server checks the channel's latest release. It is installed only
+  when it has been public for 3 days, its `SHA2-256SUMS` is signed by the
+  yt-dlp release key pinned in the server binary, the download matches, and the
+  new binary reports the right version inside the sandbox. Anything else keeps
+  the current binary and shows the reason in the status card. `yt-dlp -U` is
+  never used.
+
+A JS runtime (`deno`) installed under your home directory is invisible inside
+the sandbox; install it system-wide (`/usr/local/bin`) if YouTube needs it.
 
 After editing config, restart the server (`just dev`).
 

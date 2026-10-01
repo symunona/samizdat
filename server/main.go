@@ -15,6 +15,7 @@ import (
 	"github.com/symunona/samizdat/server/internal/pipeline"
 	"github.com/symunona/samizdat/server/internal/store"
 	"github.com/symunona/samizdat/server/internal/worker"
+	"github.com/symunona/samizdat/server/internal/ytdlp"
 )
 
 var logServer = logger.New("server")
@@ -81,6 +82,18 @@ var configDBPathCmd = &cobra.Command{
 	},
 }
 
+// sandboxCmd is how the server confines yt-dlp: it runs itself as this command,
+// which locks itself down and then becomes yt-dlp. Never called by hand.
+var sandboxCmd = &cobra.Command{
+	Use:                ytdlp.SandboxCommand,
+	Hidden:             true,
+	DisableFlagParsing: true,
+	SilenceUsage:       true,
+	RunE: func(_ *cobra.Command, args []string) error {
+		return ytdlp.SandboxMain(args)
+	},
+}
+
 func init() {
 	defaultCfg, _ := cfg.DefaultPath()
 	rootCmd.PersistentFlags().StringVar(&flagConfig, "config", defaultCfg, "config file")
@@ -88,7 +101,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagWebDir, "webdir", "", "path to Expo web build")
 	rootCmd.PersistentFlags().StringVar(&flagExtensionZip, "extension-zip", "", "path to built Chrome extension zip (served at /extension/sam-chrome.zip)")
 	configCmd.AddCommand(configAPKPathCmd, configDBPathCmd)
-	rootCmd.AddCommand(serveCmd, configCmd)
+	rootCmd.AddCommand(serveCmd, configCmd, sandboxCmd)
 }
 
 func runServe(_ *cobra.Command, _ []string) error {

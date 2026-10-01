@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/proxypool"
 	"github.com/symunona/samizdat/server/internal/ytdlp"
 )
@@ -158,7 +157,7 @@ func TestExecRotation(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			runs := ytdlp.NewRunLog(nil)
 			yt := ytdlpEnv{
-				cfg:  config.YTDLPSection{Path: fakeYTDLP(t, c.replies)},
+				tool: ytdlp.New(ytdlp.Options{Path: fakeYTDLP(t, c.replies)}),
 				pool: proxypool.New([]string{"socks5h://pa:1080", "socks5h://pb:1080", "socks5h://pc:1080"}, nil),
 				runs: runs,
 			}

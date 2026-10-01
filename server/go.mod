@@ -5,8 +5,11 @@ go 1.26.1
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
+	github.com/ProtonMail/go-crypto v1.0.0
 	github.com/andybalholm/cascadia v1.3.4
+	github.com/gen2brain/go-fitz v1.28.2
 	github.com/google/uuid v1.6.0
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/markusmobius/go-trafilatura v1.12.2
 	github.com/spf13/cobra v1.9.1
 	github.com/yuin/goldmark v1.8.2
@@ -18,9 +21,8 @@ require (
 )
 
 require (
+	github.com/cloudflare/circl v1.3.7 // indirect
 	github.com/ebitengine/purego v0.10.1 // indirect
-	github.com/gen2brain/go-fitz v1.28.2 // indirect
-	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
 )
 
 require (
@@ -56,7 +58,7 @@ require (
 	github.com/wasilibs/wazero-helpers v0.0.0-20240620070341-3dff1577cd52 // indirect
 	github.com/yosssi/gohtml v0.0.0-20201013000340-ee4748c638f4 // indirect
 	golang.org/x/exp v0.0.0-20250408133849-7e4ce0ab07d0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/sys v0.45.0
 	golang.org/x/text v0.37.0 // indirect
 	modernc.org/libc v1.65.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
