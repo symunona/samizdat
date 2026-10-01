@@ -12,6 +12,10 @@ import (
 // ytdlpPercentRe matches a download progress line ("[download]  42.5% of …").
 var ytdlpPercentRe = regexp.MustCompile(`^\[download\]\s+([0-9.]+)%`)
 
+// ytdlpFormatsRe matches the line naming what will be fetched
+// ("[info] abc: Downloading 1 format(s): 136+140"): one stream per "+" term.
+var ytdlpFormatsRe = regexp.MustCompile(`Downloading \d+ format\(s\): (\S+)`)
+
 // ytdlpPostProcessors are the yt-dlp stages that run after the bytes are in:
 // ffmpeg re-encoding or merging, which on a long video is most of the wait.
 var ytdlpPostProcessors = []string{"[ExtractAudio]", "[Merger]", "[VideoConvertor]", "[VideoRemuxer]", "[Fixup"}
@@ -27,7 +31,9 @@ type ytdlpOutput struct {
 	// subs is true while the file being downloaded is a subtitle track: those
 	// print the same percent lines and would run the bar to 100% before the
 	// media starts.
-	subs bool
+	subs  bool
+	part  int // media files started so far
+	parts int // media files announced, 0 until yt-dlp says
 }
 
 func (o *ytdlpOutput) Write(p []byte) (int, error) {
@@ -53,8 +59,17 @@ func (o *ytdlpOutput) take(line string) {
 		return
 	}
 	o.kept.WriteString(line + "\n")
+	if m := ytdlpFormatsRe.FindStringSubmatch(line); m != nil {
+		o.parts = strings.Count(m[1], "+") + 1
+		return
+	}
 	if dest, ok := strings.CutPrefix(line, "[download] Destination: "); ok {
-		o.subs = strings.HasSuffix(dest, ".vtt")
+		if o.subs = strings.HasSuffix(dest, ".vtt"); !o.subs {
+			// A new stream starts its own 0–100%: without the part number the
+			// bar reads as running backwards.
+			o.part++
+			o.rep.Update(func(s *progress.State) { s.Part, s.Parts, s.Percent = o.part, o.parts, 0 })
+		}
 		return
 	}
 	for _, pp := range ytdlpPostProcessors {

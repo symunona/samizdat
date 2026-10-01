@@ -193,6 +193,7 @@ func (r ytdlpRun) walk(ctx context.Context, yt ytdlpEnv) ([]byte, string, []stri
 		rep.Update(func(s *progress.State) {
 			s.Phase, s.Media = r.phase()
 			s.Proxy, s.Tried = label, failed
+			s.Part, s.Parts = 0, 0
 		})
 		cmd := yt.tool.Command(ctx, args...)
 		var out []byte

@@ -179,7 +179,7 @@ async function runLiveProgressUiCheck(browser, token, deviceId) {
     payload: { url: LIVE_DOWNLOAD_URL },
     addedAgoMs: 5 * 60_000,
     progress: {
-      phase: 'download', since: ago(3 * 60_000), media: 'audio', percent: 42.7,
+      phase: 'download', since: ago(3 * 60_000), media: 'audio', percent: 42.7, part: 2, parts: 2,
       proxy: 'pandora', tried: ['fiona'], duration_ms: 9_960_000, title: 'A Very Long Lecture',
     },
   })
@@ -207,7 +207,7 @@ async function runLiveProgressUiCheck(browser, token, deviceId) {
   const { page, errors: pageErrors } = await newConnectedPage(browser, token, deviceId)
   const rows = [
     ['download', '[data-testid="pending-job-eeeeeeee-0000-4000-8000-0000000000a1"]', [
-      'A Very Long Lecture', LIVE_DOWNLOAD_URL, 'Downloading audio 42%',
+      'A Very Long Lecture', LIVE_DOWNLOAD_URL, 'Downloading audio 42% · part 2/2',
       'via pandora (fiona failed)', '2h 46m long', /3m \d+s in this step/, /added 5m \d+s ago/,
     ]],
     ['retry', '[data-testid="pending-job-eeeeeeee-0000-4000-8000-0000000000a2"]', [

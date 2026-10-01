@@ -158,6 +158,17 @@ Replica schema is versioned: `SCHEMA_SQL` is the v1 baseline and is **never edit
 
 Covered by `just e2e` (`runErrorStateUiCheck` + `seedDeadJob`).
 
+## Live state comes from the JOB too (`src/jobProgress.ts`)
+
+Documents polls every `queued` + `running` job (3s while anything is active, 10s idle). A `scrape_url` has no Document yet → pinned row above the list; a job naming a `document_id` (pipeline, images, video) → badge on that Document's card (`activeJobForDocument`). `describeJob(job, now)` is the one place a job becomes text — headline / detail / timing from the server's `progress` JSON, falling back to the job kind against an older server.
+
+- **A `queued` row is three different things**: `attempts > 0` = waiting out a retry (show `last_error` + countdown to `run_after`); carrying a `phase` = the next tick of a chunked run (render it as running); neither = actually queued.
+- **"Added" is `payload.added_at`, else `created_at`.** A pipeline tick is a fresh row every chunk.
+- **The clock is `useNow(active)`** — one 1s tick for the whole list, and none at all when nothing is in flight.
+- A job leaving the list triggers `requestSync` + a failed-jobs refetch, so the new Document / Highlights / error shows without waiting for an interval.
+
+Covered by `just e2e` (`runLiveProgressUiCheck` — per-row text, and that the clock advances).
+
 ## Pipeline step editor (`app/(drawer)/pipelines.tsx`)
 
 A step is `{kind, config}` free-form JSON; `GET /api/v1/pipeline-steps` describes each kind's keys. The editor renders the union of *catalog fields* and *config keys*, so an undescribed key stays visible and editable. Save serializes through `putPipelineSteps` (steps go as a JSON **string** — that is the column).

@@ -195,11 +195,14 @@ func TestClassifyBotBlockNamesTriedProxies(t *testing.T) {
 // printed never reach the classifier — the error is still the last line.
 func TestDownloadReportsProgress(t *testing.T) {
 	script := `#!/bin/sh
+echo '[info] abc: Downloading 1 format(s): 136+140'
 echo '[download] Destination: /m/a.en.vtt'
 echo '[download] 100% of 40.00KiB in 00:00'
-echo '[download] Destination: /m/a.webm'
+echo '[download] Destination: /m/a.f136.mp4'
 printf '[download]  12.5%% of 150.00MiB at 2.00MiB/s ETA 01:05\n'
-printf '[download]  42.5%% of 150.00MiB at 2.00MiB/s ETA 00:40\n'
+printf '[download] 100%% of 150.00MiB in 00:50\n'
+echo '[download] Destination: /m/a.f140.m4a'
+printf '[download]  42.5%% of 15.00MiB at 2.00MiB/s ETA 00:04\n'
 echo '[ExtractAudio] Destination: /m/a.m4a'
 echo 'ERROR: Postprocessing: ffmpeg not found'
 exit 1
@@ -235,7 +238,15 @@ exit 1
 	if last.Phase != progress.PhaseConvert || last.Percent != 0 {
 		t.Fatalf("last state = %+v, want convert with the percent cleared", last)
 	}
-	if len(states) != 2 {
-		t.Fatalf("%d writes, want 2: percent lines inside the throttle window must not each write", len(states))
+	// attempt start, stream 1, stream 2, convert — never one write per percent line.
+	if len(states) != 4 {
+		t.Fatalf("%d writes, want 4: percent lines inside the throttle window must not each write", len(states))
+	}
+	// The subtitle track is not a part, and its 100% is not the media's.
+	if s := states[1]; s.Part != 1 || s.Parts != 2 || s.Percent != 0 {
+		t.Fatalf("first stream = %+v, want part 1/2 at 0%%", s)
+	}
+	if s := states[2]; s.Part != 2 || s.Parts != 2 || s.Percent != 0 {
+		t.Fatalf("second stream = %+v, want part 2/2 with the percent restarted", s)
 	}
 }

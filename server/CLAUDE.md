@@ -81,6 +81,18 @@ Data migrations needing engine code do NOT go in `migrate()` (import cycle: the 
 
 Document dedup by `canonical_url` only stops a duplicate *Document* at run time, not a duplicate *queue row* — this closes extension double-pin, reader re-add and manual retry. **`done` is a deliberate no-op**: re-submitting a scraped URL will not re-scrape. The query reads `json_extract(payload,'$.url')`, so the payload's `url` key must stay stable.
 
+## Live job progress (`internal/progress`, `jobs.progress`)
+
+A running job rewrites one JSON column as it moves: `phase` (`fetch` · `probe` · `download` · `convert` · `llm`), `since`, and whatever that phase knows — egress + tried + percent + part n/m + media length for yt-dlp; step, endpoint, model, try n/m, chunk n/m, fallback for an LLM step. The app reads it off `GET /api/v1/jobs`; there is no progress endpoint.
+
+- **Report through the context, never a parameter.** `worker.run` puts a `progress.Reporter` in ctx; `progress.From(ctx)` is nil-safe, so `/llm/ask`, tests and the CLI report into nothing.
+- **Every write bumps `updated_at`, on purpose.** It is the heartbeat `ResetStuckJobs` reads: a 9-minute download used to be one log line from being requeued while still running. Do not "optimize" the bump away.
+- **`Percent` is throttled (2s), `Update` is not.** yt-dlp prints progress several times a second; a phase change must land at once.
+- **`since` restarts only on a phase change**, and the Reporter is seeded from the row. A chunked step is a new row per tick, so `handleRunPipelineStep` copies the state into the next `InsertJob` — the phase clock survives and a poller never sees the row go blank.
+- **The LLM endpoint comes from `llm.WithAttemptHook`**, fired by the Router BEFORE each endpoint it tries. `Usage` only names the endpoint after the reply, which on a local box is minutes too late. `llm` knows nothing about jobs; `pipeline.llmCall` installs the hook. A chain of one is wrapped (`announced`) so it fires too.
+- **yt-dlp download runs use `--newline`, not `--no-progress`**, and stream through `ytdlpOutput`: percent lines are reported and DROPPED from what the classifier reads (`lastLine` must stay the `ERROR:`), a post-processor line flips to `convert`, a subtitle file's percent is ignored. A video is two streams, each 0–100% — hence `part`/`parts`.
+- `added_at` rides the `run_pipeline` → `run_pipeline_step` payloads (the scrape job's `created_at`): a tick's own `created_at` is seconds old.
+
 ## Sync cursor (`GET /api/v1/sync`)
 
 `updated_at` cursor, `>=` filter, RFC3339 second resolution.

@@ -10,7 +10,9 @@ export type JobProgress = {
   media?: string // audio | video
   proxy?: string // egress label, "direct" when none
   tried?: string[] // egresses that failed before `proxy`
-  percent?: number
+  percent?: number // of the current part
+  part?: number // a video arrives as separate streams, each its own 0–100%
+  parts?: number
   duration_ms?: number // media length, known once probed
   title?: string
   step?: string // pipeline step kind
@@ -74,7 +76,8 @@ function phaseHeadline(p: JobProgress, kind: string): string {
       return 'Reading video info'
     case 'download': {
       const pct = p.percent && p.percent > 0 ? ` ${Math.floor(p.percent)}%` : ''
-      return `Downloading ${p.media || 'media'}${pct}`
+      const part = p.part && p.parts && p.parts > 1 ? ` · part ${p.part}/${p.parts}` : ''
+      return `Downloading ${p.media || 'media'}${pct}${part}`
     }
     case 'convert':
       return `Converting ${p.media || 'media'}`

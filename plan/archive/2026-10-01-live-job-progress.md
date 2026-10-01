@@ -2,7 +2,7 @@
 created: 2026-10-01
 topic: Live processing state on the Documents page
 excerpt: A new resource shows only "Queued" / "Reading…" for minutes. Give every Job a `progress` JSON the worker rewrites as it moves — yt-dlp phase, egress, percent, video duration, then the LLM endpoint, try, chunk and fallback — and render it on Documents with elapsed time.
-status: in progress
+status: shipped 2026-10-01
 ---
 
 # Live job progress
@@ -23,7 +23,7 @@ row — which egress served a download is worth keeping next to `result`.
 
 ```json
 {"phase":"download","since":"2026-10-01T20:01:07Z",
- "media":"audio","proxy":"pandora","tried":["fiona"],"percent":42.5,
+ "media":"audio","proxy":"pandora","tried":["fiona"],"percent":42.5,"part":2,"parts":2,
  "duration_ms":9960000,"title":"…",
  "step":"llm_summarize","provider":"xayah…:11434","model":"qwen3-sum",
  "try":2,"tries":3,"chunk":3,"chunks":12,"fallback":true}

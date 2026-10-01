@@ -27,12 +27,16 @@ type State struct {
 	Since string `json:"since"` // RFC3339, when Phase began
 
 	// yt-dlp
-	Media      string   `json:"media,omitempty"` // audio | video
-	Proxy      string   `json:"proxy,omitempty"` // egress label, "direct" when none
-	Tried      []string `json:"tried,omitempty"` // egresses that failed before Proxy
-	Percent    float64  `json:"percent,omitempty"`
-	DurationMs int64    `json:"duration_ms,omitempty"` // media length, once probed
-	Title      string   `json:"title,omitempty"`
+	Media   string   `json:"media,omitempty"` // audio | video
+	Proxy   string   `json:"proxy,omitempty"` // egress label, "direct" when none
+	Tried   []string `json:"tried,omitempty"` // egresses that failed before Proxy
+	Percent float64  `json:"percent,omitempty"`
+	// Part/Parts: yt-dlp fetches a video as separate streams (video, then
+	// audio), each with its own 0–100%. Percent is of the current Part.
+	Part       int    `json:"part,omitempty"`
+	Parts      int    `json:"parts,omitempty"`
+	DurationMs int64  `json:"duration_ms,omitempty"` // media length, once probed
+	Title      string `json:"title,omitempty"`
 
 	// LLM
 	Step     string `json:"step,omitempty"`     // step kind
