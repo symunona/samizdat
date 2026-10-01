@@ -339,6 +339,24 @@ VALUES ('${q(id)}','${q(kind)}','${q(JSON.stringify(payload))}','dead',${attempt
   console.log('  seeded dead job', id, `(${kind})`)
 }
 
+// Seed a Job that is still in the works: `running` with the live `progress` the
+// worker writes as it goes, or `queued` waiting out a retry. The worker never
+// claims a running row, and `retryInMs` puts a queued one's run_after in the
+// future, so neither is picked up while the test reads the screen. `addedAgoMs`
+// backdates created_at so the elapsed clocks have something to show.
+export function seedActiveJob({ id, kind, payload, status = 'running', attempts = 1, progress = null, lastError = '', retryInMs = 0, addedAgoMs = 0 }) {
+  const iso = ms => new Date(Date.now() + ms).toISOString().replace(/\.\d+Z$/, 'Z')
+  const q = s => s.replace(/'/g, "''")
+  const sql = `
+INSERT OR REPLACE INTO jobs (id,kind,payload,status,attempts,run_after,last_error,result,duration_ms,created_at,updated_at,rev,deleted_at,parent_job_id,progress)
+VALUES ('${q(id)}','${q(kind)}','${q(JSON.stringify(payload))}','${q(status)}',${attempts},'${iso(retryInMs)}','${q(lastError)}','',0,'${iso(-addedAgoMs)}','${iso(0)}',1,NULL,NULL,'${progress ? q(JSON.stringify(progress)) : ''}');
+`
+  const f = '/tmp/samizdat-test/seed-active-job.sql'
+  fs.writeFileSync(f, sql)
+  execSync(`sqlite3 ${TEST_DB} < ${f}`)
+  console.log('  seeded active job', id, `(${kind}, ${status})`)
+}
+
 // Seed a finished Job — the row the worker leaves behind on success. `result` is
 // the job's JSON result (a scrape_url records `{document_id}`), `parentJobId` the
 // job that enqueued it. Together they carry a Document's provenance: a scrape whose

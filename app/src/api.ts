@@ -483,6 +483,7 @@ export type Job = {
   updated_at: string
   deleted_at?: string | null
   parent_job_id: string | null
+  progress?: string // JSON, see jobProgress.ts; absent on an older server
   llm_cost_usd?: number
   llm?: JobLLMUsage[]
   children_count?: number

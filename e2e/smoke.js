@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import { join } from 'node:path'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
-  newConnectedPage, seedVideoDoc, seedFalseParseDoc, seedDeadJob, makeCleanup,
+  newConnectedPage, seedVideoDoc, seedFalseParseDoc, seedDeadJob, seedActiveJob, makeCleanup,
 } from './harness.js'
 
 // A fixed video Document id seeded into the test DB so the video player screen
@@ -29,6 +29,15 @@ const FALSE_PARSE_REASON = 'bot protection'
 const DEAD_PIPELINE_ERROR = 'llm provider unreachable'
 const DEAD_SCRAPE_URL = 'https://arxiv.example.com/pdf/2604.21751'
 const DEAD_SCRAPE_ERROR = 'playwright: Download is starting'
+
+// Jobs still in the works, each frozen mid-flight with the progress the worker
+// would have written: a video download through its second egress, a scrape
+// waiting out a retry, and a chunked summary that fell back — on the seeded
+// video Document, so it badges that card.
+const LIVE_DOWNLOAD_URL = 'https://www.youtube.com/watch?v=liveprogres'
+const LIVE_RETRY_URL = 'https://retry.example.com/article'
+const LIVE_RETRY_ERROR = 'fetch: net::ERR_CONNECTION_RESET'
+const ago = ms => new Date(Date.now() - ms).toISOString()
 
 // Pages to visit: [path, description]
 const PAGES = [
@@ -103,6 +112,9 @@ async function runSmoke() {
   // Error-state UI: flagged Document + dead jobs must be visible in the list.
   errors.push(...await runErrorStateUiCheck(browser, token, deviceId))
 
+  // Live progress: what each in-flight job is doing must be readable in the list.
+  errors.push(...await runLiveProgressUiCheck(browser, token, deviceId))
+
   // API contract checks for the rerun-cascade feature (no LLM / network needed;
   // deep cascade semantics are covered by the Go store/pipeline tests).
   errors.push(...await runJobsApiChecks(token))
@@ -151,6 +163,89 @@ async function runErrorStateUiCheck(browser, token, deviceId) {
     out.push(`[error-state] ${e.message}`)
   }
   out.push(...pageErrors.map(e => `[error-state] ${e}`))
+  await page.close()
+  return out
+}
+
+// runLiveProgressUiCheck asserts the Documents screen says what each in-flight
+// job is doing — per ROW, so a phrase rendered on the wrong job fails. Clocks are
+// matched by pattern: they tick while the test reads them.
+async function runLiveProgressUiCheck(browser, token, deviceId) {
+  const out = []
+  // Seeded here, not with the rest: the clocks below are asserted to the minute.
+  seedActiveJob({
+    id: 'eeeeeeee-0000-4000-8000-0000000000a1',
+    kind: 'scrape_url',
+    payload: { url: LIVE_DOWNLOAD_URL },
+    addedAgoMs: 5 * 60_000,
+    progress: {
+      phase: 'download', since: ago(3 * 60_000), media: 'audio', percent: 42.7,
+      proxy: 'pandora', tried: ['fiona'], duration_ms: 9_960_000, title: 'A Very Long Lecture',
+    },
+  })
+  seedActiveJob({
+    id: 'eeeeeeee-0000-4000-8000-0000000000a2',
+    kind: 'scrape_url',
+    payload: { url: LIVE_RETRY_URL },
+    status: 'queued',
+    attempts: 1,
+    lastError: LIVE_RETRY_ERROR,
+    retryInMs: 30 * 60_000,
+    addedAgoMs: 60_000,
+  })
+  seedActiveJob({
+    id: 'eeeeeeee-0000-4000-8000-0000000000a3',
+    kind: 'run_pipeline_step',
+    payload: { document_id: VIDEO_DOC_ID, pipeline_name: 'Smoke pipeline', added_at: ago(2 * 3600_000 + 5 * 60_000) },
+    progress: {
+      phase: 'llm', since: ago(70_000), step: 'llm_summarize',
+      provider: 'xayah.example.ts.net:11434', model: 'qwen3-sum',
+      try: 2, tries: 3, chunk: 3, chunks: 12, fallback: true,
+    },
+  })
+
+  const { page, errors: pageErrors } = await newConnectedPage(browser, token, deviceId)
+  const rows = [
+    ['download', '[data-testid="pending-job-eeeeeeee-0000-4000-8000-0000000000a1"]', [
+      'A Very Long Lecture', LIVE_DOWNLOAD_URL, 'Downloading audio 42%',
+      'via pandora (fiona failed)', '2h 46m long', /3m \d+s in this step/, /added 5m \d+s ago/,
+    ]],
+    ['retry', '[data-testid="pending-job-eeeeeeee-0000-4000-8000-0000000000a2"]', [
+      LIVE_RETRY_URL, /Retrying in (29|30)m \d+s · attempt 2/, LIVE_RETRY_ERROR, /added 1m \d+s ago/,
+    ]],
+    ['summarize', `[data-testid="doc-activity-${VIDEO_DOC_ID}"]`, [
+      'Summarizing · chunk 3/12', 'xayah.example.ts.net:11434 / qwen3-sum', 'try 2/3', 'fallback',
+      /1m \d+s in this step/, /added 2h 5m ago/,
+    ]],
+  ]
+  const missingIn = async ([, selector, wants]) => {
+    const text = await page.evaluate(sel => document.querySelector(sel)?.innerText ?? null, selector)
+    if (text === null) return ['(row not rendered)']
+    return wants.filter(w => (w instanceof RegExp ? !w.test(text) : !text.includes(w))).map(String)
+  }
+  try {
+    await page.goto(`${BASE_URL}/documents`, { waitUntil: 'networkidle2', timeout: 15000 })
+    let missing = []
+    for (let i = 0; i < 20; i++) {
+      await sleep(500)
+      missing = await Promise.all(rows.map(missingIn))
+      if (missing.every(m => m.length === 0)) break
+    }
+    rows.forEach(([label], i) => {
+      if (missing[i].length) out.push(`[live-${label}] not visible on /documents: ${missing[i].join(' | ')}`)
+      else console.log(`  PASS [live-${label}] progress visible on Documents list`)
+    })
+    // The clock must actually run: the same row read 2s apart shows a later time.
+    const clock = () => page.evaluate(sel => document.querySelector(sel)?.innerText.match(/3m (\d+)s in this step/)?.[1], rows[0][1])
+    const before = Number(await clock())
+    await sleep(2100)
+    const after = Number(await clock())
+    if (!(after > before)) out.push(`[live-clock] elapsed did not advance (${before}s → ${after}s)`)
+    else console.log('  PASS [live-clock] elapsed time ticks')
+  } catch (e) {
+    out.push(`[live-progress] ${e.message}`)
+  }
+  out.push(...pageErrors.map(e => `[live-progress] ${e}`))
   await page.close()
   return out
 }

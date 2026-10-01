@@ -19,6 +19,7 @@ import { useConnection } from '../../src/ConnectionContext'
 import { useToast } from '../../src/ToastContext'
 import { useFailedJobs, documentErrorText, documentErrorAt, orphanScrapeFailures } from '../../src/failedJobs'
 import { formatWhen } from '../../src/relativeTime'
+import { activeJobForDocument, describeJob, jobDocumentId, parseProgress, useNow } from '../../src/jobProgress'
 import type { FailedJob } from '../../src/failedJobs'
 import { useDocuments, useSyncStatus } from '../../src/db'
 import { useShareStore } from '../../src/store/shareStore'
@@ -180,36 +181,58 @@ export default function DocumentsScreen() {
     return () => clearTimeout(t)
   }, [pendingShareUrl, consumeShare])
 
-  // Queued / running scrape jobs, shown as pinned rows above the document list.
-  const [pendingJobs, setPendingJobs] = useState<Job[]>([])
+  const refetchFailedRef = useRef<() => unknown>(() => {})
+
+  // Every queued / running job. Two shapes surface here: a scrape has no
+  // Document yet, so it gets a pinned row above the list; anything that names a
+  // Document (pipeline, images, video) shows on that Document's card.
+  const [activeJobs, setActiveJobs] = useState<Job[]>([])
   const showPending = !pipelineIdParam && !sourceFilter && !search.trim()
+  const pendingJobs = useMemo(() => activeJobs.filter((j) => j.kind === 'scrape_url'), [activeJobs])
+  const documentJobs = useMemo(() => activeJobs.filter((j) => !!jobDocumentId(j)), [activeJobs])
+  const watching = pendingJobs.length + documentJobs.length > 0
+  const now = useNow(watching)
+
+  // Latest list for the poll to diff against, without re-creating the poll.
+  const activeJobsRef = useRef(activeJobs)
+  activeJobsRef.current = activeJobs
 
   const loadPendingJobs = useCallback(async () => {
     if (!activeUrl || !token) return
     try {
       const [running, queued] = await Promise.all([
-        fetchJobs(activeUrl, token, { status: 'running', kind: 'scrape_url' }),
-        fetchJobs(activeUrl, token, { status: 'queued', kind: 'scrape_url' }),
+        fetchJobs(activeUrl, token, { status: 'running' }),
+        fetchJobs(activeUrl, token, { status: 'queued' }),
       ])
-      setPendingJobs([...running, ...queued])
+      const next = [...running, ...queued]
+      // A job that left the list finished or died: pull what it produced (a new
+      // Document, its Highlights) now rather than on the next sync interval, and
+      // re-read the failures in case it is one.
+      const still = new Set(next.map((j) => j.id))
+      if (activeJobsRef.current.some((j) => !still.has(j.id))) {
+        requestSync(activeUrl, token)
+        refetchFailedRef.current()
+      }
+      setActiveJobs(next)
     } catch {
       // transient — keep current state, next poll retries
     }
   }, [activeUrl, token])
 
   // Cheap background poll so externally-added jobs (e.g. from the clipper)
-  // surface without a reload: slow when idle, faster while jobs are pending.
+  // surface without a reload: slow when idle, faster while something is moving.
   useEffect(() => {
-    if (status !== 'connected' || !showPending) return
+    if (status !== 'connected') return
     loadPendingJobs()
-    const id = setInterval(loadPendingJobs, pendingJobs.length > 0 ? 3000 : 10000)
+    const id = setInterval(loadPendingJobs, watching ? 3000 : 10000)
     return () => clearInterval(id)
-  }, [status, showPending, pendingJobs.length, loadPendingJobs])
+  }, [status, watching, loadPendingJobs])
 
   // Permanently-failed (dead) jobs. Two shapes surface here: a scrape that never
   // produced a Document gets its own row (nothing else in the list represents
   // it), and a failure that belongs to a Document badges that Document's card.
   const { failed, refetch: refetchFailed } = useFailedJobs()
+  refetchFailedRef.current = refetchFailed
   const failedScrapes = useMemo(
     () => (showPending ? orphanScrapeFailures(failed, documents) : []),
     [failed, documents, showPending],
@@ -261,7 +284,7 @@ export default function DocumentsScreen() {
         status: 'queued', attempts: 0, run_after: now, last_error: '', result: '',
         duration_ms: 0, created_at: now, updated_at: now, parent_job_id: null,
       }
-      setPendingJobs((prev) => [optimistic, ...prev.filter((j) => j.id !== job_id)])
+      setActiveJobs((prev) => [optimistic, ...prev.filter((j) => j.id !== job_id)])
       loadPendingJobs()
     } catch (e: unknown) {
       setSubmitError(e instanceof Error ? e.message : 'Failed to queue job')
@@ -285,12 +308,17 @@ export default function DocumentsScreen() {
       <View style={s.pendingSection}>
         {pendingJobs.map((job) => {
           const url = jobUrl(job)
+          const title = parseProgress(job).title
+          const act = describeJob(job, now)
           return (
-            <View key={job.id} style={s.pendingRow}>
+            <View key={job.id} style={s.pendingRow} testID={`pending-job-${job.id}`}>
               <ActivityIndicator size="small" color={theme.colors.accent} />
               <View style={s.pendingBody}>
+                {title ? <Text style={s.pendingTitle} numberOfLines={1}>{title}</Text> : null}
                 <Text style={s.pendingUrl} numberOfLines={1}>{url || '(queued URL)'}</Text>
-                <Text style={s.pendingLabel}>{job.status === 'running' ? 'Reading…' : 'Queued'}</Text>
+                <Text style={s.pendingLabel}>{act.headline}</Text>
+                {act.detail ? <Text style={s.pendingDetail} numberOfLines={2}>{act.detail}</Text> : null}
+                {act.timing ? <Text style={s.pendingTiming}>{act.timing}</Text> : null}
               </View>
             </View>
           )
@@ -342,6 +370,8 @@ export default function DocumentsScreen() {
     const pending = pendingDeletes[item.id]
     const errorText = documentErrorText(item, failed)
     const errorAt = documentErrorAt(item, failed)
+    const activeJob = activeJobForDocument(item.id, documentJobs)
+    const act = activeJob ? describeJob(activeJob, now) : null
 
     if (pending) {
       return (
@@ -368,6 +398,14 @@ export default function DocumentsScreen() {
           <Text style={s.itemTitle} numberOfLines={2}>{displayTitle}</Text>
           <Text style={s.itemUrl} numberOfLines={1}>{item.canonical_url}</Text>
           <Text style={s.itemDate}>Fetched {formatDate(item.fetched_at)}</Text>
+          {act ? (
+            <View style={s.activityBadge} testID={`doc-activity-${item.id}`}>
+              <Text style={s.activityText} numberOfLines={2}>
+                ⟳ {act.headline}{act.detail ? ` · ${act.detail}` : ''}
+              </Text>
+              {act.timing ? <Text style={s.pendingTiming}>{act.timing}</Text> : null}
+            </View>
+          ) : null}
           {errorText ? (
             <View style={s.errorBadge}>
               {errorAt ? <Text style={s.errorBadgeWhen}>⚠ {formatWhen(errorAt)}</Text> : null}
@@ -686,7 +724,21 @@ function buildStyles(t: Theme) {
     },
     pendingBody: { flex: 1, minWidth: 0 },
     pendingUrl: { color: t.colors.text, fontSize: 12, fontFamily: 'monospace' },
-    pendingLabel: { color: t.colors.muted, fontSize: 11, marginTop: 1 },
+    pendingTitle: { color: t.colors.text, fontSize: 13, fontWeight: '600', marginBottom: 1 },
+    pendingLabel: { color: t.colors.accent, fontSize: 11, fontWeight: '700', marginTop: 1 },
+    pendingDetail: { color: t.colors.muted, fontSize: 11, marginTop: 1 },
+    pendingTiming: { color: t.colors.placeholder, fontSize: 10, marginTop: 1 },
+    activityBadge: {
+      alignSelf: 'flex-start',
+      marginTop: 4,
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      borderRadius: t.radius.sm,
+      backgroundColor: t.colors.accent + '14',
+      borderWidth: 1,
+      borderColor: t.colors.accent + '55',
+    },
+    activityText: { color: t.colors.accent, fontSize: 11, fontWeight: '700' },
     failedRow: {
       flexDirection: 'row',
       alignItems: 'center',
