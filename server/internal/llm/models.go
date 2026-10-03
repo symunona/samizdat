@@ -22,10 +22,13 @@ type Model struct {
 
 // ModelGroup is one provider's models, as the picker renders them.
 type ModelGroup struct {
-	ProviderID    string  `json:"provider_id"`
-	ProviderLabel string  `json:"provider_label"`
-	Role          string  `json:"role"`
-	Models        []Model `json:"models"`
+	ProviderID    string `json:"provider_id"`
+	ProviderLabel string `json:"provider_label"`
+	Role          string `json:"role"`
+	// DefaultModel is what an unset model resolves to on this provider — the
+	// picker marks it, so "Provider default" names a model instead of a guess.
+	DefaultModel string  `json:"default_model,omitempty"`
+	Models       []Model `json:"models"`
 	// Error is set instead of failing the whole call: one unreachable box must not
 	// empty the picker for every other provider.
 	Error string `json:"error,omitempty"`
@@ -62,7 +65,7 @@ func (r *Router) Models(ctx context.Context, refresh bool) []ModelGroup {
 	done := make(chan struct{}, len(r.providers))
 	for i, p := range r.providers {
 		go func(i int, p *Provider) {
-			g := ModelGroup{ProviderID: p.ID, ProviderLabel: p.Label, Role: p.Role, Models: []Model{}}
+			g := ModelGroup{ProviderID: p.ID, ProviderLabel: p.Label, Role: p.Role, DefaultModel: p.Model, Models: []Model{}}
 			models, err := p.listModels(ctx)
 			if err != nil {
 				g.Error = truncErr(err.Error())

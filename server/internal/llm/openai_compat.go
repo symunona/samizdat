@@ -11,14 +11,24 @@ import (
 	"time"
 )
 
-const llmRequestTimeout = 90 * time.Second
+// RequestTimeout bounds one completion, for both clients. A 12B model running
+// mostly on CPU writes ~3 tok/s, so a normal local call takes minutes; 90s failed
+// every one of them. It must stay under worker.stuckJobAge: a call outliving it
+// gets its job requeued while still running — a second worker, double spend,
+// duplicate Highlights (TestStuckJobAgeOutlivesLLMCall).
+const RequestTimeout = 9 * time.Minute
 
-var llmHTTPClient = &http.Client{Timeout: llmRequestTimeout}
+var llmHTTPClient = &http.Client{Timeout: RequestTimeout}
 
 type openAICompatClient struct {
 	baseURL      string
 	apiKey       string
 	defaultModel string
+	// noThinking asks a local box not to reason before answering. Ollama thinks by
+	// default on a model that can (gemma4, qwen3.5): ~250 hidden tokens even for
+	// one sentence, which at a CPU-bound 3 tok/s turned a 2-minute summary into 9.
+	// Local only — OpenAI rejects reasoning_effort on a non-reasoning model.
+	noThinking bool
 }
 
 func (c *openAICompatClient) Complete(ctx context.Context, p Params, messages []Message) (reply string, u Usage, err error) {
@@ -44,6 +54,7 @@ func (c *openAICompatClient) Complete(ctx context.Context, p Params, messages []
 		Model       string   `json:"model"`
 		MaxTokens   int      `json:"max_tokens,omitempty"`
 		Temperature *float64 `json:"temperature,omitempty"`
+		Reasoning   string   `json:"reasoning_effort,omitempty"`
 		Messages    []oaiMsg `json:"messages"`
 	}
 
@@ -51,7 +62,11 @@ func (c *openAICompatClient) Complete(ctx context.Context, p Params, messages []
 	for i, m := range messages {
 		msgs[i] = oaiMsg(m)
 	}
-	body, _ := json.Marshal(reqBody{Model: model, MaxTokens: max(p.MaxTokens, 0), Temperature: p.Temp, Messages: msgs})
+	rb := reqBody{Model: model, MaxTokens: max(p.MaxTokens, 0), Temperature: p.Temp, Messages: msgs}
+	if c.noThinking {
+		rb.Reasoning = "none"
+	}
+	body, _ := json.Marshal(rb)
 
 	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))

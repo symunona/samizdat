@@ -121,3 +121,35 @@ func TestFallbackChainResolvesPerProviderModels(t *testing.T) {
 		t.Fatalf("cloud leg asked for %q, want claude-haiku-4-5-20251001", stub.gotModel)
 	}
 }
+
+// A local box is asked not to think; a cloud openai_compat endpoint is never sent
+// the knob (OpenAI rejects reasoning_effort on a non-reasoning model).
+func TestReasoningOffOnlyForLocal(t *testing.T) {
+	clearLLMEnv(t)
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		got, _ = body["reasoning_effort"].(string)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	local := newProvider(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL, DefaultModel: "m"}, "config", "primary").client()
+	if _, _, err := local.Complete(context.Background(), Params{}, []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got != "none" {
+		t.Fatalf("local box: reasoning_effort = %q, want none", got)
+	}
+
+	got = ""
+	cloud := newProvider(config.LLMSection{Provider: "openai_compat", BaseURL: "https://openrouter.ai/api/v1", APIKey: "k", DefaultModel: "m"}, "config", "primary").client().(*openAICompatClient)
+	cloud.baseURL = srv.URL
+	if _, _, err := cloud.Complete(context.Background(), Params{}, []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("cloud endpoint was sent reasoning_effort %q", got)
+	}
+}

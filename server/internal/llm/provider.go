@@ -184,7 +184,7 @@ func (p *Provider) client() Client {
 	if p.Transport == transportAnthropic {
 		return &anthropicClient{apiKey: p.apiKey, defaultModel: p.Model, baseURL: anthropicBaseURL}
 	}
-	return &openAICompatClient{baseURL: p.BaseURL, apiKey: p.apiKey, defaultModel: p.Model}
+	return &openAICompatClient{baseURL: p.BaseURL, apiKey: p.apiKey, defaultModel: p.Model, noThinking: p.Local()}
 }
 
 // HasKey reports whether a config section resolves to credentials — including the

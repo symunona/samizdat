@@ -179,6 +179,9 @@ func TestModelsGroupPerProvider(t *testing.T) {
 	if len(found.Models) != 2 || found.Models[0].ID != "gemma3:4b" {
 		t.Fatalf("want 2 models sorted by id, got %+v", found.Models)
 	}
+	if found.DefaultModel != "qwen3:4b" {
+		t.Fatalf("group must name the provider's default_model, got %q", found.DefaultModel)
+	}
 	// A dead provider contributes an error, never an empty picker for everyone else.
 	for _, g := range groups {
 		if g.ProviderID == "localhost:11434" && g.Error == "" && len(g.Models) == 0 {

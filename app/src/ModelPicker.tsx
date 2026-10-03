@@ -29,7 +29,7 @@ type Props = {
   onClose: () => void
 }
 
-type Section = { title: string; providerId: string; note: string; data: LLMModel[] }
+type Section = { title: string; providerId: string; note: string; defaultModel: string; data: LLMModel[] }
 
 export default function ModelPicker({ visible, value, provider, onSelect, onClose }: Props) {
   const { theme } = useUnistyles()
@@ -74,12 +74,17 @@ export default function ModelPicker({ visible, value, provider, onSelect, onClos
         title: g.provider_label,
         providerId: g.provider_id,
         note: g.error ? g.error : `${g.role} · ${g.models.length}`,
+        defaultModel: g.default_model ?? '',
         data: models,
       }
     }).filter(sec => sec.data.length > 0 || !q)
   }, [groups, query])
 
   const total = sections.reduce((n, sec) => n + sec.data.length, 0)
+
+  // What "Provider default" resolves to: the pinned provider's default_model, or
+  // the primary's when nothing is pinned (an empty provider walks the chain).
+  const resolvedDefault = (groups ?? []).find(g => provider ? g.provider_id === provider : g.role === 'primary')?.default_model
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose} onShow={handleShow}>
@@ -113,7 +118,9 @@ export default function ModelPicker({ visible, value, provider, onSelect, onClos
             onPress={() => onSelect({ model: '', provider })}
             accessibilityLabel="use provider default model"
           >
-            <Text style={[s.modelId, !value && s.modelIdSelected]}>Provider default</Text>
+            <Text style={[s.modelId, !value && s.modelIdSelected]} numberOfLines={1}>
+              Provider default{resolvedDefault ? ` · ${resolvedDefault}` : ''}
+            </Text>
             {!value ? <Text style={s.check}>✓</Text> : null}
           </Pressable>
 
@@ -148,6 +155,9 @@ export default function ModelPicker({ visible, value, provider, onSelect, onClos
                   >
                     <View style={s.rowText}>
                       <Text style={[s.modelId, selected && s.modelIdSelected]} numberOfLines={1}>{item.id}</Text>
+                      {item.id === section.defaultModel ? (
+                        <Text style={s.defaultBadge} accessibilityLabel="default model">default</Text>
+                      ) : null}
                       {item.context_length ? (
                         <Text style={s.modelMeta}>{Math.round(item.context_length / 1000)}k ctx</Text>
                       ) : null}
@@ -215,6 +225,16 @@ function buildStyles(t: Theme) {
     modelId: { flex: 1, fontSize: 13, color: t.colors.text },
     modelIdSelected: { fontWeight: '700', color: t.colors.accent },
     modelMeta: { fontSize: 11, color: t.colors.muted },
+    defaultBadge: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: t.colors.accent,
+      borderWidth: 1,
+      borderColor: t.colors.accent,
+      borderRadius: 4,
+      paddingHorizontal: 4,
+      textTransform: 'uppercase',
+    },
     check: { fontSize: 13, color: t.colors.accent, fontWeight: '700' },
     loading: { alignSelf: 'flex-start', marginVertical: t.spacing.md },
     emptyText: { fontSize: 13, color: t.colors.muted, paddingVertical: t.spacing.md },

@@ -13,6 +13,8 @@ export interface LLMModelGroup {
   provider_id: string
   provider_label: string
   role: 'primary' | 'fallback' | 'available'
+  // What an unset model resolves to on this provider.
+  default_model?: string
   models: LLMModel[]
   // An unreachable provider contributes an error, never an empty picker for the
   // others.
