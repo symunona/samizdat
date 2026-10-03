@@ -35,13 +35,13 @@ func llmCommonFields(promptDefault string) []FieldSpec {
 	}
 }
 
-// highlightProvenance is what a Highlight's metadata JSON carries: how this
-// machine-written body came to be. Every field is the value that ACTUALLY served
-// the call, not the one the step asked for — an unset model resolves inside the
-// client and a transport fallback may swap the provider entirely. Omitted fields
-// mean "the endpoint applied its own"; inventing a provider's private default
-// would read as a setting the user chose.
-type highlightProvenance struct {
+// Provenance is what a Highlight's metadata JSON carries (and a DigestIssue's,
+// per question): how this machine-written text came to be. Every field is the
+// value that ACTUALLY served the call, not the one the step asked for — an unset
+// model resolves inside the client and a transport fallback may swap the provider
+// entirely. Omitted fields mean "the endpoint applied its own"; inventing a
+// provider's private default would read as a setting the user chose.
+type Provenance struct {
 	Model     string   `json:"model"`
 	Provider  string   `json:"provider,omitempty"`
 	Step      string   `json:"step,omitempty"`
@@ -72,20 +72,23 @@ type highlightProvenance struct {
 	OutputTruncated bool `json:"output_truncated,omitempty"`
 }
 
-// llmCall is the one path from a step to the LLM: it routes the call, writes the
-// llm_usages ledger row, and accumulates what was spent. Steps differ in how they
-// parse a reply, never in how they call or account for it — and a chunked run's
-// twelve calls are metered exactly the way a single call is.
-//
-// Steps do not call it directly: they go through llmStepCallLong, which decides
-// how many calls the document needs. See llm_long.go.
-func llmCall(ctx context.Context, q *store.Queries, run store.PipelineRun,
-	kind string, c llmStepConfig, userMsg string, router *llm.Router, acc *usageAcc,
-) (string, error) {
-	route := llm.Route{
+// route is where and how this config asks for its call to be made.
+func (c llmStepConfig) route() llm.Route {
+	return llm.Route{
 		Provider: c.Provider,
 		Params:   llm.Params{Model: c.Model, MaxTokens: c.MaxTokens, Temp: c.Temp},
 	}
+}
+
+// MeteredComplete is the one path from a Job to the LLM Router: it reports the
+// endpoint as the Router picks it, routes the call, and writes the llm_usages
+// ledger row. The row carries the job from ctx (WithParentJobID) and runID, which
+// is nil for a call that belongs to no PipelineRun (a Digest).
+//
+// kind names the caller in errors and in the job's progress.
+func MeteredComplete(ctx context.Context, q *store.Queries, router *llm.Router,
+	kind string, route llm.Route, runID *string, userMsg string,
+) (string, llm.Usage, error) {
 	// The endpoint is reported as the Router picks it, not after the reply: a
 	// local model can take minutes, and that wait is what the reader is watching.
 	rep := progress.From(ctx)
@@ -98,24 +101,38 @@ func llmCall(ctx context.Context, q *store.Queries, run store.PipelineRun,
 	})
 	reply, usage, err := router.CompleteRoute(ctx, route, []llm.Message{{Role: "user", Content: userMsg}})
 	if err != nil {
-		return "", fmt.Errorf("%s: llm call: %w", kind, err)
+		return "", usage, fmt.Errorf("%s: llm call: %w", kind, err)
 	}
-
-	model := servedModel(usage, c.Model)
 
 	// Recorded regardless of whether the caller ends up using the reply — the
 	// tokens are spent either way.
 	_ = q.InsertLLMUsage(ctx, store.InsertLLMUsageParams{
 		ID:            uuid.NewString(),
 		JobID:         ParentJobIDFromCtx(ctx),
-		PipelineRunID: &run.ID,
+		PipelineRunID: runID,
 		Provider:      usage.Provider,
-		Model:         model,
+		Model:         servedModel(usage, route.Params.Model),
 		InputTokens:   int64(usage.InputTokens),
 		OutputTokens:  int64(usage.OutputTokens),
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 	})
+	return reply, usage, nil
+}
 
+// llmCall is a step's metered call: MeteredComplete against the step's run, with
+// what was spent accumulated. Steps differ in how they parse a reply, never in
+// how they call or account for it — and a chunked run's twelve calls are metered
+// exactly the way a single call is.
+//
+// Steps do not call it directly: they go through llmStepCallLong, which decides
+// how many calls the document needs. See llm_long.go.
+func llmCall(ctx context.Context, q *store.Queries, run store.PipelineRun,
+	kind string, c llmStepConfig, userMsg string, router *llm.Router, acc *usageAcc,
+) (string, error) {
+	reply, usage, err := MeteredComplete(ctx, q, router, kind, c.route(), &run.ID, userMsg)
+	if err != nil {
+		return "", err
+	}
 	acc.add(usage, c)
 	return reply, nil
 }
@@ -169,21 +186,27 @@ func (a *usageAcc) provenance(kind string, stepCfg llmStepConfig) string {
 	if a.chunks > 0 {
 		calls = a.calls
 	}
-	meta, _ := json.Marshal(highlightProvenance{
-		Model:           servedModel(a.last, c.Model),
-		Provider:        servedProvider(a.last, c.Provider),
-		Step:            kind,
-		MaxTokens:       a.last.MaxTokens,
-		Temp:            a.last.Temp,
-		TokensIn:        a.tokensIn,
-		TokensOut:       a.tokensOut,
-		PromptSHA:       promptSHA(c.Prompt),
-		Chunks:          a.chunks,
-		Calls:           calls,
-		Truncated:       a.truncated,
-		OutputTruncated: a.outputTruncated,
-	})
+	p := NewProvenance(kind, c.route(), c.Prompt, a.last)
+	p.TokensIn, p.TokensOut = a.tokensIn, a.tokensOut
+	p.Chunks, p.Calls = a.chunks, calls
+	p.Truncated, p.OutputTruncated = a.truncated, a.outputTruncated
+	meta, _ := json.Marshal(p)
 	return string(meta)
+}
+
+// NewProvenance describes one call: what was asked for (route, the prompt
+// TEMPLATE) against what actually served it (u).
+func NewProvenance(kind string, route llm.Route, prompt string, u llm.Usage) Provenance {
+	return Provenance{
+		Model:     servedModel(u, route.Params.Model),
+		Provider:  servedProvider(u, route.Provider),
+		Step:      kind,
+		MaxTokens: u.MaxTokens,
+		Temp:      u.Temp,
+		TokensIn:  u.InputTokens,
+		TokensOut: u.OutputTokens,
+		PromptSHA: promptSHA(prompt),
+	}
 }
 
 // servedProvider names the endpoint for a human. A pinned route never falls back

@@ -194,6 +194,16 @@ func New(ctx context.Context, db *sql.DB, webDir string, extensionZip string, ap
 	mux.HandleFunc("GET /api/v1/pipelines/{id}/jobs", bearerAuth(q, plH.listJobs))
 	mux.HandleFunc("GET /api/v1/pipeline-steps", bearerAuth(q, handleStepCatalog))
 
+	dgH := &digestsHandler{q: q, db: db, runner: w.DigestRunner()}
+	mux.HandleFunc("GET /api/v1/digests", bearerAuth(q, dgH.list))
+	mux.HandleFunc("POST /api/v1/digests", bearerAuth(q, dgH.create))
+	mux.HandleFunc("GET /api/v1/digests/{id}", bearerAuth(q, dgH.get))
+	mux.HandleFunc("PATCH /api/v1/digests/{id}", bearerAuth(q, dgH.update))
+	mux.HandleFunc("DELETE /api/v1/digests/{id}", bearerAuth(q, dgH.delete))
+	mux.HandleFunc("POST /api/v1/digests/{id}/run", bearerAuth(q, dgH.run))
+	mux.HandleFunc("GET /api/v1/digests/{id}/issues", bearerAuth(q, dgH.listIssues))
+	mux.HandleFunc("GET /api/v1/digest-issues/{id}", bearerAuth(q, dgH.getIssue))
+
 	hlH := &highlightsHandler{q: q}
 	mux.HandleFunc("GET /api/v1/highlights", bearerAuth(q, hlH.listAll))
 	mux.HandleFunc("GET /api/v1/documents/{id}/highlights", bearerAuth(q, hlH.listByDocument))

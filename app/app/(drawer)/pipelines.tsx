@@ -27,7 +27,7 @@ import type {
 } from '../../src/api'
 import { useConnection } from '../../src/ConnectionContext'
 import IconButton from '../../src/IconButton'
-import ModelPicker from '../../src/ModelPicker'
+import ModelField from '../../src/ModelField'
 import type { ModelChoice } from '../../src/ModelPicker'
 import { useToast } from '../../src/ToastContext'
 
@@ -234,7 +234,6 @@ function StepFieldEditor({ step, row, onChange, onPickModel }: {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const [expanded, setExpanded] = useState(false)
-  const [picking, setPicking] = useState(false)
   const multiline = row.type === 'text' || row.type === 'json'
   const lines = expanded ? FIELD_LINES_EXPANDED : FIELD_LINES
   const label = `${step.kind} ${row.key}`
@@ -255,21 +254,12 @@ function StepFieldEditor({ step, row, onChange, onPickModel }: {
       </View>
       {row.help ? <Text style={s.fieldHelp}>{row.help}</Text> : null}
       {row.type === 'model' ? (
-        <>
-          <Pressable style={s.fieldPicker} onPress={() => setPicking(true)} accessibilityLabel={label}>
-            <Text style={[s.fieldPickerText, !row.value && s.fieldPickerPlaceholder]} numberOfLines={1}>
-              {row.value ? String(row.value) : 'Provider default'}
-            </Text>
-            <Text style={s.fieldPickerCaret}>▾</Text>
-          </Pressable>
-          <ModelPicker
-            visible={picking}
-            value={String(row.value)}
-            provider={providerValue}
-            onSelect={choice => { onPickModel(choice); setPicking(false) }}
-            onClose={() => setPicking(false)}
-          />
-        </>
+        <ModelField
+          model={String(row.value)}
+          provider={providerValue}
+          onSelect={onPickModel}
+          accessibilityLabel={label}
+        />
       ) : row.type === 'bool'
         ? <Switch
             value={row.value === true}
@@ -734,20 +724,6 @@ function buildStyles(t: Theme) {
       paddingVertical: 6,
       marginTop: 3,
     },
-    fieldPicker: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: t.spacing.sm,
-      borderWidth: 1,
-      borderColor: t.colors.border,
-      borderRadius: 6,
-      paddingHorizontal: t.spacing.sm,
-      paddingVertical: 7,
-      backgroundColor: t.colors.background,
-    },
-    fieldPickerText: { flex: 1, fontSize: 12, color: t.colors.text },
-    fieldPickerPlaceholder: { color: t.colors.placeholder },
-    fieldPickerCaret: { fontSize: 11, color: t.colors.muted },
     fieldInputMultiline: { textAlignVertical: 'top' },
     jobRow: { flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm, paddingVertical: 5 },
     jobDot: { width: 7, height: 7, borderRadius: 4, flexShrink: 0 },

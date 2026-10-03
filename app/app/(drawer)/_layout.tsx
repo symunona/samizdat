@@ -24,6 +24,7 @@ const NAV_BLOCKS: NavRow[][] = [
     { kind: 'link', name: 'tags', label: 'Tags', href: '/tags' as Href },
   ],
   [
+    { kind: 'link', name: 'digests', label: 'Digests', href: '/digests' as Href },
     { kind: 'link', name: 'subscriptions', label: 'Subscriptions', href: '/subscriptions' as Href },
     { kind: 'link', name: 'pipelines', label: 'Pipelines', href: '/pipelines' as Href },
     { kind: 'link', name: 'jobs', label: 'Jobs', href: '/jobs' as Href },
@@ -170,6 +171,7 @@ export default function DrawerLayout() {
       <Drawer.Screen name="documents" options={{ title: 'Documents' }} />
       <Drawer.Screen name="notes" options={{ title: 'Notes' }} />
       <Drawer.Screen name="tags" options={{ title: 'Tags' }} />
+      <Drawer.Screen name="digests" options={{ title: 'Digests' }} />
       <Drawer.Screen name="subscriptions" options={{ title: 'Subscriptions' }} />
       <Drawer.Screen name="pipelines" options={{ title: 'Pipelines' }} />
       <Drawer.Screen name="jobs" options={{ title: 'Jobs' }} />
@@ -180,6 +182,10 @@ export default function DrawerLayout() {
       />
       <Drawer.Screen
         name="document/[id]"
+        options={{ headerShown: false, drawerItemStyle: { display: 'none' } }}
+      />
+      <Drawer.Screen
+        name="digest/[id]"
         options={{ headerShown: false, drawerItemStyle: { display: 'none' } }}
       />
       <Drawer.Screen

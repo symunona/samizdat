@@ -104,6 +104,13 @@ split the table in two).
 the app's model picker offers. `--provider <id>` filters, `--refresh` busts the server's
 5-minute cache.
 
+## digest command
+`sam digest list` prints every Digest (schedule, enabled, last/next run in this machine's
+zone, id). `sam digest run <name-or-id>` enqueues the same `run_digest` Job as the app's
+"Run now" and prints the job id and the issue id; a Digest with a run already in flight
+gets that run back. An id wins over a name; names match case-insensitively and are not
+unique, so two matches is an error listing the ids. Both go through `apiClient`.
+
 ## login command — credential-passing pattern
 `sam login <domain>` authenticates to a paywalled domain so scrapes render full-text:
 - Credentials accepted via `--user`/`--pass` flags **or** `SAM_LOGIN_USER`/`SAM_LOGIN_PASS` env vars (env is fallback, flags take priority)

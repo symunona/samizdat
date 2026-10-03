@@ -278,3 +278,45 @@ CREATE TABLE IF NOT EXISTS llm_usages (
 
 CREATE INDEX IF NOT EXISTS llm_usages_job_id     ON llm_usages(job_id);
 CREATE INDEX IF NOT EXISTS llm_usages_created_at ON llm_usages(created_at);
+
+-- Digest: a scheduled set of questions asked over the Highlights of the Feeds it
+-- is scoped to. weekdays / source_feed_ids / questions are JSON arrays.
+CREATE TABLE IF NOT EXISTS digests (
+    id              TEXT    PRIMARY KEY,
+    name            TEXT    NOT NULL DEFAULT '',
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    period          TEXT    NOT NULL DEFAULT 'daily',  -- daily | weekly
+    weekdays        TEXT    NOT NULL DEFAULT '[]',     -- weekly only; 0 = Sunday
+    hour            INTEGER NOT NULL DEFAULT 7,        -- server-local hour the run is due
+    source_feed_ids TEXT    NOT NULL DEFAULT '[]',     -- [] = every Feed
+    questions       TEXT    NOT NULL DEFAULT '[]',     -- [{id,title,prompt,top_n,enabled}]
+    provider        TEXT    NOT NULL DEFAULT '',       -- Router provider id; '' = the configured chain
+    model           TEXT    NOT NULL DEFAULT '',
+    color           TEXT    NOT NULL DEFAULT '',       -- a digest.Colors name; '' = a row older than the column
+    next_run_at     TEXT    NOT NULL,
+    last_run_at     TEXT,                              -- window_end of the last issue written
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL,
+    rev             INTEGER NOT NULL DEFAULT 0,
+    deleted_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS digests_updated_at ON digests(updated_at);
+
+-- DigestIssue: one run's output. topics is a JSON array of DigestTopic.
+CREATE TABLE IF NOT EXISTS digest_issues (
+    id           TEXT    PRIMARY KEY,
+    digest_id    TEXT    NOT NULL REFERENCES digests(id),
+    window_start TEXT    NOT NULL,
+    window_end   TEXT    NOT NULL,
+    status       TEXT    NOT NULL DEFAULT 'running',  -- running | done | empty | failed
+    topics       TEXT    NOT NULL DEFAULT '[]',
+    metadata     TEXT    NOT NULL DEFAULT '{}',       -- provenance per question; error when failed
+    created_at   TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL,
+    rev          INTEGER NOT NULL DEFAULT 0,
+    deleted_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS digest_issues_digest_id  ON digest_issues(digest_id);
+CREATE INDEX IF NOT EXISTS digest_issues_updated_at ON digest_issues(updated_at);

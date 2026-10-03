@@ -10,6 +10,7 @@
 //	                         export.grouping inserts a date subfolder: documents
 //	                         by published (else created), annotations by their own
 //	                         created — the two can differ.
+//	digests/<slug>/<date>.md one note per done DigestIssue (marker `samizdat: export-digest-issue`)
 //	assets/<id>.<ext>        copied image assets, embedded as ![[<id>.<ext>]]
 //	                         (export.image_links = "relative" → ../assets/… instead)
 //	_index.md                MOC of all documents (marker `samizdat: export-index`)
@@ -32,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/symunona/samizdat/server/internal/digest"
 	"github.com/symunona/samizdat/server/internal/logger"
 	"github.com/symunona/samizdat/server/internal/store"
 )
@@ -42,10 +44,12 @@ const (
 	indexName = "_index.md"
 	docsSub   = "documents"
 	annsSub   = "annotations"
+	digestSub = "digests"
 	assetsSub = "assets"
-	docMark   = "samizdat: export"            // frontmatter line on every doc note
-	annMark   = "samizdat: export-annotation" // frontmatter line on every annotation note
-	indexMark = "samizdat: export-index"      // frontmatter line on the index note
+	docMark   = "samizdat: export"              // frontmatter line on every doc note
+	annMark   = "samizdat: export-annotation"   // frontmatter line on every annotation note
+	issueMark = "samizdat: export-digest-issue" // frontmatter line on every DigestIssue note
+	indexMark = "samizdat: export-index"        // frontmatter line on the index note
 
 	linkWikilink = "wikilink" // ![[<file>]] — Obsidian resolves by name, path-free
 	linkRelative = "relative" // ![alt](../assets/<file>) — plain-markdown portable
@@ -74,9 +78,14 @@ type Exporter struct {
 	cursor   string            // last exported updated_at
 	docFiles map[string]string // doc id → path relative to dir (e.g. documents/2026-W31/x.md)
 	annFiles map[string]string // annotation id → path relative to dir
-	grouping string            // none|daily|weekly|monthly
-	lastRun  string
-	lastErr  string
+	// DigestIssue id → path relative to dir, and Digest id → the folder its
+	// issue notes were last written to (what tells a rename from any other
+	// change to the Digest row).
+	issueFiles map[string]string
+	digestDirs map[string]string
+	grouping   string // none|daily|weekly|monthly
+	lastRun    string
+	lastErr    string
 }
 
 // New builds an Exporter. Caller starts it with Run.
@@ -94,6 +103,8 @@ func New(q *store.Queries, dir, cacheDir, grouping, imageLinks string) *Exporter
 		cursor:     epoch,
 		docFiles:   map[string]string{},
 		annFiles:   map[string]string{},
+		issueFiles: map[string]string{},
+		digestDirs: map[string]string{},
 	}
 }
 
@@ -147,7 +158,7 @@ func (e *Exporter) Snapshot() Stats {
 	}
 }
 
-// loadIndex scans documents/ and annotations/ (recursively, for grouping
+// loadIndex scans documents/, annotations/ and digests/ (recursively, for grouping
 // subfolders) for notes we own (by frontmatter marker + id), so re-runs
 // overwrite the same files and foreign files are skipped. Runs once at startup.
 func (e *Exporter) loadIndex() {
@@ -171,6 +182,7 @@ func (e *Exporter) loadIndex() {
 	}
 	scan(docsSub, docMark, e.docFiles)
 	scan(annsSub, annMark, e.annFiles)
+	scan(digestSub, issueMark, e.issueFiles)
 }
 
 // sweep exports every doc that (or whose annotations) changed since the cursor.
@@ -193,7 +205,17 @@ func (e *Exporter) sweep(ctx context.Context) {
 		e.setErr(fmt.Errorf("list annotations: %w", err))
 		return
 	}
-	if len(docs) == 0 && len(annos) == 0 {
+	digests, err := e.q.ListDigestsSince(ctx, cursor)
+	if err != nil {
+		e.setErr(fmt.Errorf("list digests: %w", err))
+		return
+	}
+	issues, err := e.q.ListDigestIssuesSince(ctx, cursor)
+	if err != nil {
+		e.setErr(fmt.Errorf("list digest issues: %w", err))
+		return
+	}
+	if len(docs) == 0 && len(annos) == 0 && len(digests) == 0 && len(issues) == 0 {
 		return
 	}
 
@@ -214,7 +236,7 @@ func (e *Exporter) sweep(ctx context.Context) {
 		// A tombstoned annotation's own note must be removed here — exportDoc
 		// only writes live annotations, it won't delete a stale note.
 		if a.DeletedAt != nil {
-			if err := e.removeAnnotation(a.ID); err != nil {
+			if err := e.removeNote(e.annFiles, a.ID); err != nil {
 				e.log.Warnf("remove annotation %s: %v", a.ID, err)
 			}
 			continue
@@ -234,6 +256,39 @@ func (e *Exporter) sweep(ctx context.Context) {
 	for id := range dirty {
 		if err := e.exportDoc(ctx, id); err != nil {
 			e.log.Warnf("export doc %s: %v", id, err)
+			e.setErr(err)
+			failed = true
+		}
+	}
+
+	// After the Documents: an issue links to their notes by name. A Digest row
+	// changes on every run and every schedule bump, so only one whose folder
+	// moved (a rename) pulls its older issues along.
+	for _, d := range digests {
+		if d.UpdatedAt > maxTs {
+			maxTs = d.UpdatedAt
+		}
+		e.mu.Lock()
+		dir, known := e.digestDirs[d.ID]
+		e.mu.Unlock()
+		if d.DeletedAt != nil || !known || dir == digestDir(d) {
+			continue
+		}
+		moved, err := e.q.ListDoneDigestIssuesByDigest(ctx, d.ID)
+		if err != nil {
+			e.log.Warnf("list issues of digest %s: %v", d.ID, err)
+			e.setErr(err)
+			failed = true
+			continue
+		}
+		issues = append(issues, moved...)
+	}
+	for _, is := range issues {
+		if is.UpdatedAt > maxTs {
+			maxTs = is.UpdatedAt
+		}
+		if err := e.exportIssue(ctx, is); err != nil {
+			e.log.Warnf("export digest issue %s: %v", is.ID, err)
 			e.setErr(err)
 			failed = true
 		}
@@ -264,7 +319,7 @@ func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 		// as no-rows — that IS the removal signal, not a failure. Checking
 		// doc.DeletedAt instead could never fire: the note stayed in the vault
 		// forever and every boot sweep warned + flagged the export errored.
-		return e.removeDoc(id)
+		return e.removeNote(e.docFiles, id)
 	}
 	if err != nil {
 		return fmt.Errorf("get document %s: %w", id, err)
@@ -307,22 +362,14 @@ func (e *Exporter) exportDoc(ctx context.Context, id string) error {
 	if err := writeNote(e.dir, docRel, body); err != nil {
 		return fmt.Errorf("write doc note %s: %w", docRel, err)
 	}
-	e.mu.Lock()
-	oldDocRel := e.docFiles[id]
-	e.docFiles[id] = docRel
-	e.mu.Unlock()
-	removeIfMoved(e.dir, oldDocRel, docRel)
+	e.track(e.docFiles, id, docRel)
 
 	for i, a := range live {
 		note := renderAnnotation(a, relBase(docRel), atDepth(links, annRels[i]))
 		if err := writeNote(e.dir, annRels[i], note); err != nil {
 			return fmt.Errorf("write annotation note %s: %w", annRels[i], err)
 		}
-		e.mu.Lock()
-		oldAnnRel := e.annFiles[a.ID]
-		e.annFiles[a.ID] = annRels[i]
-		e.mu.Unlock()
-		removeIfMoved(e.dir, oldAnnRel, annRels[i])
+		e.track(e.annFiles, a.ID, annRels[i])
 	}
 	return nil
 }
@@ -350,12 +397,16 @@ func unchanged(path string, body []byte) bool {
 	return err == nil && bytes.Equal(old, body)
 }
 
-// removeIfMoved deletes the note at its previous path when grouping (or a
-// filename change) relocated it.
-func removeIfMoved(dir, oldRel, newRel string) {
-	if oldRel != "" && oldRel != newRel {
-		_ = os.Remove(filepath.Join(dir, oldRel))
-		pruneGroupDir(dir, oldRel)
+// track records where id's note now lives and deletes the note at its previous
+// path when grouping (or a filename change) relocated it.
+func (e *Exporter) track(files map[string]string, id, rel string) {
+	e.mu.Lock()
+	old := files[id]
+	files[id] = rel
+	e.mu.Unlock()
+	if old != "" && old != rel {
+		_ = os.Remove(filepath.Join(e.dir, old))
+		pruneGroupDir(e.dir, old)
 	}
 }
 
@@ -470,21 +521,12 @@ func (e *Exporter) copyAsset(localPath, fname string) error {
 	return nil
 }
 
-// removeDoc deletes our note for a tombstoned document (its annotations are
-// cascade-tombstoned and removed via the annotation path).
-func (e *Exporter) removeDoc(id string) error {
+// removeNote deletes our note for a tombstoned row. A document's annotations
+// are cascade-tombstoned and come through here on their own.
+func (e *Exporter) removeNote(files map[string]string, id string) error {
 	e.mu.Lock()
-	rel := e.docFiles[id]
-	delete(e.docFiles, id)
-	e.mu.Unlock()
-	return removeIfPresent(e.dir, rel)
-}
-
-// removeAnnotation deletes our note for a tombstoned annotation.
-func (e *Exporter) removeAnnotation(id string) error {
-	e.mu.Lock()
-	rel := e.annFiles[id]
-	delete(e.annFiles, id)
+	rel := files[id]
+	delete(files, id)
 	e.mu.Unlock()
 	return removeIfPresent(e.dir, rel)
 }
@@ -522,7 +564,7 @@ func (e *Exporter) docRelPath(doc store.Document, group string) string {
 		base = slug(doc.ID)
 	}
 	name := base + ".md"
-	if e.docNameFree(dir, name, doc.ID) {
+	if e.nameFree(e.docFiles, dir, name, doc.ID) {
 		return dir + "/" + name
 	}
 	return dir + "/" + base + "-" + short(doc.ID) + ".md"
@@ -553,11 +595,11 @@ func (e *Exporter) annRelPath(a store.Annotation, group string) string {
 	return dir + "/" + base + "-" + short(a.ID) + ".md"
 }
 
-// docNameFree reports whether name is unclaimed by another doc and not a foreign
-// file already in dir.
-func (e *Exporter) docNameFree(dir, name, id string) bool {
+// nameFree reports whether name is unclaimed by another row of files and not a
+// foreign file already in dir.
+func (e *Exporter) nameFree(files map[string]string, dir, name, id string) bool {
 	e.mu.Lock()
-	for oid, rel := range e.docFiles {
+	for oid, rel := range files {
 		if rel == dir+"/"+name && oid != id {
 			e.mu.Unlock()
 			return false
@@ -566,6 +608,75 @@ func (e *Exporter) docNameFree(dir, name, id string) bool {
 	e.mu.Unlock()
 	_, err := os.Stat(filepath.Join(e.dir, dir, name))
 	return os.IsNotExist(err)
+}
+
+// digestDir is the folder a Digest's issue notes live in.
+func digestDir(d store.Digest) string {
+	base := slug(d.Name)
+	if base == "" {
+		base = slug(d.ID)
+	}
+	return digestSub + "/" + base
+}
+
+// issueRelPath returns a stable vault-relative path for an issue note: the one
+// it has while its Digest's folder is unchanged, else <date>.md there — the day
+// the window closed, in the server's zone like the hour the run was due. A
+// second issue the same day ("Run now") carries its id.
+func (e *Exporter) issueRelPath(is digest.Issue, dir string) string {
+	e.mu.Lock()
+	if rel, ok := e.issueFiles[is.ID]; ok && filepath.Dir(rel) == filepath.FromSlash(dir) {
+		e.mu.Unlock()
+		return rel
+	}
+	e.mu.Unlock()
+
+	base := short(is.WindowEnd)
+	if t, err := time.Parse(time.RFC3339, is.WindowEnd); err == nil {
+		base = t.In(time.Local).Format("2006-01-02")
+	}
+	if name := base + ".md"; e.nameFree(e.issueFiles, dir, name, is.ID) {
+		return dir + "/" + name
+	}
+	return dir + "/" + base + "-" + short(is.ID) + ".md"
+}
+
+// exportIssue writes a done DigestIssue's note, or removes it: an issue that is
+// tombstoned, whose Digest is gone, or that is not (or no longer) done has no
+// note. Only the issue is exported — the Digest's config has no markdown path.
+func (e *Exporter) exportIssue(ctx context.Context, row store.DigestIssue) error {
+	d, err := e.q.GetDigest(ctx, row.DigestID)
+	gone := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !gone {
+		return fmt.Errorf("get digest %s: %w", row.DigestID, err)
+	}
+	if gone || row.DeletedAt != nil || row.Status != digest.StatusDone {
+		return e.removeNote(e.issueFiles, row.ID)
+	}
+	is := digest.IssueFromRow(row)
+	if err := is.Resolve(ctx, e.q); err != nil {
+		return fmt.Errorf("resolve issue %s: %w", row.ID, err)
+	}
+
+	dir := digestDir(d)
+	rel := e.issueRelPath(is, dir)
+	e.mu.Lock()
+	docNames := map[string]string{}
+	for _, t := range is.Topics {
+		for _, ref := range t.Refs {
+			if docRel, ok := e.docFiles[ref.DocumentID]; ok {
+				docNames[ref.DocumentID] = strings.TrimSuffix(relBase(docRel), ".md")
+			}
+		}
+	}
+	e.digestDirs[d.ID] = dir
+	e.mu.Unlock()
+
+	if err := writeNote(e.dir, rel, renderIssue(d.Name, is, docNames)); err != nil {
+		return fmt.Errorf("write issue note %s: %w", rel, err)
+	}
+	e.track(e.issueFiles, is.ID, rel)
+	return nil
 }
 
 // writeIndex regenerates the _index.md MOC linking every owned doc note.
@@ -681,6 +792,68 @@ func renderAnnotation(a store.Annotation, docName string, links map[string]asset
 	return []byte(b.String())
 }
 
+// renderIssue renders a DigestIssue: a heading per question, a sub-heading per
+// topic with the model's why under it, and the stored bullets it was grouped
+// from, each linking to its Document's note (docNames: Document id → note name;
+// a Document with no note is named in plain text).
+func renderIssue(digestName string, is digest.Issue, docNames map[string]string) []byte {
+	var b strings.Builder
+	b.WriteString("---\n")
+	fmt.Fprintf(&b, "id: %s\n", is.ID)
+	b.WriteString(issueMark + "\n")
+	fmt.Fprintf(&b, "digest: %s\n", yamlStr(digestName))
+	fmt.Fprintf(&b, "window_start: %s\n", yamlStr(is.WindowStart))
+	fmt.Fprintf(&b, "window_end: %s\n", yamlStr(is.WindowEnd))
+	b.WriteString("---\n\n")
+	fmt.Fprintf(&b, "# %s\n", firstLine(digestName))
+
+	truncated := map[string]digest.QuestionMeta{}
+	for _, m := range is.Metadata.Questions {
+		if m.Truncated {
+			truncated[m.QuestionID] = m
+		}
+	}
+	question := ""
+	for i, t := range is.Topics {
+		if i == 0 || t.QuestionID != question {
+			question = t.QuestionID
+			fmt.Fprintf(&b, "\n## %s\n", firstLine(t.QuestionTitle))
+			if m, ok := truncated[question]; ok {
+				fmt.Fprintf(&b, "\n> [!warning] Only the newest %d of %d items fit the model's window.\n", m.CandidatesSent, m.Candidates)
+			}
+		}
+		fmt.Fprintf(&b, "\n### %d. %s\n\n", t.Rank, firstLine(t.Title))
+		if t.Why != "" {
+			fmt.Fprintf(&b, "%s\n\n", strings.Join(strings.Fields(t.Why), " "))
+		}
+		for _, ref := range t.Refs {
+			if ref.Missing {
+				continue
+			}
+			b.WriteString("- " + digest.Flatten(ref.Text))
+			if link := documentLink(ref, docNames); link != "" {
+				b.WriteString(" — " + link)
+			}
+			b.WriteString("\n")
+		}
+	}
+	return []byte(b.String())
+}
+
+// documentLink is a wikilink to the note of the Document a ref came from, its
+// title as the alias.
+func documentLink(ref digest.Ref, docNames map[string]string) string {
+	name, ok := docNames[ref.DocumentID]
+	alias := wikiAlias(ref.DocumentTitle)
+	switch {
+	case !ok:
+		return alias
+	case alias == "" || alias == name:
+		return "[[" + name + "]]"
+	}
+	return "[[" + name + "|" + alias + "]]"
+}
+
 // exportStandaloneNote writes a document-less annotation (a standalone note) as
 // its own note file, with no parent-doc backlink.
 func (e *Exporter) exportStandaloneNote(a store.Annotation) error {
@@ -689,11 +862,7 @@ func (e *Exporter) exportStandaloneNote(a store.Annotation) error {
 	if err := writeNote(e.dir, rel, note); err != nil {
 		return fmt.Errorf("write standalone note %s: %w", rel, err)
 	}
-	e.mu.Lock()
-	old := e.annFiles[a.ID]
-	e.annFiles[a.ID] = rel
-	e.mu.Unlock()
-	removeIfMoved(e.dir, old, rel)
+	e.track(e.annFiles, a.ID, rel)
 	return nil
 }
 

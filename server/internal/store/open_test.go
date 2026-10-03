@@ -89,3 +89,54 @@ func TestRelaxAnnotationDocumentID(t *testing.T) {
 		t.Fatalf("row count after idempotent re-run = %d, want 2", n)
 	}
 }
+
+// A DB whose digests table predates `color` and still has `hold_highlights`
+// gains the one and loses the other with its rows intact, and migrating again
+// (every boot does) changes nothing.
+func TestDigestColumnMigrationsAreIdempotent(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "old.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+	for _, q := range []string{
+		`CREATE TABLE digests (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1,
+			period TEXT NOT NULL DEFAULT 'daily', weekdays TEXT NOT NULL DEFAULT '[]', hour INTEGER NOT NULL DEFAULT 7,
+			source_feed_ids TEXT NOT NULL DEFAULT '[]', questions TEXT NOT NULL DEFAULT '[]', provider TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '', hold_highlights INTEGER NOT NULL DEFAULT 0, next_run_at TEXT NOT NULL, last_run_at TEXT,
+			created_at TEXT NOT NULL, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, deleted_at TEXT)`,
+		`INSERT INTO digests (id, name, next_run_at, created_at, updated_at, rev) VALUES ('g1', 'AI weekly', 't', 't', 't', 4)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+
+	for run := 1; run <= 2; run++ {
+		if err := migrate(db); err != nil {
+			t.Fatalf("migrate, run %d: %v", run, err)
+		}
+		var name, color string
+		var rev int
+		if err := db.QueryRow(`SELECT name, color, rev FROM digests WHERE id = 'g1'`).Scan(&name, &color, &rev); err != nil {
+			t.Fatalf("run %d: %v", run, err)
+		}
+		if name != "AI weekly" || color != "" || rev != 4 {
+			t.Fatalf("run %d: row = %q %q rev %d, want it untouched with an empty color", run, name, color, rev)
+		}
+		var columns int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('digests') WHERE name = 'color'`).Scan(&columns); err != nil {
+			t.Fatal(err)
+		}
+		if columns != 1 {
+			t.Fatalf("run %d: %d color columns", run, columns)
+		}
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('digests') WHERE name = 'hold_highlights'`).Scan(&columns); err != nil {
+			t.Fatal(err)
+		}
+		if columns != 0 {
+			t.Fatalf("run %d: hold_highlights survived the migration", run)
+		}
+	}
+}

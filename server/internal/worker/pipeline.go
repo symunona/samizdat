@@ -198,6 +198,11 @@ func handleRunPipelineStep(ctx context.Context, q *store.Queries, job store.Job,
 			}); err != nil {
 				return "", fmt.Errorf("mark run done: %w", err)
 			}
+			// The run is done and stays done: a hold that failed leaves its
+			// Highlights in the feed, which is where they were going anyway.
+			if err := holdHighlights(ctx, q, run, now); err != nil {
+				logPipeline.Errorf("run %s hold highlights: %v", run.ID[:8], err)
+			}
 			logPipeline.Printf("run %s pipeline %s (%s) all %d steps done",
 				run.ID[:8], pl.ID[:8], pl.Name, stepCount)
 			return `{"status":"done"}`, nil

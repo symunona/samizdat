@@ -55,7 +55,7 @@ flowchart LR
 
 ## 3. Jobs & scheduling
 
-- **Queue = a `jobs` table.** Kinds: `poll_feed`, `scrape_url`, `run_pipeline`. Status `queued|running|paused|done|failed|dead`.
+- **Queue = a `jobs` table.** Kinds: `poll_feed`, `scrape_url`, `run_pipeline`, `run_digest`. Status `queued|running|paused|done|failed|dead`.
 - Worker claims atomically (`BEGIN IMMEDIATE … RETURNING`), retries with backoff, meters tokens/cost per `Job`.
 - The scheduler only **inserts jobs**; the CLI can insert any job. One drain path.
 - Jobs **produce** Documents/Highlights — nothing is created eagerly.

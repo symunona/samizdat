@@ -1,7 +1,17 @@
-// Shared tag colour palette. Tags carry a colour NAME ('red', 'blue', 'default', …);
+
+// Shared colour palette. Tags and Digests carry a colour NAME ('red', 'blue', …);
 // this maps it to a hex value. Dependency-free so the WebView bundle can inline it.
 
-export const TAG_COLORS = ['default', 'red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink']
+// The colours a Digest picks from. The server validates against its own copy
+// (digest.Colors), and its TestColorsMatchAppPalette reads THIS line — keep the
+// declaration a plain one-line array literal.
+export const PALETTE = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'pink']
+
+// A tag may also have no colour of its own.
+export const TAG_COLORS = ['default', ...PALETTE]
+
+// Text that reads on every palette fill, in both themes: the fills are all light.
+export const ON_PALETTE = '#1a1a1a'
 
 export function tagColor(color: string): string {
   switch (color) {

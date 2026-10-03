@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/symunona/samizdat/server/internal/config"
 	"github.com/symunona/samizdat/server/internal/credstore"
+	"github.com/symunona/samizdat/server/internal/digest"
 	"github.com/symunona/samizdat/server/internal/extractor"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/pipeline"
@@ -69,6 +70,7 @@ func (w *Worker) Start(ctx context.Context) {
 			case <-t.C:
 				w.browser.HealthCheck()
 				w.schedulePollFeeds(ctx)
+				w.scheduleDigests(ctx)
 				w.sweepAutoArchive(ctx)
 				w.resetStuckJobs(ctx)
 			}
@@ -269,6 +271,8 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 		result, err = handleRunPipeline(ctx, w.q, w.db, job, w.llmRouter, w.extractorReg)
 	case "run_pipeline_step":
 		result, err = handleRunPipelineStep(ctx, w.q, job, w.llmRouter)
+	case digest.Kind:
+		result, err = handleRunDigest(ctx, w.DigestRunner(), job)
 	default:
 		err = fmt.Errorf("unknown job kind: %s", job.Kind)
 	}

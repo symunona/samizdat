@@ -58,6 +58,7 @@ export default function ArchivedScreen() {
   }, [])
 
   const notedIds = db.useAnnotatedHighlightIds()
+  const citedBy = db.useHighlightDigests()
 
   const renderItem = useCallback(({ item }: { item: HighlightWithDoc }) => (
     <View style={s.itemWrapper}>
@@ -65,6 +66,7 @@ export default function ArchivedScreen() {
         item={item}
         linkedDocuments={item.linked_documents}
         hasNote={notedIds.has(item.id)}
+        digests={citedBy.get(item.id)}
         onPress={() => router.push(`/document/${item.document_id}?from=/archived`)}
         onDocumentPress={(docId) => router.push(`/document/${encodeURIComponent(docId)}?from=/archived`)}
       />
@@ -72,7 +74,7 @@ export default function ArchivedScreen() {
         <Text style={s.unarchiveBtnText}>↩ Restore</Text>
       </Pressable>
     </View>
-  ), [handleUnarchive, notedIds, router, s])
+  ), [handleUnarchive, notedIds, citedBy, router, s])
 
   if (loading && highlights.length === 0) {
     return (

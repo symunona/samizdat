@@ -149,6 +149,54 @@ CREATE TABLE IF NOT EXISTS meta (
 // offline feed card had no date to reveal beside the ingest one.
 export const MIGRATE_2_DOC_PUBLISHED_AT = 'ALTER TABLE documents ADD COLUMN published_at TEXT'
 
+// v2 → v3: Digests and their issues. Machine data like Highlights — one-way from the
+// server — so an issue reads offline. The list-shaped fields (weekdays, questions,
+// topics, metadata …) are JSON text: they are only ever read and written whole.
+export const MIGRATE_3_DIGESTS = `
+CREATE TABLE IF NOT EXISTS digests (
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL DEFAULT '',
+  enabled         INTEGER NOT NULL DEFAULT 0,
+  period          TEXT NOT NULL DEFAULT '',
+  weekdays        TEXT NOT NULL DEFAULT '[]',
+  hour            INTEGER NOT NULL DEFAULT 0,
+  source_feed_ids TEXT NOT NULL DEFAULT '[]',
+  questions       TEXT NOT NULL DEFAULT '[]',
+  provider        TEXT NOT NULL DEFAULT '',
+  model           TEXT NOT NULL DEFAULT '',
+  hold_highlights INTEGER NOT NULL DEFAULT 0,
+  next_run_at     TEXT NOT NULL DEFAULT '',
+  last_run_at     TEXT,
+  created_at      TEXT NOT NULL DEFAULT '',
+  updated_at      TEXT NOT NULL DEFAULT '',
+  rev             INTEGER NOT NULL DEFAULT 0,
+  deleted_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS digest_issues (
+  id           TEXT PRIMARY KEY,
+  digest_id    TEXT NOT NULL DEFAULT '',
+  window_start TEXT NOT NULL DEFAULT '',
+  window_end   TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT '',
+  topics       TEXT NOT NULL DEFAULT '[]',
+  metadata     TEXT NOT NULL DEFAULT '{}',
+  created_at   TEXT NOT NULL DEFAULT '',
+  updated_at   TEXT NOT NULL DEFAULT '',
+  rev          INTEGER NOT NULL DEFAULT 0,
+  deleted_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_digest_issues_digest ON digest_issues (digest_id);
+`
+
+// v3 → v4: a Digest's colour, a palette name (tagColor.ts). A row pulled before this
+// keeps '' until the server sends that Digest again, and reads grey until then.
+export const MIGRATE_4_DIGEST_COLOR = "ALTER TABLE digests ADD COLUMN color TEXT NOT NULL DEFAULT ''"
+
+// v4 → v5: hold is no longer a per-Digest switch — an enabled Digest holds the Feeds
+// it picks — so the server stopped sending hold_highlights and the column goes.
+export const MIGRATE_5_DROP_DIGEST_HOLD = 'ALTER TABLE digests DROP COLUMN hold_highlights'
+
 // ── meta ──────────────────────────────────────────────────────────────────────
 export const SELECT_META = 'SELECT value FROM meta WHERE key = ?'
 export const UPSERT_META = 'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)'
@@ -197,6 +245,23 @@ export const UPSERT_TAG = `
 INSERT OR REPLACE INTO tags (id, name, color, created_at, updated_at, rev, deleted_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)`
 export const DELETE_TAG = 'DELETE FROM tags WHERE id = ?'
+
+// ── digests ───────────────────────────────────────────────────────────────────
+export const SELECT_DIGESTS = 'SELECT * FROM digests'
+export const UPSERT_DIGEST = `
+INSERT OR REPLACE INTO digests (
+  id, name, enabled, period, weekdays, hour, source_feed_ids, questions, provider, model,
+  color, next_run_at, last_run_at, created_at, updated_at, rev, deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+export const DELETE_DIGEST = 'DELETE FROM digests WHERE id = ?'
+
+export const SELECT_DIGEST_ISSUES = 'SELECT * FROM digest_issues'
+export const UPSERT_DIGEST_ISSUE = `
+INSERT OR REPLACE INTO digest_issues (
+  id, digest_id, window_start, window_end, status, topics, metadata, created_at,
+  updated_at, rev, deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+export const DELETE_DIGEST_ISSUE = 'DELETE FROM digest_issues WHERE id = ?'
 
 // ── tag junctions ─────────────────────────────────────────────────────────────
 // Membership only: the server's junction row id, rev and tombstone are never read by
@@ -258,6 +323,8 @@ export const WIPE_SQL = [
   'DELETE FROM document_tags',
   'DELETE FROM annotation_tags',
   'DELETE FROM highlight_tags',
+  'DELETE FROM digests',
+  'DELETE FROM digest_issues',
   'DELETE FROM outbox',
   'DELETE FROM dirty',
   'DELETE FROM settings',

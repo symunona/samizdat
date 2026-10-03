@@ -25,6 +25,26 @@ func (q *Queries) ArchiveHighlight(ctx context.Context, arg ArchiveHighlightPara
 	return err
 }
 
+const archiveHighlightsByPipelineRun = `-- name: ArchiveHighlightsByPipelineRun :execrows
+UPDATE highlights SET archived_at = ?, updated_at = ?, rev = rev + 1
+WHERE deleted_at IS NULL AND archived_at IS NULL AND pinned = 0 AND pipeline_run_id = ?
+`
+
+type ArchiveHighlightsByPipelineRunParams struct {
+	ArchivedAt    *string `json:"archived_at"`
+	UpdatedAt     string  `json:"updated_at"`
+	PipelineRunID string  `json:"pipeline_run_id"`
+}
+
+// Hold: the sweep's stamp, scoped to one pipeline run instead of an age.
+func (q *Queries) ArchiveHighlightsByPipelineRun(ctx context.Context, arg ArchiveHighlightsByPipelineRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, archiveHighlightsByPipelineRun, arg.ArchivedAt, arg.UpdatedAt, arg.PipelineRunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const archiveOldHighlights = `-- name: ArchiveOldHighlights :execrows
 UPDATE highlights SET archived_at = ?, updated_at = ?, rev = rev + 1
 WHERE deleted_at IS NULL AND archived_at IS NULL AND pinned = 0 AND created_at < ?
@@ -45,6 +65,21 @@ func (q *Queries) ArchiveOldHighlights(ctx context.Context, arg ArchiveOldHighli
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const bumpDigestNextRun = `-- name: BumpDigestNextRun :exec
+UPDATE digests SET next_run_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type BumpDigestNextRunParams struct {
+	NextRunAt string `json:"next_run_at"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) BumpDigestNextRun(ctx context.Context, arg BumpDigestNextRunParams) error {
+	_, err := q.db.ExecContext(ctx, bumpDigestNextRun, arg.NextRunAt, arg.UpdatedAt, arg.ID)
+	return err
 }
 
 const bumpSubscriptionNextRun = `-- name: BumpSubscriptionNextRun :exec
@@ -397,6 +432,83 @@ func (q *Queries) DeleteSubscriptionsByFeed(ctx context.Context, arg DeleteSubsc
 	return err
 }
 
+const feedHeldByDigest = `-- name: FeedHeldByDigest :one
+SELECT EXISTS (
+    SELECT 1 FROM digests
+    WHERE deleted_at IS NULL AND enabled = 1
+      AND instr(source_feed_ids, '"' || CAST(?1 AS TEXT) || '"') > 0
+) AS held
+`
+
+// Whether an enabled Digest picked this Feed by name: what holds its Highlights
+// out of the feed. An empty scope reads every Feed and holds none: holding there
+// would empty the whole feed. A quoted substring of the JSON array, because sqlc
+// cannot type json_each; exact for a Feed id, which is a UUID json.Marshal
+// writes unescaped.
+func (q *Queries) FeedHeldByDigest(ctx context.Context, feedID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, feedHeldByDigest, feedID)
+	var held int64
+	err := row.Scan(&held)
+	return held, err
+}
+
+const finishDigestIssue = `-- name: FinishDigestIssue :exec
+UPDATE digest_issues SET status = ?, topics = ?, metadata = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type FinishDigestIssueParams struct {
+	Status    string `json:"status"`
+	Topics    string `json:"topics"`
+	Metadata  string `json:"metadata"`
+	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id"`
+}
+
+func (q *Queries) FinishDigestIssue(ctx context.Context, arg FinishDigestIssueParams) error {
+	_, err := q.db.ExecContext(ctx, finishDigestIssue,
+		arg.Status,
+		arg.Topics,
+		arg.Metadata,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	return err
+}
+
+const getActiveRunDigestJob = `-- name: GetActiveRunDigestJob :one
+SELECT id, kind, payload, status, attempts, run_after, last_error, result, duration_ms, created_at, updated_at, rev, deleted_at, parent_job_id, progress FROM jobs
+WHERE kind = 'run_digest'
+  AND json_extract(payload, '$.digest_id') = ?
+  AND status IN ('queued', 'running', 'paused')
+  AND deleted_at IS NULL
+ORDER BY created_at DESC LIMIT 1
+`
+
+// An active run_digest job for a Digest: "Run now" reuses it instead of queueing
+// a second run over the same window.
+func (q *Queries) GetActiveRunDigestJob(ctx context.Context, payload string) (Job, error) {
+	row := q.db.QueryRowContext(ctx, getActiveRunDigestJob, payload)
+	var i Job
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Payload,
+		&i.Status,
+		&i.Attempts,
+		&i.RunAfter,
+		&i.LastError,
+		&i.Result,
+		&i.DurationMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+		&i.ParentJobID,
+		&i.Progress,
+	)
+	return i, err
+}
+
 const getAnnotation = `-- name: GetAnnotation :one
 SELECT id, document_id, highlight_id, exact, prefix, suffix, pos_start, pos_end, media_ts_ms, color, note, created_at, updated_at, rev, deleted_at FROM annotations WHERE id = ? AND deleted_at IS NULL LIMIT 1
 `
@@ -495,6 +607,95 @@ func (q *Queries) GetDeviceByTokenHash(ctx context.Context, tokenHash string) (D
 		&i.Rev,
 		&i.DeletedAt,
 		&i.LastSeenAt,
+	)
+	return i, err
+}
+
+const getDigest = `-- name: GetDigest :one
+SELECT id, name, enabled, period, weekdays, hour, source_feed_ids, questions, provider, model, color, next_run_at, last_run_at, created_at, updated_at, rev, deleted_at FROM digests WHERE id = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetDigest(ctx context.Context, id string) (Digest, error) {
+	row := q.db.QueryRowContext(ctx, getDigest, id)
+	var i Digest
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Enabled,
+		&i.Period,
+		&i.Weekdays,
+		&i.Hour,
+		&i.SourceFeedIds,
+		&i.Questions,
+		&i.Provider,
+		&i.Model,
+		&i.Color,
+		&i.NextRunAt,
+		&i.LastRunAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getDigestIssue = `-- name: GetDigestIssue :one
+SELECT id, digest_id, window_start, window_end, status, topics, metadata, created_at, updated_at, rev, deleted_at FROM digest_issues WHERE id = ? AND deleted_at IS NULL LIMIT 1
+`
+
+func (q *Queries) GetDigestIssue(ctx context.Context, id string) (DigestIssue, error) {
+	row := q.db.QueryRowContext(ctx, getDigestIssue, id)
+	var i DigestIssue
+	err := row.Scan(
+		&i.ID,
+		&i.DigestID,
+		&i.WindowStart,
+		&i.WindowEnd,
+		&i.Status,
+		&i.Topics,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getDigestRef = `-- name: GetDigestRef :one
+SELECT h.id, h.title, h.body,
+       d.id AS document_id, d.title AS document_title,
+       COALESCE(f.title, '') AS feed_title, COALESCE(f.url, '') AS feed_url
+FROM highlights h
+JOIN documents d ON d.id = h.document_id
+LEFT JOIN feeds f ON f.id = d.source_feed_id
+WHERE h.id = ? LIMIT 1
+`
+
+type GetDigestRefRow struct {
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	Body          string `json:"body"`
+	DocumentID    string `json:"document_id"`
+	DocumentTitle string `json:"document_title"`
+	FeedTitle     string `json:"feed_title"`
+	FeedUrl       string `json:"feed_url"`
+}
+
+// What a DigestTopic ref points at. Tombstoned rows still resolve: an issue is
+// immutable, and a later regenerate must not blank the bullets it was built on.
+func (q *Queries) GetDigestRef(ctx context.Context, id string) (GetDigestRefRow, error) {
+	row := q.db.QueryRowContext(ctx, getDigestRef, id)
+	var i GetDigestRefRow
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Body,
+		&i.DocumentID,
+		&i.DocumentTitle,
+		&i.FeedTitle,
+		&i.FeedUrl,
 	)
 	return i, err
 }
@@ -1022,6 +1223,38 @@ func (q *Queries) GetPipelineRunByDocumentAndPipeline(ctx context.Context, arg G
 	return i, err
 }
 
+const getPreviousDoneDigestIssue = `-- name: GetPreviousDoneDigestIssue :one
+SELECT id, digest_id, window_start, window_end, status, topics, metadata, created_at, updated_at, rev, deleted_at FROM digest_issues
+WHERE digest_id = ? AND id != ? AND status = 'done' AND deleted_at IS NULL
+ORDER BY window_end DESC LIMIT 1
+`
+
+type GetPreviousDoneDigestIssueParams struct {
+	DigestID string `json:"digest_id"`
+	ID       string `json:"id"`
+}
+
+// The issue before this one that produced topics: its titles are the next run's
+// "already covered" list.
+func (q *Queries) GetPreviousDoneDigestIssue(ctx context.Context, arg GetPreviousDoneDigestIssueParams) (DigestIssue, error) {
+	row := q.db.QueryRowContext(ctx, getPreviousDoneDigestIssue, arg.DigestID, arg.ID)
+	var i DigestIssue
+	err := row.Scan(
+		&i.ID,
+		&i.DigestID,
+		&i.WindowStart,
+		&i.WindowEnd,
+		&i.Status,
+		&i.Topics,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getReadState = `-- name: GetReadState :one
 SELECT id, device_id, document_id, scroll_y, media_pos_ms, created_at, updated_at, rev, deleted_at FROM read_states
 WHERE device_id = ? AND document_id = ? AND deleted_at IS NULL LIMIT 1
@@ -1285,6 +1518,72 @@ func (q *Queries) InsertDevice(ctx context.Context, arg InsertDeviceParams) (Dev
 		&i.Rev,
 		&i.DeletedAt,
 		&i.LastSeenAt,
+	)
+	return i, err
+}
+
+const insertDigest = `-- name: InsertDigest :one
+
+INSERT INTO digests (id, name, enabled, period, weekdays, hour, source_feed_ids, questions,
+                     provider, model, color, next_run_at, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING id, name, enabled, period, weekdays, hour, source_feed_ids, questions, provider, model, color, next_run_at, last_run_at, created_at, updated_at, rev, deleted_at
+`
+
+type InsertDigestParams struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Enabled       int64  `json:"enabled"`
+	Period        string `json:"period"`
+	Weekdays      string `json:"weekdays"`
+	Hour          int64  `json:"hour"`
+	SourceFeedIds string `json:"source_feed_ids"`
+	Questions     string `json:"questions"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	Color         string `json:"color"`
+	NextRunAt     string `json:"next_run_at"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+// Digests
+func (q *Queries) InsertDigest(ctx context.Context, arg InsertDigestParams) (Digest, error) {
+	row := q.db.QueryRowContext(ctx, insertDigest,
+		arg.ID,
+		arg.Name,
+		arg.Enabled,
+		arg.Period,
+		arg.Weekdays,
+		arg.Hour,
+		arg.SourceFeedIds,
+		arg.Questions,
+		arg.Provider,
+		arg.Model,
+		arg.Color,
+		arg.NextRunAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i Digest
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Enabled,
+		&i.Period,
+		&i.Weekdays,
+		&i.Hour,
+		&i.SourceFeedIds,
+		&i.Questions,
+		&i.Provider,
+		&i.Model,
+		&i.Color,
+		&i.NextRunAt,
+		&i.LastRunAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -1963,6 +2262,245 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 	return items, nil
 }
 
+const listDigestCandidates = `-- name: ListDigestCandidates :many
+SELECT h.id, h.title, h.body, h.created_at,
+       d.canonical_url AS document_canonical_url,
+       f.id AS feed_id, f.title AS feed_title, f.url AS feed_url
+FROM highlights h
+JOIN documents d ON d.id = h.document_id
+JOIN feeds f ON f.id = d.source_feed_id
+WHERE h.deleted_at IS NULL
+  AND d.deleted_at IS NULL
+  AND f.deleted_at IS NULL
+  AND h.created_at >= ?
+  AND h.created_at < ?
+ORDER BY h.created_at DESC, h.id ASC
+`
+
+type ListDigestCandidatesParams struct {
+	CreatedAt   string `json:"created_at"`
+	CreatedAt_2 string `json:"created_at_2"`
+}
+
+type ListDigestCandidatesRow struct {
+	ID                   string `json:"id"`
+	Title                string `json:"title"`
+	Body                 string `json:"body"`
+	CreatedAt            string `json:"created_at"`
+	DocumentCanonicalUrl string `json:"document_canonical_url"`
+	FeedID               string `json:"feed_id"`
+	FeedTitle            string `json:"feed_title"`
+	FeedUrl              string `json:"feed_url"`
+}
+
+// Highlights a Digest may read: created inside the window, from a Document that
+// came in through a Feed. Newest first: that is the order a budget clamp keeps.
+// Archived rows are included: archiving is feed triage, not a retraction.
+func (q *Queries) ListDigestCandidates(ctx context.Context, arg ListDigestCandidatesParams) ([]ListDigestCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDigestCandidates, arg.CreatedAt, arg.CreatedAt_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDigestCandidatesRow
+	for rows.Next() {
+		var i ListDigestCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Body,
+			&i.CreatedAt,
+			&i.DocumentCanonicalUrl,
+			&i.FeedID,
+			&i.FeedTitle,
+			&i.FeedUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDigestIssuesByDigest = `-- name: ListDigestIssuesByDigest :many
+SELECT id, digest_id, window_start, window_end, status, topics, metadata, created_at, updated_at, rev, deleted_at FROM digest_issues WHERE digest_id = ? AND deleted_at IS NULL ORDER BY window_end DESC, created_at DESC LIMIT ?
+`
+
+type ListDigestIssuesByDigestParams struct {
+	DigestID string `json:"digest_id"`
+	Limit    int64  `json:"limit"`
+}
+
+func (q *Queries) ListDigestIssuesByDigest(ctx context.Context, arg ListDigestIssuesByDigestParams) ([]DigestIssue, error) {
+	rows, err := q.db.QueryContext(ctx, listDigestIssuesByDigest, arg.DigestID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DigestIssue
+	for rows.Next() {
+		var i DigestIssue
+		if err := rows.Scan(
+			&i.ID,
+			&i.DigestID,
+			&i.WindowStart,
+			&i.WindowEnd,
+			&i.Status,
+			&i.Topics,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDigestIssuesSince = `-- name: ListDigestIssuesSince :many
+SELECT id, digest_id, window_start, window_end, status, topics, metadata, created_at, updated_at, rev, deleted_at FROM digest_issues WHERE updated_at >= ? ORDER BY updated_at ASC
+`
+
+func (q *Queries) ListDigestIssuesSince(ctx context.Context, updatedAt string) ([]DigestIssue, error) {
+	rows, err := q.db.QueryContext(ctx, listDigestIssuesSince, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DigestIssue
+	for rows.Next() {
+		var i DigestIssue
+		if err := rows.Scan(
+			&i.ID,
+			&i.DigestID,
+			&i.WindowStart,
+			&i.WindowEnd,
+			&i.Status,
+			&i.Topics,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDigests = `-- name: ListDigests :many
+SELECT id, name, enabled, period, weekdays, hour, source_feed_ids, questions, provider, model, color, next_run_at, last_run_at, created_at, updated_at, rev, deleted_at FROM digests WHERE deleted_at IS NULL ORDER BY created_at ASC
+`
+
+func (q *Queries) ListDigests(ctx context.Context) ([]Digest, error) {
+	rows, err := q.db.QueryContext(ctx, listDigests)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Digest
+	for rows.Next() {
+		var i Digest
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Enabled,
+			&i.Period,
+			&i.Weekdays,
+			&i.Hour,
+			&i.SourceFeedIds,
+			&i.Questions,
+			&i.Provider,
+			&i.Model,
+			&i.Color,
+			&i.NextRunAt,
+			&i.LastRunAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDigestsSince = `-- name: ListDigestsSince :many
+SELECT id, name, enabled, period, weekdays, hour, source_feed_ids, questions, provider, model, color, next_run_at, last_run_at, created_at, updated_at, rev, deleted_at FROM digests WHERE updated_at >= ? ORDER BY updated_at ASC
+`
+
+func (q *Queries) ListDigestsSince(ctx context.Context, updatedAt string) ([]Digest, error) {
+	rows, err := q.db.QueryContext(ctx, listDigestsSince, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Digest
+	for rows.Next() {
+		var i Digest
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Enabled,
+			&i.Period,
+			&i.Weekdays,
+			&i.Hour,
+			&i.SourceFeedIds,
+			&i.Questions,
+			&i.Provider,
+			&i.Model,
+			&i.Color,
+			&i.NextRunAt,
+			&i.LastRunAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDocumentTagsSince = `-- name: ListDocumentTagsSince :many
 SELECT id, document_id, tag_id, created_at, updated_at, rev, deleted_at FROM document_tags WHERE updated_at >= ? ORDER BY updated_at ASC
 `
@@ -2367,6 +2905,91 @@ func (q *Queries) ListDocumentsWithAnnotationCount(ctx context.Context) ([]ListD
 			&i.DeletedAt,
 			&i.AnnotationCount,
 			&i.HighlightCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDoneDigestIssuesByDigest = `-- name: ListDoneDigestIssuesByDigest :many
+SELECT id, digest_id, window_start, window_end, status, topics, metadata, created_at, updated_at, rev, deleted_at FROM digest_issues WHERE digest_id = ? AND status = 'done' AND deleted_at IS NULL ORDER BY created_at ASC
+`
+
+// Every issue of a Digest that has a vault note: a rename moves them all.
+func (q *Queries) ListDoneDigestIssuesByDigest(ctx context.Context, digestID string) ([]DigestIssue, error) {
+	rows, err := q.db.QueryContext(ctx, listDoneDigestIssuesByDigest, digestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DigestIssue
+	for rows.Next() {
+		var i DigestIssue
+		if err := rows.Scan(
+			&i.ID,
+			&i.DigestID,
+			&i.WindowStart,
+			&i.WindowEnd,
+			&i.Status,
+			&i.Topics,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDueDigests = `-- name: ListDueDigests :many
+SELECT id, name, enabled, period, weekdays, hour, source_feed_ids, questions, provider, model, color, next_run_at, last_run_at, created_at, updated_at, rev, deleted_at FROM digests WHERE deleted_at IS NULL AND enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC
+`
+
+func (q *Queries) ListDueDigests(ctx context.Context, nextRunAt string) ([]Digest, error) {
+	rows, err := q.db.QueryContext(ctx, listDueDigests, nextRunAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Digest
+	for rows.Next() {
+		var i Digest
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Enabled,
+			&i.Period,
+			&i.Weekdays,
+			&i.Hour,
+			&i.SourceFeedIds,
+			&i.Questions,
+			&i.Provider,
+			&i.Model,
+			&i.Color,
+			&i.NextRunAt,
+			&i.LastRunAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Rev,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3949,6 +4572,21 @@ func (q *Queries) ListTagsWithCounts(ctx context.Context) ([]ListTagsWithCountsR
 	return items, nil
 }
 
+const markDigestRun = `-- name: MarkDigestRun :exec
+UPDATE digests SET last_run_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type MarkDigestRunParams struct {
+	LastRunAt *string `json:"last_run_at"`
+	UpdatedAt string  `json:"updated_at"`
+	ID        string  `json:"id"`
+}
+
+func (q *Queries) MarkDigestRun(ctx context.Context, arg MarkDigestRunParams) error {
+	_, err := q.db.ExecContext(ctx, markDigestRun, arg.LastRunAt, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const markDocumentError = `-- name: MarkDocumentError :exec
 UPDATE documents SET error_reason = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
 `
@@ -4167,6 +4805,36 @@ func (q *Queries) SoftDeleteDevice(ctx context.Context, arg SoftDeleteDevicePara
 	return err
 }
 
+const softDeleteDigest = `-- name: SoftDeleteDigest :exec
+UPDATE digests SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?
+`
+
+type SoftDeleteDigestParams struct {
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+	ID        string  `json:"id"`
+}
+
+func (q *Queries) SoftDeleteDigest(ctx context.Context, arg SoftDeleteDigestParams) error {
+	_, err := q.db.ExecContext(ctx, softDeleteDigest, arg.DeletedAt, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const softDeleteDigestIssuesByDigest = `-- name: SoftDeleteDigestIssuesByDigest :exec
+UPDATE digest_issues SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE digest_id = ? AND deleted_at IS NULL
+`
+
+type SoftDeleteDigestIssuesByDigestParams struct {
+	DeletedAt *string `json:"deleted_at"`
+	UpdatedAt string  `json:"updated_at"`
+	DigestID  string  `json:"digest_id"`
+}
+
+func (q *Queries) SoftDeleteDigestIssuesByDigest(ctx context.Context, arg SoftDeleteDigestIssuesByDigestParams) error {
+	_, err := q.db.ExecContext(ctx, softDeleteDigestIssuesByDigest, arg.DeletedAt, arg.UpdatedAt, arg.DigestID)
+	return err
+}
+
 const softDeleteDocument = `-- name: SoftDeleteDocument :exec
 UPDATE documents SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ? AND deleted_at IS NULL
 `
@@ -4358,6 +5026,69 @@ func (q *Queries) UpdateDeviceToken(ctx context.Context, arg UpdateDeviceTokenPa
 		arg.ID,
 	)
 	return err
+}
+
+const updateDigest = `-- name: UpdateDigest :one
+UPDATE digests SET name = ?, enabled = ?, period = ?, weekdays = ?, hour = ?, source_feed_ids = ?,
+                   questions = ?, provider = ?, model = ?, color = ?, next_run_at = ?,
+                   updated_at = ?, rev = rev + 1
+WHERE id = ? AND deleted_at IS NULL
+RETURNING id, name, enabled, period, weekdays, hour, source_feed_ids, questions, provider, model, color, next_run_at, last_run_at, created_at, updated_at, rev, deleted_at
+`
+
+type UpdateDigestParams struct {
+	Name          string `json:"name"`
+	Enabled       int64  `json:"enabled"`
+	Period        string `json:"period"`
+	Weekdays      string `json:"weekdays"`
+	Hour          int64  `json:"hour"`
+	SourceFeedIds string `json:"source_feed_ids"`
+	Questions     string `json:"questions"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	Color         string `json:"color"`
+	NextRunAt     string `json:"next_run_at"`
+	UpdatedAt     string `json:"updated_at"`
+	ID            string `json:"id"`
+}
+
+func (q *Queries) UpdateDigest(ctx context.Context, arg UpdateDigestParams) (Digest, error) {
+	row := q.db.QueryRowContext(ctx, updateDigest,
+		arg.Name,
+		arg.Enabled,
+		arg.Period,
+		arg.Weekdays,
+		arg.Hour,
+		arg.SourceFeedIds,
+		arg.Questions,
+		arg.Provider,
+		arg.Model,
+		arg.Color,
+		arg.NextRunAt,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	var i Digest
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Enabled,
+		&i.Period,
+		&i.Weekdays,
+		&i.Hour,
+		&i.SourceFeedIds,
+		&i.Questions,
+		&i.Provider,
+		&i.Model,
+		&i.Color,
+		&i.NextRunAt,
+		&i.LastRunAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
 const updateDocumentExcerptHero = `-- name: UpdateDocumentExcerptHero :exec
@@ -4571,6 +5302,58 @@ type UpdateSubscriptionPausedParams struct {
 func (q *Queries) UpdateSubscriptionPaused(ctx context.Context, arg UpdateSubscriptionPausedParams) error {
 	_, err := q.db.ExecContext(ctx, updateSubscriptionPaused, arg.Paused, arg.UpdatedAt, arg.ID)
 	return err
+}
+
+const upsertDigestIssue = `-- name: UpsertDigestIssue :one
+
+INSERT INTO digest_issues (id, digest_id, window_start, window_end, status, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, 'running', ?, ?, 0)
+ON CONFLICT(id) DO UPDATE SET
+  window_start = excluded.window_start,
+  window_end   = excluded.window_end,
+  status       = 'running',
+  updated_at   = excluded.updated_at,
+  rev          = digest_issues.rev + 1
+RETURNING id, digest_id, window_start, window_end, status, topics, metadata, created_at, updated_at, rev, deleted_at
+`
+
+type UpsertDigestIssueParams struct {
+	ID          string `json:"id"`
+	DigestID    string `json:"digest_id"`
+	WindowStart string `json:"window_start"`
+	WindowEnd   string `json:"window_end"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+//	Digest issues
+//
+// The issue id is minted when the job is enqueued, so a retried job reopens its
+// own row instead of leaving a second one behind.
+func (q *Queries) UpsertDigestIssue(ctx context.Context, arg UpsertDigestIssueParams) (DigestIssue, error) {
+	row := q.db.QueryRowContext(ctx, upsertDigestIssue,
+		arg.ID,
+		arg.DigestID,
+		arg.WindowStart,
+		arg.WindowEnd,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i DigestIssue
+	err := row.Scan(
+		&i.ID,
+		&i.DigestID,
+		&i.WindowStart,
+		&i.WindowEnd,
+		&i.Status,
+		&i.Topics,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Rev,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
 const upsertDocument = `-- name: UpsertDocument :one

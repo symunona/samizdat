@@ -23,7 +23,7 @@ Each has its own `CLAUDE.md`. Component recipes are namespaced (`just server::de
 
 ## Domain vocabulary (exact names, no synonyms)
 
-`Document` (scraped source, 1 per canonical URL) · `Highlight` (LLM-extracted unit; machine data, server→phone one-way) · `Annotation` (user-created selection + optional note, W3C TextQuoteSelector anchor; two-way sync) · `Note` (user-authored vault md) · `Feed` · `Subscription` · `Scraper` · `Pipeline`/`PipelineStep` · `Job` · `Schedule` · `Tag` · `UserProfile` (master prompt/persona).
+`Document` (scraped source, 1 per canonical URL) · `Highlight` (LLM-extracted unit; machine data, server→phone one-way) · `Annotation` (user-created selection + optional note, W3C TextQuoteSelector anchor; two-way sync) · `Note` (user-authored vault md) · `Feed` · `Subscription` · `Scraper` · `Pipeline`/`PipelineStep` · `Job` · `Schedule` · `Tag` · `UserProfile` (master prompt/persona) · `Digest` (scheduled questions over the Highlights of chosen Feeds; the config) · `DigestIssue` (one run's output) · `DigestQuestion` (one editable prompt inside a Digest) · `DigestTopic` (one grouped answer item, pointing at the bullets it came from).
 
 PascalCase singular types, snake_case plural tables, `<singular>_id` FKs.
 Banned fragments: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`.

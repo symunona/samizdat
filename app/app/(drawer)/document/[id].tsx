@@ -32,6 +32,7 @@ import {
 import type { Document, Annotation, HighlightWithDoc, Feed, Tag } from '../../../src/api'
 import * as db from '../../../src/db'
 import { tagColor } from '../../../src/tagColor'
+import { digestHref } from '../../../src/DigestChip'
 import { openExternal, isWebUrl } from '../../../src/openExternal'
 import { useConnection } from '../../../src/ConnectionContext'
 import { useFailedJobs, documentErrorText } from '../../../src/failedJobs'
@@ -89,6 +90,8 @@ type ParsedMsg = {
   alt?: string
   paginated?: boolean
   pages?: number
+  digestId?: string
+  issueId?: string
 }
 
 export default function DocumentViewer() {
@@ -147,6 +150,7 @@ export default function DocumentViewer() {
   // card mirrors it). Read through refs by the repaint effect below so a highlight
   // edit does not re-push the whole set.
   const notedIds = db.useAnnotatedHighlightIds()
+  const citedBy = db.useHighlightDigests()
   const highlightsRef = useRef(highlights)
   highlightsRef.current = highlights
   const hlExpandedRef = useRef(hlExpanded)
@@ -420,7 +424,8 @@ export default function DocumentViewer() {
       pinned: h.pinned as 0 | 1,
       hasNote: notedIds.has(h.id),
       tags: (h.tags ?? []).map(t => ({ id: t.id, name: t.name, color: t.color })),
-    })), [notedIds])
+      digests: citedBy.get(h.id) ?? [],
+    })), [notedIds, citedBy])
 
   // A note taken on a card must repaint that card. `setAnnotations` above only moves
   // marks; the card's dotted border lives in the highlight payload, so it needs its own
@@ -522,6 +527,8 @@ export default function DocumentViewer() {
       setTagTargetId(msg.id)
       setTagTargetType('highlight')
       setTagModalVisible(true)
+    } else if (msg.type === 'hl_digest' && msg.digestId) {
+      router.push(digestHref(msg.digestId, msg.issueId))
     } else if (msg.type === 'hl_toggle_section') {
       setHlExpanded(prev => {
         const next = !prev

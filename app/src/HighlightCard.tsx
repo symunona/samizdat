@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 
 const CLIP_CHAR_THRESHOLD = 800
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
+import { useRouter } from 'expo-router'
 import { useUnistyles } from 'react-native-unistyles'
 import type { HighlightWithDoc } from './api'
 import MarkdownBody from './MarkdownBody'
@@ -11,6 +12,8 @@ import IconButton from './IconButton'
 import DateStamp from './DateStamp'
 import { isTouchDevice } from './touch'
 import { useDragGuard } from './dragGuard'
+import DigestChip, { digestHref } from './DigestChip'
+import type { HighlightDigest } from './db'
 import { tagColor } from './tagColor'
 import { hashColor } from './hashColor'
 
@@ -31,13 +34,17 @@ type Props = {
   // At least one Annotation anchors here. The whole card is marked, not just the icon —
   // scanning a feed for "the ones I wrote on" should not need a squint at a 14px glyph.
   hasNote?: boolean
+  // The Digests whose issues cite this Highlight (db.useHighlightDigests, read once per
+  // screen). One chip each; a press opens the newest issue citing it.
+  digests?: HighlightDigest[]
 }
 
 export default function HighlightCard({
-  item, linkedDocuments, onPress, onPin, onDelete, onAnnotate, onTags, onDocumentPress, onLinkAction, busy, pinned, hasNote,
+  item, linkedDocuments, onPress, onPin, onDelete, onAnnotate, onTags, onDocumentPress, onLinkAction, busy, pinned, hasNote, digests,
 }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
+  const router = useRouter()
   const touch = isTouchDevice()
   // The card lives inside a swipeable — a drag must not count as a tap.
   const guard = useDragGuard()
@@ -55,7 +62,7 @@ export default function HighlightCard({
   const stableLinkedDocs = useMemo(() => linkedDocuments, [item.id])
 
   return (
-    <View style={[s.card, hasNote && s.cardNoted, pinned && s.cardPinned]}>
+    <View style={[s.card, hasNote && s.cardNoted, pinned && s.cardPinned]} testID={`highlight-card-${item.id}`}>
       <View style={s.cardHeader}>
         <View style={[s.kindBadge, { backgroundColor: hashColor(item.kind) }]}>
           <Text style={s.kindText}>{item.kind}</Text>
@@ -106,9 +113,18 @@ export default function HighlightCard({
         onLinkAction={onLinkAction}
       />
 
-      {item.tags && item.tags.length > 0 && (
+      {(digests?.length || item.tags?.length) ? (
         <View style={s.tagRow}>
-          {item.tags.map(tag => (
+          {digests?.map(d => (
+            <DigestChip
+              key={d.digestId}
+              name={d.name}
+              color={d.color}
+              testID={`digest-chip-${d.digestId}`}
+              {...guard(() => router.push(digestHref(d.digestId, d.issueId)))}
+            />
+          ))}
+          {item.tags?.map(tag => (
             <Pressable
               key={tag.id}
               style={[s.tagChip, { borderColor: tagColor(tag.color) }]}
@@ -119,7 +135,7 @@ export default function HighlightCard({
             </Pressable>
           ))}
         </View>
-      )}
+      ) : null}
 
       <View style={s.cardFooter}>
         {/* Always rendered — on touch the swipe archives, so this is the ONLY delete
@@ -181,7 +197,8 @@ function buildStyles(t: Theme) {
       gap: 6,
     },
     footerSpacer: { flex: 1 },
-    tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    // Digest chips first (filled), then tags (outlined).
+    tagRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
     tagChip: {
       paddingHorizontal: 8,
       paddingVertical: 2,

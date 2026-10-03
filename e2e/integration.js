@@ -11,12 +11,13 @@
 //
 // Run via: just e2e-int   (requires server bin + web build in app/dist)
 
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import {
-  BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
+  BASE_URL, ROOT, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
   newConnectedPage, seedTextDoc, seedTextDocs, seedVideoDoc, seedHighlight, seedLLMHealth,
-  seedPipeline, seedJob,
-  startStubLLM, setStubLLMFailing, STUB_LLM_MODELS, STUB_LLM_PORT,
+  seedPipeline, seedJob, seedActiveJob, seedFeed,
+  startStubLLM, setStubLLMFailing, STUB_LLM_MODELS, STUB_LLM_PORT, STUB_DIGEST_MATCH, STUB_DIGEST_TOPIC,
   makeCleanup,
 } from './harness.js'
 
@@ -3234,6 +3235,451 @@ async function runReadingMode(token, deviceId) {
   await page.close()
 }
 
+// ── Digests: create, run, read, disable ───────────────────────────────────────
+// The plan's self-test, through the real screens. Three newsletters: Alpha and Beta
+// cover the same release in different words, Gamma mentions it too but is NOT in the
+// Digest's scope. The stub model groups every item it is SENT that names the release
+// into one topic — so the page shows exactly what the server chose to send, and a
+// scope leak would put Gamma on it. Beta's Highlight is a list, and only one of its
+// lines is about the release: the topic must point at that bullet, not at the card.
+// Picking a newsletter is what holds it: once the Digest is saved, a pipeline run
+// finishing for Alpha's Document archives Alpha's Highlight, which then reads from
+// the issue and from Archived but never from the feed.
+const DG_NAME = 'Launch Watch'
+const DG_PROMPT = `Which releases did more than one newsletter cover? Mention ${STUB_DIGEST_MATCH}.`
+const DG_FEEDS = {
+  alpha: { id: 'aaaaaaaa-0000-4000-8000-0000000000a1', title: 'Alpha Dispatch' },
+  beta: { id: 'aaaaaaaa-0000-4000-8000-0000000000a2', title: 'Beta Bulletin' },
+  gamma: { id: 'aaaaaaaa-0000-4000-8000-0000000000a3', title: 'Gamma Gazette' },
+  // Subscribed, but no Pipeline ever produced a Highlight from it.
+  delta: { id: 'aaaaaaaa-0000-4000-8000-0000000000a4', title: 'Delta Drafts' },
+}
+const DG_DOCS = {
+  alpha: { id: 'dddddddd-0000-4000-8000-0000000000a1', title: 'Alpha Issue 12' },
+  beta: { id: 'dddddddd-0000-4000-8000-0000000000a2', title: 'Beta Issue 7' },
+  gamma: { id: 'dddddddd-0000-4000-8000-0000000000a3', title: 'Gamma Issue 3' },
+}
+const DG_BETA_BODY_TEXT = 'Beta body paragraph that only the opened Beta Document shows.'
+const DG_ALPHA_TEXT = `${STUB_DIGEST_MATCH} 2 ships today with a tokenizer twice as fast.`
+const DG_BETA_BULLET_TAIL = 'cut their second major version.'
+const DG_BETA_OTHER = 'Unrelated pricing change at a cloud vendor.'
+const DG_GAMMA_TEXT = `Gamma also heard about ${STUB_DIGEST_MATCH} from a reader.`
+const DG_SHOTS = join(ROOT, 'tmp', 'screenshots')
+
+const dgField = label => `[aria-label="${label}"]`
+const DG_QUESTION_TITLE = 'Shared releases'
+const DG_EDITOR_ERROR = '[data-testid="digest-editor-error"]'
+// Not the color a first Digest is given when none is picked (red), so a list row in
+// this one proves the PICK was stored.
+const DG_COLOR = { name: 'green', rgb: 'rgb(74, 222, 128)' }
+const DG_HIGHLIGHTS = {
+  alpha: 'ffffffff-0000-4000-8000-0000000000a1',
+  beta: 'ffffffff-0000-4000-8000-0000000000a2',
+  gamma: 'ffffffff-0000-4000-8000-0000000000a3',
+}
+const dgSwatch = name => dgField(`Digest color ${name}`)
+const dgCard = key => `[data-testid="highlight-card-${DG_HIGHLIGHTS[key]}"]`
+const background = (page, selector) =>
+  page.$eval(selector, el => getComputedStyle(el).backgroundColor).catch(() => null)
+const DG_ENABLED_SWITCH = `input[aria-label="Digest enabled ${DG_NAME}"]`
+const DG_SCOPE_NOTE = '[data-testid="digest-scope-note"]'
+// The run_pipeline_step Job that completes Alpha's pipeline run — where hold acts.
+const DG_HOLD_JOB = 'bbbbbbbb-0000-4000-8000-0000000000a1'
+const DG_BULLETS = '[aria-label^="Open source:"]'
+
+function seedDigestFixtures() {
+  for (const [key, feed] of Object.entries(DG_FEEDS)) {
+    seedFeed({ ...feed, url: `https://${key}.example.com/rss` })
+  }
+  seedTextDocs(Object.entries(DG_DOCS).map(([key, doc]) => ({
+    ...doc,
+    canonicalUrl: `https://${key}.example.com/${doc.id}`,
+    markdown: `# ${doc.title}\n\n${key === 'beta' ? DG_BETA_BODY_TEXT : `Body of ${doc.title}.`}`,
+    sourceFeedId: DG_FEEDS[key].id,
+  })))
+  // Alpha is the newer Highlight, so it is candidate 1 and Beta's bullet comes second.
+  const minuteAgo = new Date(Date.now() - 60_000).toISOString()
+  seedHighlight({ id: DG_HIGHLIGHTS.alpha, documentId: DG_DOCS.alpha.id, title: 'Alpha lead', body: DG_ALPHA_TEXT })
+  seedHighlight({
+    id: DG_HIGHLIGHTS.beta, documentId: DG_DOCS.beta.id, title: 'Beta roundup', createdAt: minuteAgo,
+    body: `- A quiet week for conference news.\n- [The ${STUB_DIGEST_MATCH} team](https://beta.example.com/z) cut their second major version.\n- ${DG_BETA_OTHER}`,
+  })
+  seedHighlight({ id: DG_HIGHLIGHTS.gamma, documentId: DG_DOCS.gamma.id, title: 'Gamma aside', body: DG_GAMMA_TEXT })
+}
+
+async function apiDigest(token) {
+  const res = await fetch(`${BASE_URL}/api/v1/digests`, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) throw new Error(`GET /api/v1/digests: HTTP ${res.status}`)
+  return (await res.json()).find(d => d.name === DG_NAME)
+}
+
+async function openDigestEditor(page) {
+  await page.goto(`${BASE_URL}/digests`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await page.waitForSelector(dgField(`Edit digest ${DG_NAME}`), { timeout: 10000 })
+  await page.click(dgField(`Edit digest ${DG_NAME}`))
+  await page.waitForSelector(dgField('Question 1 prompt'), { timeout: 6000 })
+}
+
+const feedRowText = (page, title) =>
+  page.$eval(dgField(`Newsletter ${title}`), el => el.innerText).catch(() => null)
+const feedChecked = (page, title) =>
+  page.$eval(dgField(`Newsletter ${title}`), el => el.getAttribute('aria-checked')).catch(() => null)
+
+async function runDigests(token, deviceId) {
+  seedDigestFixtures()
+  mkdirSync(DG_SHOTS, { recursive: true })
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.setViewport({ width: 900, height: 1100 })
+  await page.goto(`${BASE_URL}/digests`, { waitUntil: 'networkidle2', timeout: 15000 })
+
+  await check('digests: a new digest opens empty — no name, no question, no newsletter picked', async () => {
+    await page.waitForSelector(dgField('Add digest'), { timeout: 10000 })
+    await page.click(dgField('Add digest'))
+    await page.waitForSelector(dgField('Digest name'), { timeout: 6000 })
+    await page.waitForSelector(dgField(`Newsletter ${DG_FEEDS.alpha.title}`), { timeout: 6000 })
+    const form = await page.evaluate(name => ({
+      name: document.querySelector(name).value,
+      questions: document.querySelectorAll('[aria-label^="Question "]').length,
+      newsletters: [...document.querySelectorAll('[aria-label^="Newsletter "]')].map(el => el.getAttribute('aria-checked')),
+    }), dgField('Digest name'))
+    await page.screenshot({ path: join(DG_SHOTS, 'digests-new-empty.png'), fullPage: true })
+    if (form.name !== '') return `the name is prefilled: "${form.name}"`
+    if (form.questions !== 0) return `${form.questions} question controls on a new digest, want none`
+    if (form.newsletters.length < 4) return `only ${form.newsletters.length} newsletters offered`
+    return form.newsletters.every(c => c === 'false') ? null : `a newsletter is already picked: ${form.newsletters}`
+  })
+
+  await check('digests: no hold switch — with nothing picked, a note says picking is what holds', async () => {
+    if (await page.$('[aria-label="Hold highlights"]')) return 'the editor still offers a hold switch'
+    const note = await page.$eval(DG_SCOPE_NOTE, el => el.innerText).catch(() => null)
+    if (note === null) return 'no scope note under Newsletters'
+    return note.includes('Pick newsletters to keep their Highlights out of the feed')
+      ? null : `with nothing picked the note reads "${note}"`
+  })
+
+  await check('digests: saving it empty shows the server\'s reason, and saves nothing', async () => {
+    // Two refused saves follow: the 400s are the point, not noise for the net below.
+    const before = errors.length
+    const editorError = () => page.$eval(DG_EDITOR_ERROR, el => el.innerText).catch(() => '')
+    await page.click(dgField('Save digest'))
+    await page.waitForSelector(DG_EDITOR_ERROR, { timeout: 6000 })
+    const noName = await editorError()
+    if (!noName.includes('name required')) return `an empty save reads "${noName}"`
+    await page.type(dgField('Digest name'), DG_NAME)
+    await page.click(dgField('Save digest'))
+    try {
+      await page.waitForFunction(sel => document.querySelector(sel)?.innerText.includes('at least one enabled question'),
+        { timeout: 6000 }, DG_EDITOR_ERROR)
+    } catch {
+      return `a save with no question reads "${await editorError()}"`
+    }
+    await page.screenshot({ path: join(DG_SHOTS, 'digests-new-empty-error.png'), fullPage: true })
+    await sleep(300)
+    errors.length = before
+    return await apiDigest(token) ? 'the refused digest was saved anyway' : null
+  })
+
+  await check('digests: a newsletter with no Highlights is marked, one with Highlights is not', async () => {
+    // The marker is derived from the replica, so it settles once the pull has landed.
+    try {
+      await page.waitForFunction(sel => {
+        const row = document.querySelector(sel)
+        return row && !row.innerText.includes('no Highlights yet')
+      }, { timeout: 15000 }, dgField(`Newsletter ${DG_FEEDS.alpha.title}`))
+    } catch {
+      return `"${DG_FEEDS.alpha.title}" has a Highlight but still reads: ${await feedRowText(page, DG_FEEDS.alpha.title)}`
+    }
+    const empty = await feedRowText(page, DG_FEEDS.delta.title)
+    return empty?.includes('no Highlights yet') ? null : `"${DG_FEEDS.delta.title}" has no Highlights but reads: ${empty}`
+  })
+
+  await check('digests: fill the editor — one question added by hand, two newsletters, a model', async () => {
+    // The name is already in from the refused save above.
+    await page.click(dgField('Add question'))
+    await page.waitForSelector(dgField('Question 1 prompt'), { timeout: 6000 })
+    const blank = await page.evaluate((title, prompt) => [document.querySelector(title).value, document.querySelector(prompt).value],
+      dgField('Question 1 title'), dgField('Question 1 prompt'))
+    if (blank.some(v => v !== '')) return `"+ Add question" gave a prefilled question: ${JSON.stringify(blank)}`
+    await page.type(dgField('Question 1 title'), DG_QUESTION_TITLE)
+    await page.type(dgField('Question 1 prompt'), DG_PROMPT)
+    const preselected = await page.$$eval('[aria-label^="Digest color "][aria-selected="true"]', els => els.length)
+    if (preselected !== 0) return 'a new digest already has a color selected'
+    await page.click(dgSwatch(DG_COLOR.name))
+    if (await page.$eval(dgSwatch(DG_COLOR.name), el => el.getAttribute('aria-selected')) !== 'true') {
+      return `pressing the ${DG_COLOR.name} swatch did not select it`
+    }
+    await page.screenshot({ path: join(DG_SHOTS, 'digests-color-picker.png'), fullPage: true })
+    await page.click(dgField(`Newsletter ${DG_FEEDS.alpha.title}`))
+    await page.click(dgField(`Newsletter ${DG_FEEDS.beta.title}`))
+    await page.click(dgField('Digest model'))
+    // Search first, as a person would: it also waits out the sheet's slide-in, during
+    // which a row is on its way somewhere else and cannot be clicked.
+    await page.waitForSelector(MODEL_SEARCH, { timeout: 6000 })
+    await sleep(400)
+    await page.click(MODEL_SEARCH)
+    await page.keyboard.type(STUB_LLM_MODELS[1], { delay: 30 })
+    await sleep(400)
+    await page.click(`[aria-label="model ${STUB_LLM_MODELS[1]}"]`)
+    await sleep(300)
+    const model = await page.$eval(dgField('Digest model'), el => el.innerText)
+    if (!model.includes(STUB_LLM_MODELS[1]) || !model.includes(STUB_PROVIDER_ID)) {
+      return `the model field reads "${model}" after picking ${STUB_LLM_MODELS[1]}`
+    }
+    await page.screenshot({ path: join(DG_SHOTS, 'digests-editor.png'), fullPage: true })
+    await page.click(dgField('Save digest'))
+    await page.waitForFunction(() => document.body.innerText.includes('Digest saved'), { timeout: 8000 })
+    return null
+  })
+
+  await check('digests: the picked color survives a reload — on the list row and in the picker', async () => {
+    const saved = await apiDigest(token)
+    if (saved?.color !== DG_COLOR.name) return `the server stored the color as "${saved?.color}"`
+    await openDigestEditor(page)
+    const row = await background(page, `[data-testid="digest-name-${saved.id}"]`)
+    if (row !== DG_COLOR.rgb) return `the list row names the digest on ${row}, want ${DG_COLOR.rgb}`
+    const selected = await page.$$eval('[aria-label^="Digest color "][aria-selected="true"]', els => els.map(el => el.getAttribute('aria-label')))
+    if (selected.length !== 1 || selected[0] !== `Digest color ${DG_COLOR.name}`) return `the picker reloaded with ${JSON.stringify(selected)} selected`
+    await page.screenshot({ path: join(DG_SHOTS, 'digests-color-reloaded.png'), fullPage: true })
+    return await background(page, dgSwatch(DG_COLOR.name)) === DG_COLOR.rgb ? null : 'the selected swatch is not the color it names'
+  })
+
+  await check('digests: the question, the scope and the model survive a reload', async () => {
+    await openDigestEditor(page)
+    const prompt = await page.$eval(dgField('Question 1 prompt'), el => el.value)
+    if (prompt !== DG_PROMPT) return `the prompt reloaded as "${prompt}"`
+    if (await page.$(dgField('Question 2 prompt'))) return 'a question nobody added is in the editor'
+    const checked = {}
+    for (const key of ['alpha', 'beta', 'gamma']) checked[key] = await feedChecked(page, DG_FEEDS[key].title)
+    if (checked.alpha !== 'true' || checked.beta !== 'true' || checked.gamma !== 'false') {
+      return `newsletter scope reloaded as ${JSON.stringify(checked)}`
+    }
+    const model = await page.$eval(dgField('Digest model'), el => el.innerText)
+    if (!model.includes(STUB_LLM_MODELS[1])) return `the model reloaded as "${model}"`
+    const txt = await page.evaluate(() => document.body.innerText)
+    return /Daily · 07:00/.test(txt) ? null : `the card does not summarize the schedule: ${txt.slice(0, 300)}`
+  })
+
+  await check('digests: a run finishing for a picked newsletter holds its Highlight out of the feed', async () => {
+    const note = await page.$eval(DG_SCOPE_NOTE, el => el.innerText).catch(() => '')
+    if (!note.includes('2 picked')) return `with two newsletters picked the note reads "${note}"`
+    // seedHighlight gave Alpha's Highlight a pipeline run with no steps: one tick
+    // completes it, and run completion is where hold acts.
+    seedActiveJob({ id: DG_HOLD_JOB, kind: 'run_pipeline_step', payload: { pipeline_run_id: `run-${DG_HIGHLIGHTS.alpha}` }, status: 'queued' })
+    for (let i = 0; i < 60; i++) {
+      const [alpha, beta] = [await apiHighlight(page, DG_HIGHLIGHTS.alpha), await apiHighlight(page, DG_HIGHLIGHTS.beta)]
+      if (alpha?.archived_at) return beta?.archived_at ? 'Beta was archived too, though no run of it finished' : null
+      await sleep(500)
+    }
+    return 'the run finished (or never ran) without archiving Alpha\'s Highlight'
+  })
+
+  await check('digests: Run now lands on an issue with ONE topic carrying one bullet per newsletter', async () => {
+    await page.click(dgField('Run digest now'))
+    try {
+      await page.waitForFunction(t => document.body.innerText.includes(t), { timeout: 45000 }, STUB_DIGEST_TOPIC.title)
+    } catch {
+      return `no topic rendered: ${(await page.evaluate(() => document.body.innerText)).slice(0, 400)}`
+    }
+    await sleep(500)
+    await page.screenshot({ path: join(DG_SHOTS, 'digest-issue.png'), fullPage: true })
+    if (!new URL(page.url()).pathname.startsWith('/digest/')) return `Run now landed on ${page.url()}`
+    const txt = await page.evaluate(() => document.body.innerText)
+    if (!txt.includes(`1. ${STUB_DIGEST_TOPIC.title}`) || !txt.includes(STUB_DIGEST_TOPIC.why)) {
+      return `the topic's title/why are not shown: ${txt.slice(0, 400)}`
+    }
+    if (/\n2\. /.test(txt)) return `more than one topic: ${txt.slice(0, 400)}`
+    const bullets = await page.$$eval(DG_BULLETS, els => els.map(el => el.innerText))
+    if (bullets.length !== 2) return `${bullets.length} bullets under the topic, want 2: ${JSON.stringify(bullets)}`
+    if (!bullets[0].includes(DG_ALPHA_TEXT) || !bullets[0].includes(DG_FEEDS.alpha.title)) {
+      return `the first bullet is not Alpha's Highlight under its newsletter name: "${bullets[0]}"`
+    }
+    if (!bullets[1].includes(`The ${STUB_DIGEST_MATCH} team`) || !bullets[1].includes(DG_BETA_BULLET_TAIL)) {
+      return `the second bullet is not Beta's release line: "${bullets[1]}"`
+    }
+    if (/\]\(|^\s*[-*•]/.test(bullets[1])) return `the bullet shows raw markdown: "${bullets[1]}"`
+    if (!bullets[1].includes(DG_FEEDS.beta.title)) return `the second bullet does not name its newsletter: "${bullets[1]}"`
+    if (txt.includes(DG_BETA_OTHER)) return 'the topic shows the whole Beta Highlight, not the one bullet it cites'
+    return null
+  })
+
+  await check('digests: nothing from the newsletter outside the scope is on the issue', async () => {
+    const txt = await page.evaluate(() => document.body.innerText)
+    for (const leak of [DG_FEEDS.gamma.title, DG_DOCS.gamma.title, DG_GAMMA_TEXT]) {
+      if (txt.includes(leak)) return `"${leak}" is on the page — Gamma is not in this digest`
+    }
+    return null
+  })
+
+  const issueUrl = page.url()
+
+  await check('digests: pressing the second bullet opens Beta\'s Document', async () => {
+    const bullets = await page.$$(DG_BULLETS)
+    await bullets[1].click()
+    try {
+      await page.waitForFunction(id => location.pathname === `/document/${id}`, { timeout: 8000 }, DG_DOCS.beta.id)
+      await waitViewerReady(page)
+    } catch {
+      return `landed on ${page.url()}, want /document/${DG_DOCS.beta.id}`
+    }
+    const body = await page.evaluate(() => document.querySelector('iframe').contentDocument.body.innerText)
+    return body.includes(DG_BETA_BODY_TEXT) ? null : `the opened Document is not Beta's: "${body.slice(0, 200)}"`
+  })
+
+  await check('digests: the issue reads from the replica with the network cut', async () => {
+    // Online once more, so the pull that carries the Digest and its issue has landed.
+    await page.goto(issueUrl, { waitUntil: 'networkidle2', timeout: 15000 })
+    await sleep(5000)
+    await page.evaluate(() => localStorage.setItem('samizdat_force_offline', '1'))
+    await page.goto(issueUrl, { waitUntil: 'domcontentloaded', timeout: 20000 })
+    try {
+      await page.waitForFunction(t => document.body.innerText.includes(t), { timeout: 12000 }, STUB_DIGEST_TOPIC.title)
+    } catch {
+      return `no topic offline: ${(await page.evaluate(() => document.body.innerText)).slice(0, 300)}`
+    }
+    const bullets = await page.$$eval(DG_BULLETS, els => els.map(el => el.innerText))
+    await page.screenshot({ path: join(DG_SHOTS, 'digest-issue-offline.png'), fullPage: true })
+    if (bullets.length !== 2) return `${bullets.length} bullets offline, want 2`
+    if (!bullets[0].includes(DG_ALPHA_TEXT)) return `Alpha's bullet did not resolve from the replica: "${bullets[0]}"`
+    if (!bullets[1].includes(DG_DOCS.beta.title)) return `Beta's bullet does not name its Document offline: "${bullets[1]}"`
+    const txt = await page.evaluate(() => document.body.innerText)
+    return txt.includes(DG_NAME) ? null : 'the digest name is not shown offline'
+  })
+  await page.evaluate(() => localStorage.removeItem('samizdat_force_offline'))
+
+  // The chip is computed from the replica, which the offline check above has shown
+  // to hold the Digest and its issue.
+  const digestId = (await apiDigest(token))?.id
+  const chip = key => `${dgCard(key)} [data-testid="digest-chip-${digestId}"]`
+  await check('digests: the feed hides the held Highlight; a cited card carries the chip in its color, an uncited one none', async () => {
+    await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 15000 })
+    try {
+      await page.waitForSelector(chip('beta'), { timeout: 15000 })
+    } catch {
+      const card = await page.$eval(dgCard('beta'), el => el.innerText).catch(() => null)
+      return card === null ? 'Beta\'s Highlight card is not in the feed' : `Beta's card has no digest chip: ${card.slice(0, 200)}`
+    }
+    await page.$eval(chip('beta'), el => el.scrollIntoView({ block: 'center' }))
+    await page.screenshot({ path: join(DG_SHOTS, 'feed-digest-chip.png') })
+    if (await page.$(dgCard('alpha'))) return 'Alpha\'s Highlight is held, but its card is in the feed'
+    const name = await page.$eval(chip('beta'), el => el.innerText.trim())
+    if (name !== DG_NAME) return `the chip reads "${name}", want "${DG_NAME}"`
+    const color = await background(page, chip('beta'))
+    if (color !== DG_COLOR.rgb) return `the chip is ${color}, want ${DG_COLOR.rgb}`
+    if (!await page.$(dgCard('gamma'))) return 'Gamma\'s card is not in the feed, so its missing chip proves nothing'
+    return await page.$(`${dgCard('gamma')} [data-testid^="digest-chip-"]`) ? 'Gamma was not cited but its card has a chip' : null
+  })
+
+  await check('digests: the held Highlight reads from Archived, with its chip', async () => {
+    await page.goto(`${BASE_URL}/archived`, { waitUntil: 'networkidle2', timeout: 15000 })
+    try {
+      await page.waitForSelector(chip('alpha'), { timeout: 15000 })
+    } catch {
+      const card = await page.$eval(dgCard('alpha'), el => el.innerText).catch(() => null)
+      return card === null ? 'Alpha\'s held Highlight is not in Archived' : `Alpha's archived card has no digest chip: ${card.slice(0, 200)}`
+    }
+    await page.$eval(chip('alpha'), el => el.scrollIntoView({ block: 'center' }))
+    await page.screenshot({ path: join(DG_SHOTS, 'archived-digest-chip.png') })
+    return null
+  })
+
+  await check('digests: pressing the held Highlight\'s chip opens the issue that cites it', async () => {
+    const res = await fetch(`${BASE_URL}/api/v1/digests/${digestId}/issues`, { headers: { Authorization: `Bearer ${token}` } })
+    const issueId = (await res.json())[0]?.id
+    await page.click(chip('alpha'))
+    try {
+      await page.waitForFunction(t => location.pathname.startsWith('/digest/') && document.body.innerText.includes(t),
+        { timeout: 10000 }, STUB_DIGEST_TOPIC.title)
+    } catch {
+      return `the chip led to ${page.url()}`
+    }
+    const at = new URL(page.url())
+    if (at.pathname !== `/digest/${digestId}` || at.searchParams.get('issue') !== issueId) {
+      return `the chip led to ${at.pathname}${at.search}, want /digest/${digestId}?issue=${issueId}`
+    }
+    const header = await background(page, '[data-testid="digest-issue-name"]')
+    return header === DG_COLOR.rgb ? null : `the issue header names the digest on ${header}, want ${DG_COLOR.rgb}`
+  })
+
+  await check('digests: disabling in the list survives a reload', async () => {
+    await page.goto(`${BASE_URL}/digests`, { waitUntil: 'networkidle2', timeout: 15000 })
+    await page.waitForSelector(DG_ENABLED_SWITCH, { timeout: 10000 })
+    const txt = await page.evaluate(() => document.body.innerText)
+    if (/last issue: none yet/.test(txt)) return 'the card still says no issue was written'
+    if (!await page.$eval(DG_ENABLED_SWITCH, el => el.checked)) return 'the digest is not enabled to begin with'
+    await page.$eval(DG_ENABLED_SWITCH, el => el.click())
+    await page.waitForFunction(sel => document.querySelector(sel)?.checked === false, { timeout: 8000 }, DG_ENABLED_SWITCH)
+    if ((await apiDigest(token))?.enabled !== false) return 'the server still has the digest enabled'
+    await page.goto(`${BASE_URL}/digests`, { waitUntil: 'networkidle2', timeout: 15000 })
+    await page.waitForSelector(DG_ENABLED_SWITCH, { timeout: 10000 })
+    await sleep(500)
+    await page.screenshot({ path: join(DG_SHOTS, 'digests-list.png'), fullPage: true })
+    if (await page.$eval(DG_ENABLED_SWITCH, el => el.checked)) return 'the switch reloaded as ON'
+    return /next run: off/.test(await page.evaluate(() => document.body.innerText)) ? null : 'a disabled digest still shows a next run'
+  })
+
+  // Both checks below save from the editor, then read the result three ways: the
+  // server's row, the list card, and the editor a fresh page load opens.
+  const saveDigest = async saved => {
+    await page.click(dgField('Save digest'))
+    for (let i = 0; i < 40; i++) {
+      if (saved(await apiDigest(token))) return true
+      await sleep(200)
+    }
+    return false
+  }
+
+  await check('digests: weekly on Tuesday and Friday survives save + reload', async () => {
+    await openDigestEditor(page)
+    await page.click(dgField('Period weekly'))
+    await page.waitForSelector(dgField('Weekday Tue'), { timeout: 6000 })
+    // Friday first: the server stores the days sorted, whatever order they were tapped in.
+    await page.click(dgField('Weekday Fri'))
+    await page.click(dgField('Weekday Tue'))
+    if (!await saveDigest(d => d?.period === 'weekly')) return 'the server never saw the digest become weekly'
+    const weekdays = JSON.stringify((await apiDigest(token)).weekdays)
+    if (weekdays !== '[2,5]') return `the server stored weekdays ${weekdays}, want [2,5]`
+
+    await openDigestEditor(page)
+    const card = await page.evaluate(() => document.body.innerText)
+    if (!card.includes('Weekly · Tue, Fri · 07:00')) return `the card does not name Tuesday and Friday: ${card.slice(0, 300)}`
+    const selected = await page.$$eval('[aria-label^="Weekday "]', els =>
+      els.filter(el => el.getAttribute('aria-selected') === 'true').map(el => el.getAttribute('aria-label')))
+    await page.screenshot({ path: join(DG_SHOTS, 'digests-weekly.png'), fullPage: true })
+    return selected.join() === 'Weekday Tue,Weekday Fri' ? null : `the editor reloaded with ${JSON.stringify(selected)} selected`
+  })
+
+  await check('digests: a question added with "+ Add question" survives save + reload', async () => {
+    const added = { title: 'Second look', prompt: 'What did only one newsletter notice?' }
+    await openDigestEditor(page)
+    if (await page.$(dgField('Question 2 prompt'))) return 'the digest already has a second question'
+    await page.click(dgField('Add question'))
+    await page.waitForSelector(dgField('Question 2 prompt'), { timeout: 6000 })
+    await page.type(dgField('Question 2 title'), added.title)
+    await page.type(dgField('Question 2 prompt'), added.prompt)
+    if (!await saveDigest(d => d?.questions.length === 2)) return 'the server never saw a second question'
+    const stored = (await apiDigest(token)).questions[1]
+    if (stored.title !== added.title || stored.prompt !== added.prompt || !stored.id || !stored.enabled) {
+      return `the server stored the new question as ${JSON.stringify(stored)}`
+    }
+
+    await openDigestEditor(page)
+    await page.waitForSelector(dgField('Question 2 prompt'), { timeout: 6000 }).catch(() => {})
+    const shown = await page.evaluate((title, prompt) => ({
+      title: document.querySelector(title)?.value,
+      prompt: document.querySelector(prompt)?.value,
+    }), dgField('Question 2 title'), dgField('Question 2 prompt'))
+    if (shown.title !== added.title || shown.prompt !== added.prompt) return `the editor reloaded it as ${JSON.stringify(shown)}`
+    const first = await page.$eval(dgField('Question 1 prompt'), el => el.value)
+    return first === DG_PROMPT ? null : `adding a question changed the first one to "${first}"`
+  })
+
+  const unexpected = errors.filter(e => !/Failed to fetch|simulated offline/i.test(e))
+  if (unexpected.length) fail('digests: no unrelated console/HTTP errors', unexpected.slice(0, 4).join(' | '))
+  else pass('digests: no unrelated console/HTTP errors')
+
+  await page.close()
+}
+
 async function main() {
   console.log('\n=== Samizdat integration test ===\n')
   try {
@@ -3337,6 +3783,10 @@ async function main() {
     // so leaving it on Page would silently paginate every earlier check's viewer.
     await runPageMode(token, deviceId)
     await runReadingMode(token, deviceId)
+    // After runSettingsServices, like the context-menu check: a run is a real
+    // completion through the stub box. Late, because its Highlights are the newest
+    // cards in the feed and the feed checks above drag and tap the top of the list.
+    await runDigests(token, deviceId)
     // Last: it seeds 50 documents, and every check after it would pay for the pull.
     await runLargeReplica(token, deviceId)
 

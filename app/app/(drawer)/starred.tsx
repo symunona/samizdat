@@ -63,6 +63,7 @@ export default function StarredScreen() {
   )
 
   const notedIds = db.useAnnotatedHighlightIds()
+  const citedBy = db.useHighlightDigests()
 
   const renderItem = useCallback(({ item }: { item: HighlightWithDoc }) => (
     <View style={s.itemWrapper}>
@@ -71,6 +72,7 @@ export default function StarredScreen() {
         linkedDocuments={item.linked_documents}
         pinned
         hasNote={notedIds.has(item.id)}
+        digests={citedBy.get(item.id)}
         onPress={() => router.push(`/document/${item.document_id}?from=/starred&highlight=${item.id}`)}
         onDocumentPress={handleDocumentPress}
       />
@@ -78,7 +80,7 @@ export default function StarredScreen() {
         <Text style={s.unpinBtnText}>☆ Unstar</Text>
       </Pressable>
     </View>
-  ), [handleUnpin, handleDocumentPress, notedIds, router, s])
+  ), [handleUnpin, handleDocumentPress, notedIds, citedBy, router, s])
 
   if (loading && highlights.length === 0) {
     return (

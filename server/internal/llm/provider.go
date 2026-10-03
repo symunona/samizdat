@@ -172,6 +172,10 @@ func hostOf(raw string) string {
 // written with it, and renaming the identity would orphan them.
 func (p Provider) HealthKey() string { return ProviderKey(p.Transport, p.BaseURL) }
 
+// Local reports whether this is a self-hosted box rather than a cloud endpoint —
+// the one distinction design rule 5 routes on.
+func (p Provider) Local() bool { return p.Flavor == flavorLocal }
+
 // client builds the transport client for this provider. Each carries the
 // provider's default model, so a caller that names none gets THIS endpoint's
 // model — never another provider's (a Claude id on an Ollama box is a 404, and a

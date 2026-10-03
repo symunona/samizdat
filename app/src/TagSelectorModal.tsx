@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
+import ColorSwatches from './ColorSwatches'
 import * as db from './db'
 import type { JunctionType, Tag } from './db'
 import { TAG_COLORS, tagColor } from './tagColor'
@@ -132,15 +133,7 @@ export default function TagSelectorModal({ visible, objectId, objectType, onClos
                 <Text style={s.createBtnText}>＋</Text>
               </Pressable>
             </View>
-            <View style={s.colorRow}>
-              {TAG_COLORS.map(c => (
-                <Pressable
-                  key={c}
-                  style={[s.colorDot, { backgroundColor: tagColor(c) }, newTagColor === c && s.colorDotSelected]}
-                  onPress={() => setNewTagColor(c)}
-                />
-              ))}
-            </View>
+            <ColorSwatches colors={TAG_COLORS} value={newTagColor} onChange={setNewTagColor} label="Tag color" />
           </View>
         </View>
         </KeyboardAvoidingView>
@@ -232,8 +225,5 @@ function buildStyles(t: Theme) {
     },
     createBtnDisabled: { opacity: 0.4 },
     createBtnText: { color: t.colors.background, fontSize: 18, fontWeight: '700', lineHeight: 22 },
-    colorRow: { flexDirection: 'row', gap: t.spacing.sm, flexWrap: 'wrap' },
-    colorDot: { width: 24, height: 24, borderRadius: 12 },
-    colorDotSelected: { borderWidth: 2, borderColor: t.colors.text },
   })
 }

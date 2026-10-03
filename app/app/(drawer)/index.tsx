@@ -163,6 +163,7 @@ export default function FeedScreen() {
   // Which cards carry a note. Read once per render from the replica — the network feed
   // payload has no annotation link, and a per-row hook would mount one per FlatList item.
   const notedIds = db.useAnnotatedHighlightIds()
+  const citedBy = db.useHighlightDigests()
   const storeHighlights = db.useFeedHighlights()
   const storeRef = useRef(storeHighlights)
   storeRef.current = storeHighlights
@@ -327,6 +328,7 @@ export default function FeedScreen() {
         linkedDocuments={item.linked_documents}
         pinned={isPinned}
         hasNote={notedIds.has(item.id)}
+        digests={citedBy.get(item.id)}
         busy={false}
         onPress={() => router.push(`/document/${item.document_id}?from=/&highlight=${item.id}`)}
         onPin={() => handlePin(item)}
@@ -375,7 +377,7 @@ export default function FeedScreen() {
         {unarchiveBtn}
       </View>
     )
-  }, [archivedIds, deletingIds, notedIds, handleArchive, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
+  }, [archivedIds, deletingIds, notedIds, citedBy, handleArchive, handlePin, handleUnarchive, initiateDelete, undoDelete, handleDocumentPress, handleLinkAction, router, s])
 
   // Show the skeleton (not the empty state) while anything might still produce
   // highlights: the persisted store hasn't hydrated yet, the connection is still

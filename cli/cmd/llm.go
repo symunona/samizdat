@@ -312,8 +312,14 @@ func renderMismatchTable(mismatches []llmPipelineMismatch, color bool) string {
 		})
 	}
 
-	widths := make([]int, len(mismatchHeaders))
-	for i, h := range mismatchHeaders {
+	return renderTable(mismatchHeaders, rows, color)
+}
+
+// renderTable lays out a header and rows whose every line is whole cells — no
+// inline line breaking a column block, which is why the probe table has its own.
+func renderTable(headers []string, rows [][]cell, color bool) string {
+	widths := make([]int, len(headers))
+	for i, h := range headers {
 		widths[i] = len(h)
 	}
 	for _, row := range rows {
@@ -325,8 +331,8 @@ func renderMismatchTable(mismatches []llmPipelineMismatch, color bool) string {
 	}
 
 	var b strings.Builder
-	header := make([]cell, len(mismatchHeaders))
-	for i, h := range mismatchHeaders {
+	header := make([]cell, len(headers))
+	for i, h := range headers {
 		header[i] = cell{h, sgrBold}
 	}
 	writeRow(&b, header, widths, color)

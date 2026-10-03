@@ -30,7 +30,7 @@ const s = useMemo(() => buildStyles(theme), [theme])
 
 All reads come from the local SQLite replica. Sync runs in the background. Never block UI on network. Server is authoritative; broken replica → wipe + re-pull.
 
-**Sync:** pull by cursor. Machine data (`Document`, `Highlight`) is server→phone one-way, never pushed back. User-authored rows (`Annotation`, read-state, `Tag`) are two-way LWW.
+**Sync:** pull by cursor. Machine data (`Document`, `Highlight`, `Digest`, `DigestIssue`) is server→phone one-way, never pushed back. User-authored rows (`Annotation`, read-state, `Tag`) are two-way LWW.
 
 ## NEVER call a mutating `api.ts` fn from a screen
 
@@ -134,7 +134,7 @@ They must show the **same actions (pin · tags · annotate · delete), same icon
 **Why no shared component:** native RN has no DOM; the WebView has no RN renderer. `dangerouslySetInnerHTML` is web-only, kills React's event wiring, and per-row HTML in a FlatList is a perf anti-pattern. **Share the spec, not the pixels.**
 
 - **Icons:** same Ionicons glyph both sides — RN via `IconButton`, the WebView inlines that glyph's SVG path. Form differs; glyph/size/meaning must match.
-- **Actions:** the WebView posts `hl_pin` / `hl_delete` / `hl_tags` / `hl_annotate`; `app/(drawer)/document/[id].tsx` maps them to the same callbacks the feed wires directly.
+- **Actions:** the WebView posts `hl_pin` / `hl_delete` / `hl_tags` / `hl_annotate` / `hl_digest`; `app/(drawer)/document/[id].tsx` maps them to the same callbacks the feed wires directly.
 - **Annotated cards are marked whole** both sides: dotted 2px accent border + accent pencil (`cardNoted`/`hasNote` in RN; `.hl-card.hl-noted` / `.hl-icon-btn.hl-noted-btn` in the WebView). **Pinned applies after noted and is SOLID accent** — the two must stay tellable apart. The flag is `db.useAnnotatedHighlightIds()` (a Set read once per screen — a per-row hook in a FlatList is the anti-pattern), fed as `HlData.hasNote`. The host pushes a fresh `setHighlights` when that Set changes: `setAnnotations` only moves marks, and the border lives in the highlight payload.
 - **The WebView card has NO swipe gesture.** Removed: both actions are unconditional footer buttons, and the drag only bought accidental deletes plus a swallowed horizontal pan (and a `touch-action` fight with page mode). The RN feed's `ReanimatedSwipeable` triage is a different thing and stays. Do not reintroduce a drag here.
 
@@ -166,6 +166,7 @@ Documents polls every `queued` + `running` job (3s while anything is active, 10s
 - **"Added" is `payload.added_at`, else `created_at`.** A pipeline tick is a fresh row every chunk.
 - **The clock is `useNow(active)`** — one 1s tick for the whole list, and none at all when nothing is in flight.
 - A job leaving the list triggers `requestSync` + a failed-jobs refetch, so the new Document / Highlights / error shows without waiting for an interval.
+- **`run_digest` jobs** reuse the `llm` phase's `chunk`/`chunks` fields for question progress: one LLM call per question. `KIND_LABELS` in `jobProgress.ts` maps it to "Running digest".
 
 Covered by `just e2e` (`runLiveProgressUiCheck` — per-row text, and that the clock advances).
 
@@ -177,11 +178,30 @@ A step is `{kind, config}` free-form JSON; `GET /api/v1/pipeline-steps` describe
 - **`max_tokens` is not a credential**, even though `SECRET_KEY` matches "token" — `NOT_SECRET_KEY` carves it back out. The server strips the same name on read; the two exemptions must stay in step.
 - **A credential must never enter the DOM.** No step kind declares one, the server strips every credential-named key, and the screen ALSO drops anything matching `SECRET_KEY` — including in the raw-JSON view, which is rebuilt from the parsed steps rather than echoing the stored string.
 
+## Digests (`app/(drawer)/digests.tsx`, `src/DigestEditor.tsx`, `app/(drawer)/digest/[id].tsx`)
+
+Server rules and traps: `../server/CLAUDE.md` → Digests.
+
+- **Digests and their issues are machine data**: one-way into the replica (`MIGRATE_3_DIGESTS`), so the list and an issue read offline. **Editing is online-only**, like Pipelines — every editor button is a direct API call, nothing is queued. While connected the server's list replaces the replica's, because an edit made here is not in the replica until the next pull.
+- **A new Digest starts empty** — no name, no question, no newsletter picked; the app hardcodes no prompt and the server serves no starter. The server refuses a save with no enabled question (400) and the editor prints that reason above Save (`digest-editor-error`) as well as in a toast.
+- **A Digest's colour is a palette name** — `PALETTE` in `src/tagColor.ts`, which the server validates against its own copy (`digest.Colors`; its `TestColorsMatchAppPalette` reads the `PALETTE` line, so keep it a one-line array literal). `src/ColorSwatches.tsx` is the one picker, shared with tags; there is no free hex. `''` = the server picks on save (a new Digest) or has not yet (a row older than `MIGRATE_4_DIGEST_COLOR`); it paints grey.
+- **Picking a newsletter is what holds it; there is no hold switch.** An enabled Digest keeps its picked Feeds' new Highlights out of the feed (they wait in Archived and the issue); an empty pick reads every Feed and holds none, because holding there would empty the feed. The note under Newsletters (`digest-scope-note`) says which applies. The replica dropped the old column in `MIGRATE_5_DROP_DIGEST_HOLD`.
+- **`src/DigestChip.tsx` is the one way a Digest is named**: its name on its colour, with the fixed dark `ON_PALETTE` text that reads on every fill in both themes. The `/digests` row, the issue header and the Highlight card all use it.
+- **The chip on a Highlight card comes from the replica**, never a request: `db.useHighlightDigests()` walks `digest_issues.topics` once per screen into `Map<highlightId, HighlightDigest[]>` and the card looks its id up (a per-card hook in a FlatList is the anti-pattern). One chip per citing Digest, pointing at the NEWEST issue that cites the Highlight; a deleted Digest or issue yields none. The WebView card mirrors it (`.hl-digest-chip` → `hl_digest`).
+- **Offline a bullet has no Feed title.** Feeds are not in the replica, so the issue screen resolves a ref from the stored Highlight + Document and shows the Document title alone. Do not "fix" that by reading a Feed from a screen.
+- **"Run now" lands on `/digest/<id>?issue=<id>` before that issue's row exists** (the id is minted at enqueue). The screen polls the issue list while the selected issue is absent or `running`, and asks for the resolved issue only once the list holds it — earlier is a 404.
+- The model field is `src/ModelField.tsx`, shared with the pipeline step editor: one update writes `model` AND `provider`.
+- `periodSummary` (`DigestEditor.tsx`) is the one line a schedule reads as, on the card and anywhere else. Weekday values are the server's `time.Weekday` numbers (0 = Sunday); the chips list Monday first.
+- **Harness seeds must be second-resolution** (`stamp()` in `e2e/harness.js`). The sync cursor compares as text and `…:18.900Z` sorts below `…:18Z`, so a row seeded with milliseconds in the cursor's own second is never pulled.
+
+Covered by `just e2e-int` (`runDigests`, against the stub box — it must run after `runSettingsServices`, like every check that makes a real completion) and `just e2e` (a seeded issue).
+
 ### `model` is a picker, not a text box (`src/ModelPicker.tsx`)
 
 A model name belongs to exactly ONE provider: a Claude id sent to an Ollama box is a 404 → 4xx → no fallback → the pipeline dies hard. The catalog gives `model` `type: "model"` and the editor renders a searchable modal: results grouped under provider headers, search matching model ids AND provider names, plus an explicit *Provider default* row (clearing the model hands the choice back to the endpoint's `default_model`).
 
 - Selecting writes **both** `model` and `provider` in one `setModelChoice`. Two `setFieldValue` calls would each start from the pre-update drafts and the second would drop the first — producing exactly the mismatch this feature prevents.
+- **`src/ModelField.tsx`** is the closed state of the picker: a pressable field showing the current model (and optionally the provider) that opens `ModelPicker`. Used by the pipeline step editor and `DigestEditor` — wherever a config names a model. Do not inline the open/close state again; use `ModelField`.
 - `src/llmModels.ts` — `fetchLLMModels` + `probeLLMProviders`. Sibling of `llmStatus.ts`: that one reads passive health, these ACTIVELY ask.
 - Follows the native Modal focus rule above.
 

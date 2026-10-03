@@ -1085,6 +1085,154 @@ export async function updateSettings(serverUrl: string, token: string, patch: Pa
   return json<AppSettings>(res, '/api/v1/settings')
 }
 
+// ── Digests ──────────────────────────────────────────────────────────────────
+// A Digest answers a list of questions over the Highlights its Feeds produced
+// since its last DigestIssue (server: internal/digest). Lists and flags arrive as
+// real arrays and booleans, never JSON-in-a-string.
+
+export type DigestQuestion = { id: string; title: string; prompt: string; top_n: number; enabled: boolean }
+
+export type DigestPeriod = 'daily' | 'weekly'
+
+// What the editor writes. Everything else on a Digest is the server's.
+export type DigestConfig = {
+  name: string
+  enabled: boolean
+  period: DigestPeriod
+  weekdays: number[]         // 0 = Sunday … 6 = Saturday; weekly only
+  hour: number               // SERVER-local hour the run is due
+  source_feed_ids: string[]  // [] = every Feed
+  questions: DigestQuestion[]
+  provider: string
+  model: string
+  color: string              // a PALETTE name (tagColor.ts); '' = the server picks one
+}
+
+export type Digest = DigestConfig & {
+  id: string
+  next_run_at: string
+  last_run_at: string | null
+  created_at: string
+  updated_at: string
+  rev: number
+  deleted_at: string | null
+}
+
+// A DigestTopic points at stored Highlight text; `bullet` is the line index inside
+// the Highlight body, -1 for all of it. The fields after it are filled only where
+// a ref is resolved: by GET /digest-issues/{id}, or from the replica offline.
+export type DigestRef = {
+  highlight_id: string
+  bullet: number
+  text?: string
+  highlight_title?: string
+  document_id?: string
+  document_title?: string
+  feed_title?: string
+  missing?: boolean
+}
+
+export type DigestTopic = {
+  question_id: string
+  question_title: string
+  rank: number
+  title: string
+  why: string
+  refs: DigestRef[]
+}
+
+export type DigestQuestionMeta = {
+  question_id: string
+  model?: string
+  provider?: string
+  truncated?: boolean
+  candidates: number
+  candidates_sent: number
+  dropped_topics?: number
+  trimmed_refs?: number
+}
+
+export type DigestIssueStatus = 'running' | 'done' | 'empty' | 'failed'
+
+export type DigestIssue = {
+  id: string
+  digest_id: string
+  window_start: string
+  window_end: string
+  status: DigestIssueStatus
+  topics: DigestTopic[]
+  metadata: { questions: DigestQuestionMeta[]; error?: string }
+  created_at: string
+  updated_at: string
+  rev: number
+  deleted_at: string | null
+}
+
+// A refused save carries its reason in the body (a validation message, or which
+// paywalled Feed would reach which cloud provider) — that is what the editor
+// shows, not "HTTP 422".
+async function jsonOrReason<T>(res: Response, what: string): Promise<T> {
+  if (res.ok) return (await res.json()) as T
+  let reason = `${what} failed: HTTP ${res.status}`
+  try {
+    const body = (await res.json()) as { error?: string }
+    if (body.error) reason = body.error
+  } catch { /* keep the status */ }
+  throw new ApiError(res.status, reason)
+}
+
+function digestRequest(token: string, method: string, body?: unknown): RequestInit {
+  return {
+    method,
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  }
+}
+
+export async function fetchDigests(serverUrl: string, token: string): Promise<Digest[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/digests`, digestRequest(token, 'GET'))
+  return json<Digest[]>(res, '/api/v1/digests')
+}
+
+export async function createDigest(serverUrl: string, token: string, config: DigestConfig): Promise<Digest> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/digests`, digestRequest(token, 'POST', config))
+  return jsonOrReason<Digest>(res, 'create digest')
+}
+
+// PATCH: an absent field keeps its stored value.
+export async function patchDigest(
+  serverUrl: string, token: string, id: string, patch: Partial<DigestConfig>,
+): Promise<Digest> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/digests/${encodeURIComponent(id)}`, digestRequest(token, 'PATCH', patch))
+  return jsonOrReason<Digest>(res, 'save digest')
+}
+
+export async function deleteDigest(serverUrl: string, token: string, id: string): Promise<void> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/digests/${encodeURIComponent(id)}`, digestRequest(token, 'DELETE'))
+  if (!res.ok) throw new ApiError(res.status, `delete digest failed: HTTP ${res.status}`)
+}
+
+// "Run now". The issue row appears once the Job starts, so `issue_id` may 404
+// for a moment — the issue screen waits for it.
+export type DigestRunQueued = { job_id: string; issue_id: string; deduped: boolean }
+
+export async function runDigest(serverUrl: string, token: string, id: string): Promise<DigestRunQueued> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/digests/${encodeURIComponent(id)}/run`, digestRequest(token, 'POST'))
+  return jsonOrReason<DigestRunQueued>(res, 'run digest')
+}
+
+// Newest first, refs unresolved — what the issue picker needs.
+export async function fetchDigestIssues(serverUrl: string, token: string, digestId: string): Promise<DigestIssue[]> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/digests/${encodeURIComponent(digestId)}/issues`, digestRequest(token, 'GET'))
+  return json<DigestIssue[]>(res, `/api/v1/digests/${digestId}/issues`)
+}
+
+// One issue with every ref resolved to its bullet text, Document and Feed.
+export async function fetchDigestIssue(serverUrl: string, token: string, issueId: string): Promise<DigestIssue> {
+  const res = await fetch(`${base(serverUrl)}/api/v1/digest-issues/${encodeURIComponent(issueId)}`, digestRequest(token, 'GET'))
+  return json<DigestIssue>(res, `/api/v1/digest-issues/${issueId}`)
+}
+
 // ── Sync ─────────────────────────────────────────────────────────────────────
 
 export type DocumentTag = {
@@ -1126,6 +1274,10 @@ export type SyncPayload = {
   document_tags: DocumentTag[]
   annotation_tags: AnnotationTag[]
   highlight_tags: HighlightTag[]
+  // Machine data like Highlights: one-way, refs unresolved. Absent against a
+  // server that predates Digests.
+  digests?: Digest[]
+  digest_issues?: DigestIssue[]
 }
 
 export async function fetchSync(serverUrl: string, token: string, since: string): Promise<SyncPayload> {

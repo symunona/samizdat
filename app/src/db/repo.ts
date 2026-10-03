@@ -23,8 +23,8 @@ import { EMPTY_INDEX, JUNCTION_KEY, useIndex, type IndexState } from './memoryIn
 import * as Q from './queries'
 import { META_LAST_SYNCED_AT, META_SCHEMA_VERSION, MIGRATIONS, SCHEMA_VERSION } from './schema'
 import type {
-  Annotation, Document, DocumentMeta, Highlight, JunctionType, OutboxIntent, OutboxKind,
-  SyncPayload, SyncStatus, Tag,
+  Annotation, Digest, DigestIssue, Document, DocumentMeta, Highlight, JunctionType,
+  OutboxIntent, OutboxKind, SyncPayload, SyncStatus, Tag,
 } from './types'
 
 const log = createLogger('db')
@@ -129,6 +129,42 @@ const tagParams = (t: Tag): SqlValue[] => [
 const rowToTag = (r: SqlRow): Tag => ({
   id: str(r.id), name: str(r.name), color: str(r.color), created_at: str(r.created_at),
   updated_at: str(r.updated_at), rev: Number(r.rev ?? 0), deleted_at: nullable(r.deleted_at),
+})
+
+const digestParams = (g: Digest): SqlValue[] => [
+  g.id, g.name ?? '', g.enabled ? 1 : 0, g.period ?? '', JSON.stringify(g.weekdays ?? []),
+  g.hour ?? 0, JSON.stringify(g.source_feed_ids ?? []), JSON.stringify(g.questions ?? []),
+  g.provider ?? '', g.model ?? '', g.color ?? '', g.next_run_at ?? '',
+  g.last_run_at ?? null, g.created_at ?? '', g.updated_at ?? '', g.rev ?? 0,
+  g.deleted_at ?? null,
+]
+
+const rowToDigest = (r: SqlRow): Digest => ({
+  id: str(r.id), name: str(r.name), enabled: Number(r.enabled ?? 0) === 1,
+  period: str(r.period) as Digest['period'],
+  weekdays: parseJson<number[]>(r.weekdays) ?? [], hour: Number(r.hour ?? 0),
+  source_feed_ids: parseJson<string[]>(r.source_feed_ids) ?? [],
+  questions: parseJson<Digest['questions']>(r.questions) ?? [],
+  provider: str(r.provider), model: str(r.model),
+  color: str(r.color),
+  next_run_at: str(r.next_run_at), last_run_at: nullable(r.last_run_at),
+  created_at: str(r.created_at), updated_at: str(r.updated_at), rev: Number(r.rev ?? 0),
+  deleted_at: nullable(r.deleted_at),
+})
+
+const digestIssueParams = (i: DigestIssue): SqlValue[] => [
+  i.id, i.digest_id ?? '', i.window_start ?? '', i.window_end ?? '', i.status ?? '',
+  JSON.stringify(i.topics ?? []), JSON.stringify(i.metadata ?? { questions: [] }),
+  i.created_at ?? '', i.updated_at ?? '', i.rev ?? 0, i.deleted_at ?? null,
+]
+
+const rowToDigestIssue = (r: SqlRow): DigestIssue => ({
+  id: str(r.id), digest_id: str(r.digest_id), window_start: str(r.window_start),
+  window_end: str(r.window_end), status: str(r.status) as DigestIssue['status'],
+  topics: parseJson<DigestIssue['topics']>(r.topics) ?? [],
+  metadata: parseJson<DigestIssue['metadata']>(r.metadata) ?? { questions: [] },
+  created_at: str(r.created_at), updated_at: str(r.updated_at), rev: Number(r.rev ?? 0),
+  deleted_at: nullable(r.deleted_at),
 })
 
 const rowToIntent = (r: SqlRow): OutboxIntent => ({
@@ -244,11 +280,13 @@ async function migrate(d: SqlDriver): Promise<void> {
 }
 
 async function warm(d: SqlDriver): Promise<void> {
-  const [docs, hls, anns, tags, jDoc, jAnn, jHl, outbox, dirtyRows, cursor] = await Promise.all([
+  const [
+    docs, hls, anns, tags, jDoc, jAnn, jHl, digests, digestIssues, outbox, dirtyRows, cursor,
+  ] = await Promise.all([
     d.all(Q.SELECT_DOCUMENTS_META), d.all(Q.SELECT_HIGHLIGHTS), d.all(Q.SELECT_ANNOTATIONS),
     d.all(Q.SELECT_TAGS), d.all(Q.SELECT_JUNCTION.doc), d.all(Q.SELECT_JUNCTION.ann),
-    d.all(Q.SELECT_JUNCTION.hl), d.all(Q.SELECT_OUTBOX), d.all(Q.SELECT_DIRTY),
-    d.all(Q.SELECT_META, [META_LAST_SYNCED_AT]),
+    d.all(Q.SELECT_JUNCTION.hl), d.all(Q.SELECT_DIGESTS), d.all(Q.SELECT_DIGEST_ISSUES),
+    d.all(Q.SELECT_OUTBOX), d.all(Q.SELECT_DIRTY), d.all(Q.SELECT_META, [META_LAST_SYNCED_AT]),
   ])
   const byId = <T extends { id: string }>(rows: SqlRow[], map: (r: SqlRow) => T): Record<string, T> => {
     const out: Record<string, T> = {}
@@ -265,6 +303,8 @@ async function warm(d: SqlDriver): Promise<void> {
     documentTags: junctionMap(jDoc),
     annotationTags: junctionMap(jAnn),
     highlightTags: junctionMap(jHl),
+    digests: byId(digests, rowToDigest),
+    digestIssues: byId(digestIssues, rowToDigestIssue),
     outbox: outbox.map(rowToIntent),
     dirty,
     lastSyncedAt: cursor[0] ? str(cursor[0].value) : null,
@@ -287,7 +327,7 @@ export async function wipe(): Promise<void> {
 // returned, because the callback's contract is "do the SQL", not "produce a value".
 type SyncMerge = Pick<IndexState,
   'documents' | 'highlights' | 'annotations' | 'tags'
-  | 'documentTags' | 'annotationTags' | 'highlightTags'>
+  | 'documentTags' | 'annotationTags' | 'highlightTags' | 'digests' | 'digestIssues'>
 
 // How many documents go into one transaction. Documents carry the bodies (~30KB each,
 // and a first pull is the WHOLE library), and a transaction's dirty pages are held in
@@ -321,7 +361,15 @@ export async function applySync(payload: SyncPayload): Promise<void> {
     const documentTags = mergeJunctionTags(s.documentTags, payload.document_tags, 'document_id', 'doc', isDirty)
     const annotationTags = mergeJunctionTags(s.annotationTags, payload.annotation_tags, 'annotation_id', 'ann', isDirty)
     const highlightTags = mergeJunctionTags(s.highlightTags, payload.highlight_tags, 'highlight_id', 'hl', isDirty)
-    out.merged = { documents, highlights, annotations, tags, documentTags, annotationTags, highlightTags }
+    // Machine data, never edited on the device: nothing local can be dirty.
+    const incomingDigests = payload.digests ?? []
+    const incomingIssues = payload.digest_issues ?? []
+    const digests = mergeEntities(s.digests, incomingDigests, () => false)
+    const digestIssues = mergeEntities(s.digestIssues, incomingIssues, () => false)
+    out.merged = {
+      documents, highlights, annotations, tags, documentTags, annotationTags, highlightTags,
+      digests, digestIssues,
+    }
 
     const junctions: [JunctionType, Record<string, string[]>, string, { tag_id: string }[]][] = [
       ['doc', documentTags, 'document_id', payload.document_tags],
@@ -359,6 +407,14 @@ export async function applySync(payload: SyncPayload): Promise<void> {
           const linked = (merged[parentId] ?? []).includes(row.tag_id)
           await d.run(linked ? Q.UPSERT_JUNCTION[type] : Q.DELETE_JUNCTION[type], [parentId, row.tag_id])
         }
+      }
+      for (const incoming of incomingDigests) {
+        if (digests[incoming.id]) await d.run(Q.UPSERT_DIGEST, digestParams(incoming))
+        else await d.run(Q.DELETE_DIGEST, [incoming.id])
+      }
+      for (const incoming of incomingIssues) {
+        if (digestIssues[incoming.id]) await d.run(Q.UPSERT_DIGEST_ISSUE, digestIssueParams(incoming))
+        else await d.run(Q.DELETE_DIGEST_ISSUE, [incoming.id])
       }
       // Last, and only here: an unadvanced cursor is safe (the delta replays), an
       // advanced one over a half-written delta is data loss.

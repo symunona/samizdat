@@ -96,10 +96,36 @@ export const STUB_LLM_MODELS = ['stub-large', 'stub-small']
 let stubLLMFailing = false
 export function setStubLLMFailing(on) { stubLLMFailing = on }
 
+// What the stub answers a Digest question with. It reads the numbered ITEMS the
+// server sent and files every line naming STUB_DIGEST_MATCH under ONE topic, citing
+// the refs exactly as written — the grouping a real model is asked for. It never
+// looks at which Feed a line came from, so an item that should not have been sent
+// (a Feed outside the Digest's scope) ends up cited, and visible on the page.
+export const STUB_DIGEST_MATCH = 'Zephyr'
+export const STUB_DIGEST_TOPIC = { title: 'Zephyr 2 is out', why: 'More than one newsletter covered the release.' }
+
+function stubDigestReply(prompt) {
+  const items = prompt.split('\nITEMS:\n')[1]
+  if (items === undefined) return null
+  const refs = items.split('\n')
+    .filter(line => line.includes(STUB_DIGEST_MATCH))
+    .map(line => /^\[([\d.]+)\]/.exec(line)?.[1])
+    .filter(Boolean)
+  return JSON.stringify({ topics: refs.length ? [{ ...STUB_DIGEST_TOPIC, refs }] : [] })
+}
+
+function readBody(req) {
+  return new Promise(resolve => {
+    let raw = ''
+    req.on('data', chunk => { raw += chunk })
+    req.on('end', () => resolve(raw))
+  })
+}
+
 // startStubLLM serves the OpenAI-compatible surface the Router probes and lists:
 // GET /v1/models and POST /v1/chat/completions.
 export function startStubLLM() {
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json')
     if (req.url.startsWith('/v1/models')) {
       res.end(JSON.stringify({ data: STUB_LLM_MODELS.map(id => ({ id })) }))
@@ -113,8 +139,10 @@ export function startStubLLM() {
         res.end(JSON.stringify({ error: { message: 'stub box is down' } }))
         return
       }
+      let prompt = ''
+      try { prompt = JSON.parse(await readBody(req)).messages?.at(-1)?.content ?? '' } catch { /* not a chat body */ }
       res.end(JSON.stringify({
-        choices: [{ message: { content: 'stub reply' } }],
+        choices: [{ message: { content: stubDigestReply(prompt) ?? 'stub reply' } }],
         usage: { prompt_tokens: 1, completion_tokens: 1 },
       }))
       return
@@ -213,13 +241,20 @@ export async function newConnectedPage(browser, token, deviceId) {
 // created_at, because the highlight card shows the ingest date and keeps this one a
 // hover/long-press away. A fixture where the two differ is the only way to tell which
 // one the card is printing.
-function documentInsert({ id, title, markdown, canonicalUrl, publishedAt = null }) {
-  const now = new Date().toISOString()
+// A row stamp in the server's own format: RFC3339 at SECOND resolution. The sync
+// cursor is compared as text, and "…:18.900Z" sorts BELOW "…:18Z" — so a row seeded
+// mid-run with milliseconds, in the same second as a device's cursor, is never pulled.
+const stamp = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z')
+
+// `sourceFeedId` is the Feed the Document came in through — what a Digest scopes on.
+function documentInsert({ id, title, markdown, canonicalUrl, publishedAt = null, sourceFeedId = null }) {
+  const now = stamp()
   const q = s => s.replace(/'/g, "''")
   const pub = publishedAt ? `'${q(publishedAt)}'` : 'NULL'
+  const feed = sourceFeedId ? `'${q(sourceFeedId)}'` : 'NULL'
   return `
 INSERT OR REPLACE INTO documents (id,canonical_url,title,markdown,fetched_at,excerpt,hero_image_url,author,published_at,source_feed_id,content_hash,media_type,media_metadata,transcript,created_at,updated_at,rev,deleted_at)
-VALUES ('${q(id)}','${q(canonicalUrl)}','${q(title)}','${q(markdown)}','${now}','','','Test',${pub},NULL,'${q(id)}hash','article',NULL,NULL,'${now}','${now}',1,NULL);`
+VALUES ('${q(id)}','${q(canonicalUrl)}','${q(title)}','${q(markdown)}','${now}','','','Test',${pub},${feed},'${q(id)}hash','article',NULL,NULL,'${now}','${now}',1,NULL);`
 }
 
 export function seedTextDoc(doc) {
@@ -271,7 +306,7 @@ VALUES ('${q(id)}','${q(name)}','${q(color)}','${now}','${now}',1,NULL);`
 // now regardless, or a back-dated row would sit below the sync cursor and never reach
 // the client.
 export function seedHighlight({ id, documentId, title, body, pinned = 0, createdAt = null, metadata = '{}' }) {
-  const now = new Date().toISOString()
+  const now = stamp()
   const born = createdAt || now
   const q = s => s.replace(/'/g, "''")
   const pipeId = `pipe-${id}`
@@ -288,6 +323,40 @@ VALUES ('${q(id)}','${q(documentId)}','${q(runId)}','item','${q(title)}','${q(bo
   fs.writeFileSync(f, sql)
   execSync(`sqlite3 ${TEST_DB} < ${f}`)
   console.log('  seeded highlight', id)
+}
+
+// Seed a Feed with its Subscription — a newsletter the Digest editor can offer. The
+// subscription is paused and due in 2099, so the worker never tries to poll it.
+export function seedFeed({ id, title, url }) {
+  const now = stamp()
+  const q = s => s.replace(/'/g, "''")
+  const sql = `.timeout 10000
+INSERT OR REPLACE INTO feeds (id,url,kind,title,config,last_polled_at,created_at,updated_at,rev,deleted_at)
+VALUES ('${q(id)}','${q(url)}','rss','${q(title)}','{}',NULL,'${now}','${now}',1,NULL);
+INSERT OR REPLACE INTO subscriptions (id,feed_id,interval_h,next_run_at,paused,created_at,updated_at,rev,deleted_at)
+VALUES ('sub-${q(id)}','${q(id)}',24,'2099-01-01T00:00:00Z',1,'${now}','${now}',1,NULL);
+`
+  const f = '/tmp/samizdat-test/seed-feed.sql'
+  fs.writeFileSync(f, sql)
+  execSync(`sqlite3 ${TEST_DB} < ${f}`)
+  console.log('  seeded feed', title)
+}
+
+// Seed a Digest with one finished DigestIssue — the rows a run leaves behind, for a
+// suite with no LLM to produce them. `topics` and `metadata` are the issue's JSON.
+export function seedDigestIssue({ digestId, issueId, name, questions, topics, metadata }) {
+  const now = stamp()
+  const q = s => s.replace(/'/g, "''")
+  const sql = `.timeout 10000
+INSERT OR REPLACE INTO digests (id,name,enabled,period,weekdays,hour,source_feed_ids,questions,provider,model,next_run_at,last_run_at,created_at,updated_at,rev,deleted_at)
+VALUES ('${q(digestId)}','${q(name)}',0,'daily','[]',7,'[]','${q(JSON.stringify(questions))}','','','2099-01-01T00:00:00Z','${now}','${now}','${now}',1,NULL);
+INSERT OR REPLACE INTO digest_issues (id,digest_id,window_start,window_end,status,topics,metadata,created_at,updated_at,rev,deleted_at)
+VALUES ('${q(issueId)}','${q(digestId)}','${now}','${now}','done','${q(JSON.stringify(topics))}','${q(JSON.stringify(metadata))}','${now}','${now}',1,NULL);
+`
+  const f = '/tmp/samizdat-test/seed-digest.sql'
+  fs.writeFileSync(f, sql)
+  execSync(`sqlite3 ${TEST_DB} < ${f}`)
+  console.log('  seeded digest', name, 'with issue', issueId)
 }
 
 // Seed a Pipeline row — the shape the API creates. `filter` and `steps` are

@@ -7,6 +7,7 @@ export type {
   Document, Highlight, Annotation, Tag,
   DocumentTag, AnnotationTag, HighlightTag,
   SyncPayload, HighlightWithDoc,
+  Digest, DigestIssue,
 } from '../api'
 export type { JunctionType, OutboxIntent, OutboxKind } from '../store/outbox'
 

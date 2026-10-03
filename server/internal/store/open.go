@@ -380,6 +380,14 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE read_states ADD COLUMN media_pos_ms INTEGER NOT NULL DEFAULT 0`,
 		// false-parse flag: bot-protection / login-wall / empty-stub scrapes
 		`ALTER TABLE documents ADD COLUMN error_reason TEXT NOT NULL DEFAULT ''`,
+		// Digests: scheduled questions over Highlights, and the issue each run writes
+		`CREATE TABLE IF NOT EXISTS digests (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, period TEXT NOT NULL DEFAULT 'daily', weekdays TEXT NOT NULL DEFAULT '[]', hour INTEGER NOT NULL DEFAULT 7, source_feed_ids TEXT NOT NULL DEFAULT '[]', questions TEXT NOT NULL DEFAULT '[]', provider TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', next_run_at TEXT NOT NULL, last_run_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, deleted_at TEXT)`,
+		`CREATE INDEX IF NOT EXISTS digests_updated_at ON digests(updated_at)`,
+		`CREATE TABLE IF NOT EXISTS digest_issues (id TEXT PRIMARY KEY, digest_id TEXT NOT NULL REFERENCES digests(id), window_start TEXT NOT NULL, window_end TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running', topics TEXT NOT NULL DEFAULT '[]', metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, deleted_at TEXT)`,
+		`CREATE INDEX IF NOT EXISTS digest_issues_digest_id  ON digest_issues(digest_id)`,
+		`CREATE INDEX IF NOT EXISTS digest_issues_updated_at ON digest_issues(updated_at)`,
+		// A Digest's colour (a digest.Colors name). '' on a row older than the column.
+		`ALTER TABLE digests ADD COLUMN color TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, m := range additiveMigrations {
 		if _, err := db.Exec(m); err != nil {
@@ -390,11 +398,33 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
+	// Hold stopped being a per-Digest switch: picking a Feed is what holds it.
+	if err := dropColumn(db, "digests", "hold_highlights"); err != nil {
+		return err
+	}
+
 	// Non-additive: relax annotations.document_id from NOT NULL to nullable so a
 	// standalone note (no parent Document) can be stored as a document-less
 	// annotation. SQLite can't drop NOT NULL via ALTER, so rebuild the table.
 	if err := relaxAnnotationDocumentID(db); err != nil {
 		return fmt.Errorf("relax annotations.document_id: %w", err)
+	}
+	return nil
+}
+
+// dropColumn drops table.column when an older DB still has it. Idempotent: a
+// no-op once the column is gone. SQLite has had DROP COLUMN since 3.35; it
+// refuses a column an index or constraint uses, so drop those first.
+func dropColumn(db *sql.DB, table, column string) error {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n); err != nil {
+		return fmt.Errorf("inspect %s.%s: %w", table, column, err)
+	}
+	if n == 0 {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE ` + table + ` DROP COLUMN ` + column); err != nil {
+		return fmt.Errorf("drop %s.%s: %w", table, column, err)
 	}
 	return nil
 }

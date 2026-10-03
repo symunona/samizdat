@@ -574,6 +574,11 @@ UPDATE highlights SET archived_at = ?, updated_at = ?, rev = rev + 1 WHERE id = 
 UPDATE highlights SET archived_at = ?, updated_at = ?, rev = rev + 1
 WHERE deleted_at IS NULL AND archived_at IS NULL AND pinned = 0 AND created_at < ?;
 
+-- Hold: the sweep's stamp, scoped to one pipeline run instead of an age.
+-- name: ArchiveHighlightsByPipelineRun :execrows
+UPDATE highlights SET archived_at = ?, updated_at = ?, rev = rev + 1
+WHERE deleted_at IS NULL AND archived_at IS NULL AND pinned = 0 AND pipeline_run_id = ?;
+
 -- name: InsertHighlightTag :one
 INSERT INTO highlight_tags (id, highlight_id, tag_id, created_at, updated_at, rev)
 VALUES (?, ?, ?, ?, ?, 0)
@@ -737,3 +742,130 @@ SELECT provider,
        MAX(created_at)                  AS last_call_at
 FROM llm_usages
 GROUP BY provider, model;
+
+--  Digests
+
+-- name: InsertDigest :one
+INSERT INTO digests (id, name, enabled, period, weekdays, hour, source_feed_ids, questions,
+                     provider, model, color, next_run_at, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+RETURNING *;
+
+-- name: GetDigest :one
+SELECT * FROM digests WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: ListDigests :many
+SELECT * FROM digests WHERE deleted_at IS NULL ORDER BY created_at ASC;
+
+-- name: UpdateDigest :one
+UPDATE digests SET name = ?, enabled = ?, period = ?, weekdays = ?, hour = ?, source_feed_ids = ?,
+                   questions = ?, provider = ?, model = ?, color = ?, next_run_at = ?,
+                   updated_at = ?, rev = rev + 1
+WHERE id = ? AND deleted_at IS NULL
+RETURNING *;
+
+-- name: SoftDeleteDigest :exec
+UPDATE digests SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: ListDueDigests :many
+SELECT * FROM digests WHERE deleted_at IS NULL AND enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC;
+
+-- Whether an enabled Digest picked this Feed by name: what holds its Highlights
+-- out of the feed. An empty scope reads every Feed and holds none: holding there
+-- would empty the whole feed. A quoted substring of the JSON array, because sqlc
+-- cannot type json_each; exact for a Feed id, which is a UUID json.Marshal
+-- writes unescaped.
+-- name: FeedHeldByDigest :one
+SELECT EXISTS (
+    SELECT 1 FROM digests
+    WHERE deleted_at IS NULL AND enabled = 1
+      AND instr(source_feed_ids, '"' || CAST(sqlc.arg(feed_id) AS TEXT) || '"') > 0
+) AS held;
+
+-- name: BumpDigestNextRun :exec
+UPDATE digests SET next_run_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: MarkDigestRun :exec
+UPDATE digests SET last_run_at = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- An active run_digest job for a Digest: "Run now" reuses it instead of queueing
+-- a second run over the same window.
+-- name: GetActiveRunDigestJob :one
+SELECT * FROM jobs
+WHERE kind = 'run_digest'
+  AND json_extract(payload, '$.digest_id') = ?
+  AND status IN ('queued', 'running', 'paused')
+  AND deleted_at IS NULL
+ORDER BY created_at DESC LIMIT 1;
+
+--  Digest issues
+
+-- The issue id is minted when the job is enqueued, so a retried job reopens its
+-- own row instead of leaving a second one behind.
+-- name: UpsertDigestIssue :one
+INSERT INTO digest_issues (id, digest_id, window_start, window_end, status, created_at, updated_at, rev)
+VALUES (?, ?, ?, ?, 'running', ?, ?, 0)
+ON CONFLICT(id) DO UPDATE SET
+  window_start = excluded.window_start,
+  window_end   = excluded.window_end,
+  status       = 'running',
+  updated_at   = excluded.updated_at,
+  rev          = digest_issues.rev + 1
+RETURNING *;
+
+-- name: FinishDigestIssue :exec
+UPDATE digest_issues SET status = ?, topics = ?, metadata = ?, updated_at = ?, rev = rev + 1 WHERE id = ?;
+
+-- name: GetDigestIssue :one
+SELECT * FROM digest_issues WHERE id = ? AND deleted_at IS NULL LIMIT 1;
+
+-- name: ListDigestIssuesByDigest :many
+SELECT * FROM digest_issues WHERE digest_id = ? AND deleted_at IS NULL ORDER BY window_end DESC, created_at DESC LIMIT ?;
+
+-- The issue before this one that produced topics: its titles are the next run's
+-- "already covered" list.
+-- name: GetPreviousDoneDigestIssue :one
+SELECT * FROM digest_issues
+WHERE digest_id = ? AND id != ? AND status = 'done' AND deleted_at IS NULL
+ORDER BY window_end DESC LIMIT 1;
+
+-- Every issue of a Digest that has a vault note: a rename moves them all.
+-- name: ListDoneDigestIssuesByDigest :many
+SELECT * FROM digest_issues WHERE digest_id = ? AND status = 'done' AND deleted_at IS NULL ORDER BY created_at ASC;
+
+-- name: SoftDeleteDigestIssuesByDigest :exec
+UPDATE digest_issues SET deleted_at = ?, updated_at = ?, rev = rev + 1 WHERE digest_id = ? AND deleted_at IS NULL;
+
+-- Highlights a Digest may read: created inside the window, from a Document that
+-- came in through a Feed. Newest first: that is the order a budget clamp keeps.
+-- Archived rows are included: archiving is feed triage, not a retraction.
+-- name: ListDigestCandidates :many
+SELECT h.id, h.title, h.body, h.created_at,
+       d.canonical_url AS document_canonical_url,
+       f.id AS feed_id, f.title AS feed_title, f.url AS feed_url
+FROM highlights h
+JOIN documents d ON d.id = h.document_id
+JOIN feeds f ON f.id = d.source_feed_id
+WHERE h.deleted_at IS NULL
+  AND d.deleted_at IS NULL
+  AND f.deleted_at IS NULL
+  AND h.created_at >= ?
+  AND h.created_at < ?
+ORDER BY h.created_at DESC, h.id ASC;
+
+-- What a DigestTopic ref points at. Tombstoned rows still resolve: an issue is
+-- immutable, and a later regenerate must not blank the bullets it was built on.
+-- name: GetDigestRef :one
+SELECT h.id, h.title, h.body,
+       d.id AS document_id, d.title AS document_title,
+       COALESCE(f.title, '') AS feed_title, COALESCE(f.url, '') AS feed_url
+FROM highlights h
+JOIN documents d ON d.id = h.document_id
+LEFT JOIN feeds f ON f.id = d.source_feed_id
+WHERE h.id = ? LIMIT 1;
+
+-- name: ListDigestsSince :many
+SELECT * FROM digests WHERE updated_at >= ? ORDER BY updated_at ASC;
+
+-- name: ListDigestIssuesSince :many
+SELECT * FROM digest_issues WHERE updated_at >= ? ORDER BY updated_at ASC;

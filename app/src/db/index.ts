@@ -36,9 +36,11 @@ export {
   useOutboxCount,
   useAnnotations, useAnnotationsFor, useAnnotatedHighlightIds,
   useTags, useTagsWithCounts, useTagLinks,
+  useDigests, useDigestIssues, useDigestIssue, useHighlightDigests, useFeedIdsWithHighlights,
 } from './hooks'
+export type { HighlightDigest } from './hooks'
 
 export type {
-  Annotation, AnnotationWithContext, Document, DocumentMeta, Highlight, HighlightWithDoc,
-  JunctionType, OutboxIntent, SyncPayload, SyncStatus, Tag, TagWithCounts,
+  Annotation, AnnotationWithContext, Digest, DigestIssue, Document, DocumentMeta, Highlight,
+  HighlightWithDoc, JunctionType, OutboxIntent, SyncPayload, SyncStatus, Tag, TagWithCounts,
 } from './types'

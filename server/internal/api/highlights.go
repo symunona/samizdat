@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"time"
@@ -15,18 +14,6 @@ import (
 
 var urlRe = regexp.MustCompile(`https?://[^\s)\]"<>]+`)
 var mdRenderer = goldmark.New()
-
-// feedDisplayTitle prefers the feed's title, falling back to its URL when the
-// title was never set (common for scraped/discovered feeds).
-func feedDisplayTitle(f store.Feed) string {
-	if f.Title != "" {
-		return f.Title
-	}
-	if u, err := url.Parse(f.Url); err == nil && u.Host != "" {
-		return u.Host
-	}
-	return f.Url
-}
 
 func renderMarkdown(src string) string {
 	var buf bytes.Buffer
@@ -112,7 +99,7 @@ func (h *highlightsHandler) listAll(w http.ResponseWriter, r *http.Request) {
 			if t, ok := feedCache[*doc.SourceFeedID]; ok {
 				feedTitle = t
 			} else if f, err := h.q.GetFeed(r.Context(), *doc.SourceFeedID); err == nil {
-				feedTitle = feedDisplayTitle(f)
+				feedTitle = store.FeedTitle(f.Title, f.Url)
 				feedCache[*doc.SourceFeedID] = feedTitle
 			}
 		}
@@ -150,7 +137,7 @@ func (h *highlightsHandler) listByDocument(w http.ResponseWriter, r *http.Reques
 	doc, derr := h.q.GetDocumentByID(r.Context(), docID)
 	if derr == nil && doc.SourceFeedID != nil {
 		if f, err := h.q.GetFeed(r.Context(), *doc.SourceFeedID); err == nil {
-			feedTitle = feedDisplayTitle(f)
+			feedTitle = store.FeedTitle(f.Title, f.Url)
 		}
 	}
 	out := make([]highlightWithDoc, 0, len(rows))

@@ -53,6 +53,12 @@ but the guards, not the limit, are what make the tool safe.
 - Graceful degrade: no `ANTHROPIC_API_KEY` → prints which file changed + a manual-check reminder, exits 0 (never blocks a branch on a missing key)
 - Wired into `just lint` via the `lint-parity` recipe
 
+### Highlight card parity invariants
+The `highlightCardPair` invariant string encodes what Claude must check. Current invariants:
+
+- **DIGEST CHIPS**: a Highlight cited by a DigestIssue shows one chip per Digest — the Digest's name on its palette colour, dark text — first in the same row as the tag chips, and a press opens the citing issue. RN renders `DigestChip` (`src/DigestChip.tsx`) and navigates itself; the WebView renders `.hl-digest-chip` buttons and posts `hl_digest`. Flag a chip present on one side only, or a differing fill/text colour.
+- **ICON-BUTTON STYLE**: the footer action buttons (delete, tags, annotate) must look the same in both renderers — FLAT and BORDERLESS (transparent background, no border/box outline), with a fill-background hover. The RN side uses the `IconButton` component (`src/IconButton.tsx`); the WebView uses the `.hl-icon-btn` CSS class. Their geometry (padding, radius, glyph size, hover scale) is shared via `src/iconButtonSpec.ts` and must come from there in BOTH files — flag any re-introduction of a border/box on one side, a divergent hover treatment, or a hardcoded geometry value that bypasses `iconButtonSpec`.
+
 ## Lib-check behavior
 - Parses `+require` lines from `git diff main...HEAD -- */go.mod`
 - Uses `claude-haiku-4-5-20251001` (triage tier — fast + cheap)

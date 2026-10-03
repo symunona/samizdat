@@ -85,6 +85,28 @@ func (r *Router) Provider(id string) (Provider, bool) {
 	return *p, true
 }
 
+// CloudReach names the first non-local provider a call routed to id could land
+// on, "" when it stays on self-hosted boxes. A pin reaches only itself; an empty
+// id walks the chain, so every primary and fallback counts. An id nothing
+// resolves reaches nowhere — CompleteRoute refuses it before the wire.
+func (r *Router) CloudReach(id string) string {
+	if r == nil {
+		return ""
+	}
+	if id != "" {
+		if p := r.resolve(id); p != nil && !p.Local() {
+			return p.ID
+		}
+		return ""
+	}
+	for _, p := range r.providers {
+		if (p.Role == "primary" || p.Role == "fallback") && !p.Local() {
+			return p.ID
+		}
+	}
+	return ""
+}
+
 // Configured reports whether any provider can serve a call.
 func (r *Router) Configured() bool { return r != nil && len(r.providers) > 0 }
 

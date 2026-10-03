@@ -961,7 +961,7 @@ check-offline-screens:
     # fallback) shows an error screen offline, which regresses silently. Each guarded
     # screen must reference a src/db read hook. See loadFromStore() in index.tsx /
     # document/[id].tsx for the fallback pattern.
-    store_read='useFeedHighlights|useStarredHighlights|useArchivedHighlights|useDocuments|useDocument|useAnnotations|useTagsWithCounts'
+    store_read='useFeedHighlights|useStarredHighlights|useArchivedHighlights|useDocuments|useDocument|useAnnotations|useTagsWithCounts|useDigests|useDigestIssue'
     declare -A screens=(
       ["app/app/(drawer)/index.tsx"]="feed"
       ["app/app/(drawer)/documents.tsx"]="documents"
@@ -970,6 +970,8 @@ check-offline-screens:
       ["app/app/(drawer)/starred.tsx"]="starred"
       ["app/app/(drawer)/tags.tsx"]="tags"
       ["app/app/(drawer)/document/[id].tsx"]="document viewer"
+      ["app/app/(drawer)/digests.tsx"]="digests"
+      ["app/app/(drawer)/digest/[id].tsx"]="digest issue"
     )
     fail=0
     for f in "${!screens[@]}"; do

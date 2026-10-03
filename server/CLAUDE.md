@@ -30,6 +30,7 @@ internal/
   extractor/            per-domain configs + substack_notes.go
   transcript/           vtt.go — WebVTT → sentences
   ctxmenu/              selection context-menu prefs
+  digest/               Digests: window, candidates, prompt, run, enqueue (the `run_digest` Job)
   export/               vault mirror
   ytdlp/                THE door to yt-dlp: tool.go (Command) · sandbox_linux.go · update.go · version.go (staleness) · runlog.go
   worker/               youtube.go · pdf.go · pdffig.go · pdfrender.go
@@ -40,7 +41,7 @@ internal/
 ## Non-negotiables
 
 - **Pure-Go SQLite** `modernc.org/sqlite` only — never mattn/go-sqlite3.
-- **`sqlc` for all SQL.** Write `.sql`, generate typed Go (`just server::gen`, output committed). Never hand-write row scans.
+- **`sqlc` for all SQL.** Write `.sql`, generate typed Go (`sqlc generate` in `server/`, output committed). Never hand-write row scans.
 - **WAL** at every open (`journal_mode=WAL`, `synchronous=NORMAL`).
 - **UUID PKs, client-minted.** No auto-increment.
 - **Every table:** `id`, `created_at`, `updated_at`, `rev` (server monotonic), `deleted_at` tombstone.
@@ -56,7 +57,7 @@ internal/
 
 ## Domain names (exact, no synonyms)
 
-`Document` · `Highlight` · `Annotation` · `Note` · `Feed` · `Subscription` · `Scraper` · `Pipeline` · `PipelineStep` · `Job` · `Schedule` · `Tag` · `UserProfile`.
+`Document` · `Highlight` · `Annotation` · `Note` · `Feed` · `Subscription` · `Scraper` · `Pipeline` · `PipelineStep` · `Job` · `Schedule` · `Tag` · `UserProfile` · `Digest` · `DigestIssue` · `DigestQuestion` · `DigestTopic`.
 Banned: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`.
 
 **`Highlight` vs `Annotation`:**
@@ -103,6 +104,25 @@ A running job rewrites one JSON column as it moves: `phase` (`fetch` · `probe` 
 
 Opt-in (`server_settings.auto_archive_enabled` via `/api/v1/settings`), on the 60s scheduler tick — **not** a Job: nothing to retry, meter or dedup. Stamps `archived_at` on every non-deleted, non-archived, **non-pinned** Highlight older than a month, `rev+1` per row so the phone pulls it. Pinned is the user's explicit keep; a sweep must never undo triage.
 
+## Digests (`internal/digest`, `worker/digest.go`, `api/digests.go`)
+
+The per-period stage after the Pipelines: a `Digest` asks its `DigestQuestion`s over the Highlights its Feeds produced since its last `DigestIssue`. Tables `digests`, `digest_issues`; questions and `DigestTopic`s are JSON inside their parent row. Job kind `run_digest`, enqueued by `worker.scheduleDigests` (60s tick) and by `POST /api/v1/digests/{id}/run` through the same `digest.Enqueue`.
+
+- **A Digest reads Highlights, never Documents.** No re-fetch, no whole newsletter in a prompt. A Feed with no Pipeline producing Highlights contributes nothing, and so does a Document that came in through no Feed (`ListDigestCandidates` joins `feeds`).
+- **The window is "since the last issue", not the period.** `window_start = last_run_at` (first run: one period back), and `last_run_at` moves only when an issue lands `done` or `empty`. A failed run therefore loses nothing — the next one covers the gap.
+- **Candidates are numbered, never UUID-addressed.** A line is `[17.2] <feed> · <highlight title> — <bullet>` (`17.2` = body line 2 of Highlight 17, `31` = all of it); the model answers `"refs":["17.2","31"]` and `indexRefs` maps them back. A 4B local model mangles a UUID.
+- **Only a list of several things is split per bullet.** A Highlight whose bullets are the `*Who*`/`*What*`/`*When*`/`*Why*`/`*How*` fields of ONE thing (≥2 labelled bullets, `fieldRe`) is one candidate, `31`, sending only What + Why clipped to `fieldRunes` each. Split, 119 Highlights became 309 lines that each repeated the head, a lone `*When*: January 2025` meant nothing, and topics cited 5–25 refs. Detected by body shape, not `kind`: the same step writes field-style `tool`s and a list-style `summary`.
+- **A Feed is named by `store.FeedTitle`** — its title, else its URL's host without `www.` — in the candidate line, on a resolved ref's `feed_title` (issue view, vault note) and in the Highlights API. 9 of 12 real Feeds had `title=''`, so lines read `[3]  · headline` and "what several newsletters covered" was unanswerable.
+- **The model writes only `title` and `why`.** Every bullet a reader sees is stored Highlight text resolved from a ref (`Issue.Resolve` → `BulletText`). A ref that does not resolve is dropped, a topic left with none is dropped (`dropped_topics`). A topic keeps at most `maxTopicRefs` (7) refs (`capRefs`, counted in `trimmed_refs`): one per Feed first, then the model's order, so a trimmed topic keeps its cross-newsletter proof. The prompt asks for the same cap, but Haiku told "at most 6" cited 25 — the server is what enforces it. The contract's "one topic per thing, never a category" / "never pad" / "several newsletters only when the refs say so" lines answer what the eval saw: umbrella topics, padding to `top_n`, and a `why` claiming several newsletters over one Feed's refs. Same reason as `partition`: a pass that never saw the Document must not write its facts.
+- **The budget comes from the `[llm.summarize]` roles** — no endpoint declares its own context. `window()` gives a Digest pinned to the provider a role names that role's `ctx_tokens` — **provider alone, the role's model does not narrow it** (matching model too clamped Opus and Sonnet on `anthropic` to the 7k local window because `big` named Haiku, so they saw 65 of 309 lines) — anything else the `map` role's. Trap: an Ollama box bakes `num_ctx` per model variant, so a Digest pinned to the box with a variant other than the role's still gets the role's window. A role naming no provider never matches (same rule as `bigCtxTokens`); the reply is reserved at `reduce.max_tokens`. Over budget keeps the NEWEST candidates and records `truncated` + `candidates`/`candidates_sent` on that question's metadata, shown on the issue. A window that cannot hold the prompt plus one item fails the run — never "send it all".
+- **Rule 5 is refused at save AND at run** (`Runner.CheckRoute`, `ErrCloudRoute` → 422). A Feed can gain a login after the save; and a Feed can point at Documents on another, credentialed domain, so the run also gates every candidate's `canonical_url`. **An unpinned Digest counts**: `Router.CloudReach("")` walks primary + fallbacks, so a chain with one cloud endpoint is refused — the pin is what makes it safe. The API validates with the worker's own `DigestRunner()`, so save and run cannot disagree.
+- **The issue id is minted at enqueue**, in the Job payload. A retried Job reopens its own row (`UpsertDigestIssue`) instead of leaving a second one, and "Run now" can hand the app an id to wait on before the row exists. A Digest with a run queued or running gets that run back (`deduped`); the lookup reads `json_extract(payload,'$.digest_id')`, so that key must stay stable.
+- **The scheduler bumps `next_run_at` BEFORE it enqueues** — a failed bump skips the run rather than enqueueing it on every tick. Due times are computed in the server's local zone. A PATCH moves `next_run_at` only when the schedule changed or the Digest was switched back on.
+- **Metering goes through `pipeline.MeteredComplete`**, the path `llmCall` uses: one `llm_usages` row with `job_id` set and `pipeline_run_id` nil. Do not write a second path to the Router.
+- **Hold is ONE site, and picking a Feed is the hold** — there is no switch. `holdHighlights`, where `handleRunPipelineStep` marks a run done — never inside a step's insert — archives the run's Highlights when an ENABLED Digest lists the Document's Feed in `source_feed_ids` (`store.FeedHeldByDigest`), with the auto-archive sweep's stamp (pinned untouched, `rev+1`). **An empty scope (= every Feed) holds nothing**: holding there would hide the whole feed. `llm_ai_newsletter` asks the same query and behaves as `skip_summary` for a held Feed — a store query, so `pipeline` needs no import of `digest` (which imports `pipeline`). `FeedHeldByDigest` matches a quoted id inside the JSON text because sqlc cannot type `json_each`. Turning hold on never touches existing Highlights; archiving the backlog is a separate, owner-approved data change. **`ListDigestCandidates` must never filter on `archived_at`** — hold would then keep a Digest's own input out of every issue (`TestHeldHighlightIsStillACandidate`). Open: a device syncing mid-run sees the Highlights until the run completes.
+- **`digests.color` is a palette NAME** (`digest.Colors`), never a hex: the app owns what each name looks like. `Normalize` refuses anything off the palette; `defaultColor` (the API's `decode`) gives a Digest saved with none the first colour the fewest other Digests use. `''` exists only on a row older than the column — it takes a colour on its next save. The app keeps its own list (`PALETTE` in `app/src/tagColor.ts`); `TestColorsMatchAppPalette` reads that file and fails when the two differ.
+- **Vault:** each `done` issue is `digests/<digest-slug>/<date>.md` (local date of `window_end`; a second issue that day carries its id). `empty`/`failed`/tombstoned issues have no note; a rename moves the folder, a delete removes it. A Digest row changes on every run and schedule bump, so the exporter re-renders a Digest's older issues only when its folder moved (`digestDirs`). **Digest config has no markdown path yet** — neither do Pipelines; that is its own plan.
+
 ## Images: absolutize at ingest, wikilink on export
 
 **`trafilatura.Options.OriginalURL` does NOT rewrite `<img src>`.** A site-relative src survives into `documents.markdown`, and the whole chain then fails silently: `assets.go`'s `markdownImageRe` matches only `http(s)` → no download → no `media_assets` row → the exporter (keyed on `media_assets.original_url`) has nothing to swap → dead link in Obsidian, broken image in the app.
@@ -121,7 +141,7 @@ The exporter ticks every 15s and Syncthing/Obsidian watch the vault, so an ident
 - **The cursor sits AT the newest `updated_at`, never before it.** `ListDocumentsSince` filters `>= cursor`, so a same-second row is re-selected anyway; the old one-second rollback re-exported the newest doc forever, one file event per tick.
 - **`writeNote`/`writeIndex` skip a byte-identical file.** Backstop — `_index.md` is rewritten on every sweep that does any work.
 
-`GET /api/v1/export/stats` runs a full sweep per request, so the same rules keep the Settings card from churning the vault. Guarded by `TestSweepIsQuietWhenNothingChanged`.
+`GET /api/v1/export/stats` runs a full sweep per request, so the same rules keep the Settings card from churning the vault. Guarded by `TestSweepIsQuietWhenNothingChanged`, which covers a DigestIssue note too.
 
 ## Document media types
 

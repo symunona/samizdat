@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/symunona/samizdat/server/internal/store"
 )
 
 // These three steps used to fail job 8cd52ad8-style: a small local model returns
@@ -193,6 +196,59 @@ func TestLLMAINewsletterBareArrayIsHighlightsOnly(t *testing.T) {
 			}
 			if c.wantCount == 2 && !sawSummary {
 				t.Fatal("wrapper object must still produce its summary highlight")
+			}
+		})
+	}
+}
+
+// A Feed an enabled Digest picked is read through its issues: the step writes
+// its item Highlights (the Digest's input) but no per-issue summary, as if
+// skip_summary were set. A Digest scoped to every Feed picks none.
+func TestLLMAINewsletterHeldFeedSkipsSummary(t *testing.T) {
+	const reply = `{"summary":["**foo** bar"],"highlights":[{"kind":"tool","title":"ToolX","body":["*Who* x","*What* y"]}]}`
+	for _, c := range []struct {
+		name, scope string
+		wantSummary bool
+	}{
+		{"picked by an enabled Digest", `["feed-1"]`, false},
+		{"a Digest scoped to every Feed", `[]`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, q, run := setupRun(t)
+			now := time.Now().UTC().Format(time.RFC3339)
+			feedID := "feed-1"
+			if _, err := q.UpsertFeed(ctx, store.UpsertFeedParams{
+				ID: feedID, Url: "https://feed.example/rss", Kind: "rss", Config: "{}", CreatedAt: now, UpdatedAt: now,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			// Same canonical URL as setupRun's Document: the upsert attaches the Feed.
+			if _, err := q.UpsertDocument(ctx, store.UpsertDocumentParams{
+				ID: run.DocumentID, CanonicalUrl: "https://example.com/a", Title: "A", Markdown: "body",
+				FetchedAt: now, SourceFeedID: &feedID, ContentHash: "hash", CreatedAt: now, UpdatedAt: now,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := q.InsertDigest(ctx, store.InsertDigestParams{
+				ID: "digest-1", Name: "d", Enabled: 1, Period: "daily", Weekdays: "[]", Hour: 7,
+				SourceFeedIds: c.scope, Questions: "[]", NextRunAt: now, CreatedAt: now, UpdatedAt: now,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := handleLLMAINewsletter(ctx, q, run, json.RawMessage(`{}`), stubRouter(t, reply)); err != nil {
+				t.Fatal(err)
+			}
+			hs, err := q.ListHighlightsByPipelineRun(ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			kinds := map[string]bool{}
+			for _, h := range hs {
+				kinds[h.Kind] = true
+			}
+			if !kinds["tool"] || kinds["summary"] != c.wantSummary {
+				t.Errorf("kinds = %v, want a tool and summary=%v", kinds, c.wantSummary)
 			}
 		})
 	}

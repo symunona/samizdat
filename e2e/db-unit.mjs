@@ -433,6 +433,116 @@ async function fresh(path = ':memory:') {
   eq('tag links for an unknown object', hooks.selectTagLinks(st, 'doc', 'zzz'), [])
 }
 
+// ── digests: machine data that must read offline ──────────────────────────────
+{
+  const path = join(TMP, 'digests.db')
+  await fresh(path)
+  const digest = (over = {}) => ({
+    id: 'g1', name: 'AI weekly', enabled: true, period: 'weekly', weekdays: [2, 5], hour: 7,
+    source_feed_ids: ['f1'], provider: 'box:11434', model: 'm',
+    questions: [{ id: 'q1', title: 'Tools', prompt: 'which?', top_n: 5, enabled: true }],
+    color: 'green', next_run_at: T0, last_run_at: null, created_at: T0, updated_at: T0, rev: 1, deleted_at: null, ...over,
+  })
+  const issue = (over = {}) => ({
+    id: 'i1', digest_id: 'g1', window_start: T0, window_end: '2026-01-02T00:00:00Z', status: 'done',
+    topics: [{
+      question_id: 'q1', question_title: 'Tools', rank: 1, title: 'Launch', why: 'new',
+      refs: [{ highlight_id: 'h1', bullet: 1 }, { highlight_id: 'h2', bullet: -1 }, { highlight_id: 'gone', bullet: 0 }],
+    }],
+    metadata: { questions: [{ question_id: 'q1', truncated: true, candidates: 9, candidates_sent: 4 }] },
+    created_at: T0, updated_at: T0, rev: 1, deleted_at: null, ...over,
+  })
+  await repo.applySync(payload({
+    documents: [doc({ source_feed_id: 'f1' }), doc({ id: 'd2', title: 'Doc Two', source_feed_id: 'f2' })],
+    highlights: [
+      hl({ body: '- first thing\n2. second thing' }),
+      hl({ id: 'h2', document_id: 'd2', body: ' whole body ', deleted_at: null }),
+    ],
+    digests: [digest()],
+    digest_issues: [issue(), issue({ id: 'i0', window_end: '2026-01-01T12:00:00Z', status: 'failed', topics: [], metadata: { questions: [], error: 'boom' } })],
+  }))
+
+  // Reopen: everything below is read from SQLite, not from the index applySync patched.
+  await repo.close()
+  await fresh(path)
+  const st = useIndex.getState()
+  const g = hooks.selectDigests(st)[0]
+  eq('digest lists survive SQLite as arrays', [g.weekdays, g.source_feed_ids, g.questions[0].prompt], [[2, 5], ['f1'], 'which?'])
+  eq('digest enabled survives SQLite as a boolean', g.enabled, true)
+  eq('digest color survives SQLite', g.color, 'green')
+  eq('issues newest first', hooks.selectDigestIssues(st, 'g1').map(i => i.id), ['i1', 'i0'])
+  eq('a failed issue keeps its error', st.digestIssues.i0.metadata.error, 'boom')
+  eq('issue metadata survives SQLite', st.digestIssues.i1.metadata.questions[0].truncated, true)
+  const refs = hooks.selectDigestIssue(st, 'i1').topics[0].refs
+  eq('a bullet ref resolves to that line, marker stripped', refs[0].text, 'second thing')
+  eq('a ref names its Document', [refs[0].document_id, refs[0].document_title], ['d1', 'Doc One'])
+  eq('bullet -1 is the whole body', [refs[1].text, refs[1].document_title], ['whole body', 'Doc Two'])
+  eq('a ref whose Highlight is not local is missing', [refs[2].missing, refs[2].text], [true, undefined])
+  eq('an unknown issue resolves to null', hooks.selectDigestIssue(st, 'nope'), null)
+  eq('feeds that produced Highlights', [...hooks.selectFeedIdsWithHighlights(st)].sort(), ['f1', 'f2'])
+
+  // The chips on a Highlight card: one per Digest citing it, opening the NEWEST issue
+  // that does. g2 cites h1 too; g1's newer issue i2 cites h1 but no longer h2.
+  const cite = (...ids) => [{ question_id: 'q1', question_title: 'Tools', rank: 1, title: 'T', why: '', refs: ids.map(id => ({ highlight_id: id, bullet: -1 })) }]
+  await repo.applySync(payload({
+    digests: [digest({ id: 'g2', name: 'Agents daily', color: 'blue' })],
+    digest_issues: [
+      issue({ id: 'i2', window_end: '2026-01-03T00:00:00Z', topics: cite('h1') }),
+      issue({ id: 'j1', digest_id: 'g2', topics: cite('h1', 'h1') }),
+    ],
+  }))
+  const chips = () => hooks.selectHighlightDigests(useIndex.getState())
+  eq('a Highlight cited by two Digests has two chips, by name', chips().get('h1'), [
+    { digestId: 'g2', issueId: 'j1', name: 'Agents daily', color: 'blue' },
+    { digestId: 'g1', issueId: 'i2', name: 'AI weekly', color: 'green' },
+  ])
+  eq('a chip opens the newest issue that cites the Highlight', chips().get('h2'), [
+    { digestId: 'g1', issueId: 'i1', name: 'AI weekly', color: 'green' },
+  ])
+  eq('a Highlight no issue cites has no chip', chips().get('h9'), undefined)
+  await repo.applySync(payload({ digest_issues: [issue({ id: 'i2', deleted_at: T0, rev: 2 })] }))
+  eq('a deleted issue gives its chip back to the older one', chips().get('h1').map(c => c.issueId), ['j1', 'i1'])
+  await repo.applySync(payload({
+    digests: [digest({ id: 'g2', deleted_at: T0, rev: 2 })],
+    digest_issues: [issue({ id: 'j1', digest_id: 'g2', deleted_at: T0, rev: 2 })],
+  }))
+  eq('a deleted Digest yields no chip', chips().get('h1').map(c => c.digestId), ['g1'])
+
+  // Deleting a Digest tombstones it and its issues in one delta.
+  await repo.applySync(payload({
+    digests: [digest({ deleted_at: T0, rev: 2 })],
+    digest_issues: [issue({ deleted_at: T0, rev: 2 }), issue({ id: 'i0', deleted_at: T0, rev: 2 })],
+  }))
+  eq('digest tombstone drops it from the index', hooks.selectDigests(useIndex.getState()), [])
+  eq('digest tombstone drops the row', (await driver.all(Q.SELECT_DIGESTS)).length, 0)
+  eq('issue tombstones drop the rows', (await driver.all(Q.SELECT_DIGEST_ISSUES)).length, 0)
+
+  await repo.applySync(payload({ digests: [digest()] }))
+  await repo.wipe()
+  eq('wipe clears digests', (await driver.all(Q.SELECT_DIGESTS)).length, 0)
+}
+
+// ── a v3 replica (digests without a color, with hold) upgrades in place ───────
+{
+  const path = join(TMP, 'v3.db')
+  if (repo.isReady()) await repo.close()
+  const old = await openNodeDriver(path)
+  for (const script of S.MIGRATIONS.slice(0, 3)) await old.exec(script)
+  await old.run(Q.UPSERT_META, ['schema_version', '3'])
+  await old.run("INSERT INTO digests (id, name) VALUES ('g1', 'Old digest')")
+  await old.close()
+
+  await fresh(path)
+  const meta = await driver.all(Q.SELECT_META, ['schema_version'])
+  eq('a v3 replica is migrated to the current version', meta[0]?.value, String(S.SCHEMA_VERSION))
+  const kept = hooks.selectDigests(useIndex.getState())[0]
+  eq('its Digest survives, with no color yet', [kept.name, kept.color], ['Old digest', ''])
+  await fresh(path)
+  eq('opening it again migrates nothing', hooks.selectDigests(useIndex.getState()).map(g => g.color), [''])
+  const columns = (await driver.all("SELECT name FROM pragma_table_info('digests')")).map(c => c.name)
+  eq('the hold column is gone', columns.includes('hold_highlights'), false)
+}
+
 // ── sync status ───────────────────────────────────────────────────────────────
 {
   await fresh()

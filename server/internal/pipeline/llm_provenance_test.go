@@ -52,7 +52,7 @@ func TestSummaryHighlightCarriesProvenance(t *testing.T) {
 	if err != nil || len(hs) != 1 {
 		t.Fatalf("want 1 highlight, got %d (%v)", len(hs), err)
 	}
-	var p highlightProvenance
+	var p Provenance
 	if err := json.Unmarshal([]byte(hs[0].Metadata), &p); err != nil {
 		t.Fatalf("metadata %q: %v", hs[0].Metadata, err)
 	}
@@ -147,7 +147,7 @@ func TestPinnedProviderNamesTheEndpoint(t *testing.T) {
 	if len(hs) != 1 {
 		t.Fatalf("want 1 highlight, got %d", len(hs))
 	}
-	var p highlightProvenance
+	var p Provenance
 	if err := json.Unmarshal([]byte(hs[0].Metadata), &p); err != nil {
 		t.Fatalf("metadata %q: %v", hs[0].Metadata, err)
 	}

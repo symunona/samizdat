@@ -186,3 +186,30 @@ func TestModelsGroupPerProvider(t *testing.T) {
 		}
 	}
 }
+
+// Rule 5 routes on this: a pin reaches only itself, and an unpinned call reaches
+// every endpoint the chain may fall through to — a local primary with a cloud
+// fallback is NOT a local route.
+func TestCloudReach(t *testing.T) {
+	clearLLMEnv(t)
+	local := config.LLMSection{Provider: "openai_compat", BaseURL: "http://box.example:11434/v1", DefaultModel: "m"}
+	cloud := config.LLMSection{Provider: "anthropic", APIKey: "sk"}
+
+	withFallback := local
+	withFallback.Fallback = []config.LLMSection{cloud}
+	r := NewRouter(withFallback)
+
+	for _, tc := range []struct{ id, want string }{
+		{"box.example:11434", ""},
+		{"anthropic", "anthropic"},
+		{"", "anthropic"},
+		{"no-such-provider", ""},
+	} {
+		if got := r.CloudReach(tc.id); got != tc.want {
+			t.Errorf("CloudReach(%q) = %q, want %q", tc.id, got, tc.want)
+		}
+	}
+	if got := NewRouter(local).CloudReach(""); got != "" {
+		t.Errorf("an all-local chain reaches %q", got)
+	}
+}

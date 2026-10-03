@@ -66,6 +66,7 @@ const KIND_LABELS: Record<string, string> = {
   fetch_video: 'Fetching video',
   run_pipeline: 'Starting pipeline',
   run_pipeline_step: 'Running pipeline',
+  run_digest: 'Running digest',
 }
 
 function phaseHeadline(p: JobProgress, kind: string): string {
@@ -82,6 +83,10 @@ function phaseHeadline(p: JobProgress, kind: string): string {
     case 'convert':
       return `Converting ${p.media || 'media'}`
     case 'llm': {
+      // A Digest reuses chunk/chunks for its questions: one call per question.
+      if (p.step === 'run_digest') {
+        return p.chunks ? `Answering digest · question ${p.chunk ?? 1}/${p.chunks}` : 'Answering digest'
+      }
       const verb = p.step === 'llm_summarize' ? 'Summarizing' : 'Extracting highlights'
       return p.chunks ? `${verb} · chunk ${p.chunk ?? 1}/${p.chunks}` : verb
     }

@@ -185,6 +185,15 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 	if err != nil {
 		return StepResult{}, fmt.Errorf("llm_ai_newsletter: get document: %w", err)
 	}
+	// A Feed a Digest picked is read through its issues, never the feed: the
+	// per-issue summary would only be held out of sight, so it is not written.
+	if doc.SourceFeedID != nil {
+		held, err := q.FeedHeldByDigest(ctx, *doc.SourceFeedID)
+		if err != nil {
+			return StepResult{}, fmt.Errorf("llm_ai_newsletter: feed held by digest: %w", err)
+		}
+		c.SkipSummary = c.SkipSummary || held != 0
+	}
 
 	seen := recentlyCoveredBlock(ctx, q, doc, c.DedupLookbackDays)
 	out, err := llmStepCallLong(ctx, q, run, longRequest{

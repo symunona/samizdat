@@ -13,7 +13,8 @@ import fs from 'node:fs'
 import { join } from 'node:path'
 import {
   BASE_URL, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
-  newConnectedPage, seedVideoDoc, seedFalseParseDoc, seedDeadJob, seedActiveJob, makeCleanup,
+  newConnectedPage, seedVideoDoc, seedFalseParseDoc, seedDeadJob, seedActiveJob, seedDigestIssue,
+  makeCleanup,
 } from './harness.js'
 
 // A fixed video Document id seeded into the test DB so the video player screen
@@ -37,6 +38,11 @@ const DEAD_SCRAPE_ERROR = 'playwright: Download is starting'
 const LIVE_DOWNLOAD_URL = 'https://www.youtube.com/watch?v=liveprogres'
 const LIVE_RETRY_URL = 'https://retry.example.com/article'
 const LIVE_RETRY_ERROR = 'fetch: net::ERR_CONNECTION_RESET'
+// A Digest with one finished issue, so the issue screen renders a real one: a topic
+// whose Highlight is gone, under a question that was truncated.
+const DIGEST_ID = 'eeeeeeee-0000-4000-8000-0000000000e1'
+const DIGEST_QUESTION = { id: 'q-smoke', title: 'Smoke question', prompt: 'What happened?', top_n: 5, enabled: true }
+
 const ago = ms => new Date(Date.now() - ms).toISOString()
 
 // Pages to visit: [path, description]
@@ -50,6 +56,8 @@ const PAGES = [
   ['/jobs', 'jobs'],
   ['/subscriptions', 'subscriptions'],
   ['/pipelines', 'pipelines'],
+  ['/digests', 'digests'],
+  [`/digest/${DIGEST_ID}`, 'digest issue'],
   ['/settings', 'settings'],
   [`/document/${VIDEO_DOC_ID}`, 'video document'],
 ]
@@ -83,6 +91,18 @@ async function runSmoke() {
     kind: 'scrape_url',
     payload: { url: DEAD_SCRAPE_URL },
     lastError: DEAD_SCRAPE_ERROR,
+  })
+
+  seedDigestIssue({
+    digestId: DIGEST_ID,
+    issueId: 'eeeeeeee-0000-4000-8000-0000000000e2',
+    name: 'Smoke digest',
+    questions: [DIGEST_QUESTION],
+    topics: [{
+      question_id: DIGEST_QUESTION.id, question_title: DIGEST_QUESTION.title, rank: 1,
+      title: 'Smoke topic', why: 'Seeded.', refs: [{ highlight_id: 'no-such-highlight', bullet: 0 }],
+    }],
+    metadata: { questions: [{ question_id: DIGEST_QUESTION.id, truncated: true, candidates: 9, candidates_sent: 4 }] },
   })
 
   console.log('  launching browser...')

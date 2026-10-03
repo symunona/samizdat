@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/symunona/samizdat/server/internal/digest"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -20,6 +21,11 @@ type syncResponse struct {
 	DocumentTags   []store.DocumentTag   `json:"document_tags"`
 	AnnotationTags []store.AnnotationTag `json:"annotation_tags"`
 	HighlightTags  []store.HighlightTag  `json:"highlight_tags"`
+	// Digests and their issues are machine data like Highlights: one-way, in the
+	// shape the digests API serves. An issue's refs are NOT resolved here — the
+	// device holds the Highlights they point at.
+	Digests      []digest.Digest `json:"digests"`
+	DigestIssues []digest.Issue  `json:"digest_issues"`
 }
 
 // GET /api/v1/sync?since=<ISO8601>
@@ -85,7 +91,19 @@ func (h *syncHandler) sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logSync(since, docs, highlights, annotations, tags, docTags, annTags, hlTags)
+	digests, err := h.q.ListDigestsSince(ctx, since)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error: digests")
+		return
+	}
+
+	digestIssues, err := h.q.ListDigestIssuesSince(ctx, since)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db error: digest_issues")
+		return
+	}
+
+	logSync(since, docs, highlights, annotations, tags, docTags, annTags, hlTags, digests, digestIssues)
 
 	writeJSON(w, http.StatusOK, syncResponse{
 		ServerTime:     serverTime,
@@ -96,6 +114,8 @@ func (h *syncHandler) sync(w http.ResponseWriter, r *http.Request) {
 		DocumentTags:   nullSlice(docTags),
 		AnnotationTags: nullSlice(annTags),
 		HighlightTags:  nullSlice(hlTags),
+		Digests:        mapRows(digests, digest.FromRow),
+		DigestIssues:   mapRows(digestIssues, digest.IssueFromRow),
 	})
 }
 
@@ -108,9 +128,11 @@ func logSync(
 	docTags []store.DocumentTag,
 	annTags []store.AnnotationTag,
 	hlTags []store.HighlightTag,
+	digests []store.Digest,
+	digestIssues []store.DigestIssue,
 ) {
 	total := len(docs) + len(highlights) + len(annotations) + len(tags) +
-		len(docTags) + len(annTags) + len(hlTags)
+		len(docTags) + len(annTags) + len(hlTags) + len(digests) + len(digestIssues)
 
 	if total == 0 {
 		logAPI.Printf("sync EMPTY  since=%s", since)
@@ -133,6 +155,8 @@ func logSync(
 	add(len(annotations), "annotation", "annotations")
 	add(len(tags), "tag", "tags")
 	add(len(docTags)+len(annTags)+len(hlTags), "tag-link", "tag-links")
+	add(len(digests), "digest", "digests")
+	add(len(digestIssues), "digest-issue", "digest-issues")
 
 	logAPI.Printf("\033[92mSYNCED\033[0m  %s  (since=%s)", strings.Join(parts, ", "), since)
 }

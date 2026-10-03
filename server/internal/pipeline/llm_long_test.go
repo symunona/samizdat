@@ -140,7 +140,7 @@ func driveSteps(t *testing.T, ctx context.Context, q *store.Queries, run store.P
 	return ticks, nil
 }
 
-func provenanceOf(t *testing.T, ctx context.Context, q *store.Queries, run store.PipelineRun) (store.Highlight, highlightProvenance) {
+func provenanceOf(t *testing.T, ctx context.Context, q *store.Queries, run store.PipelineRun) (store.Highlight, Provenance) {
 	t.Helper()
 	hs, err := q.ListHighlightsByPipelineRun(ctx, run.ID)
 	if err != nil {
@@ -149,7 +149,7 @@ func provenanceOf(t *testing.T, ctx context.Context, q *store.Queries, run store
 	if len(hs) != 1 {
 		t.Fatalf("want exactly 1 highlight, got %d", len(hs))
 	}
-	var p highlightProvenance
+	var p Provenance
 	if err := json.Unmarshal([]byte(hs[0].Metadata), &p); err != nil {
 		t.Fatalf("metadata %q: %v", hs[0].Metadata, err)
 	}

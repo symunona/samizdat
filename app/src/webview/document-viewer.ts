@@ -3,7 +3,7 @@
 // Only dependency-free imports allowed (esbuild --bundle inlines them); never
 // pull in react-native-unistyles here — keep the WebView bundle lean.
 import { iconButtonSpec as IB } from '../iconButtonSpec'
-import { tagColor } from '../tagColor'
+import { ON_PALETTE, tagColor } from '../tagColor'
 // Type-only — esbuild strips it, so prefs.ts (and the DB layer behind it) never enters
 // the bundle.
 import type { ReadingMode } from '../prefs'
@@ -11,6 +11,9 @@ import type { ReadingMode } from '../prefs'
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type HlTag = { id: string; name: string; color: string }
+
+// A Digest citing the Highlight — the host's HighlightDigest (src/db/hooks.ts).
+type HlDigest = { digestId: string; issueId: string; name: string; color: string }
 
 type HlData = {
   id: string
@@ -20,6 +23,7 @@ type HlData = {
   pinned: 0 | 1
   hasNote?: boolean
   tags?: HlTag[]
+  digests?: HlDigest[]
 }
 
 type ThemeData = {
@@ -206,6 +210,9 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
    Sit above the footer, wrap on overflow, tap opens the tag selector (hl_tags). */
 .hl-tags{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px 0}
 .hl-tag-chip{padding:2px 8px;border-radius:10px;border:1px solid;font-size:11px;font-weight:600;cursor:pointer;background:transparent;line-height:1.4}
+/* Digest chips — mirror DigestChip (src/DigestChip.tsx): the Digest's name on its
+   colour, first in the same row as the tags; a tap opens the citing issue (hl_digest). */
+.hl-digest-chip{padding:2px 8px;border-radius:10px;border:none;font-size:11px;font-weight:700;cursor:pointer;color:${ON_PALETTE};line-height:1.4;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ── Page mode ────────────────────────────────────────────────────────────────
    Strictly additive: EVERY rule below is scoped to html.pg, so with the mode off
@@ -329,12 +336,27 @@ function renderHighlightCard(hl: HlData): HTMLElement {
   card.appendChild(header)
   card.appendChild(body)
 
-  // Tag-name chips above the footer (mirrors HighlightCard.tsx). Each chip carries
+  // Digest chips, then tag-name chips, above the footer (mirrors HighlightCard.tsx).
+  // A Digest chip opens the issue citing this Highlight; a tag chip carries
   // data-action="tags" so a tap opens the tag selector, same as the Tags button.
-  if (hl.tags && hl.tags.length > 0) {
+  const digests = hl.digests ?? []
+  const tags = hl.tags ?? []
+  if (digests.length > 0 || tags.length > 0) {
     const tagRow = document.createElement('div')
     tagRow.className = 'hl-tags'
-    for (const tag of hl.tags) {
+    for (const d of digests) {
+      const chip = document.createElement('button')
+      chip.className = 'hl-digest-chip'
+      chip.dataset.id = hl.id
+      chip.dataset.action = 'digest'
+      chip.dataset.digest = d.digestId
+      chip.dataset.issue = d.issueId
+      chip.style.backgroundColor = tagColor(d.color)
+      chip.title = `Digest ${d.name}`
+      chip.textContent = d.name
+      tagRow.appendChild(chip)
+    }
+    for (const tag of tags) {
       const chip = document.createElement('button')
       chip.className = 'hl-tag-chip'
       chip.dataset.id = hl.id
@@ -879,6 +901,10 @@ document.addEventListener('click', (e: MouseEvent) => {
     }
     if (action === 'tags') {
       sendMsg({ type: 'hl_tags', id })
+      return
+    }
+    if (action === 'digest') {
+      sendMsg({ type: 'hl_digest', digestId: btn.dataset.digest, issueId: btn.dataset.issue })
       return
     }
     if (action === 'annotate') {

@@ -10,7 +10,8 @@
 
 import { create } from 'zustand'
 import type {
-  Annotation, DocumentMeta, Highlight, JunctionType, OutboxIntent, SyncStatus, Tag,
+  Annotation, Digest, DigestIssue, DocumentMeta, Highlight, JunctionType, OutboxIntent,
+  SyncStatus, Tag,
 } from './types'
 
 export type IndexState = {
@@ -22,6 +23,9 @@ export type IndexState = {
   documentTags: Record<string, string[]>
   annotationTags: Record<string, string[]>
   highlightTags: Record<string, string[]>
+  digests: Record<string, Digest>
+  // Refs unresolved, as synced — the hooks resolve them against `highlights`.
+  digestIssues: Record<string, DigestIssue>
   outbox: OutboxIntent[]
   dirty: Record<string, number> // dirtyKey → base_rev
   syncStatus: SyncStatus
@@ -40,6 +44,8 @@ export const EMPTY_INDEX: IndexState = {
   documentTags: {},
   annotationTags: {},
   highlightTags: {},
+  digests: {},
+  digestIssues: {},
   outbox: [],
   dirty: {},
   syncStatus: 'idle',

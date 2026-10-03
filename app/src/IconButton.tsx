@@ -13,13 +13,14 @@ interface Props {
   size?: number
   color?: string
   hoverColor?: string
+  accessibilityLabel?: string
 }
 
 // Styled icon button with desktop hover (non-touch): scales up + shifts color.
 // onHoverIn/onHoverOut only fire for a fine pointer, so touch is unaffected.
 // Geometry comes from the shared iconButtonSpec (theme.iconButton) so the
 // WebView highlight card can mirror it — see src/iconButtonSpec.ts.
-export default function IconButton({ name, onPress, hitSlop = 8, size, color, hoverColor }: Props) {
+export default function IconButton({ name, onPress, hitSlop = 8, size, color, hoverColor, accessibilityLabel }: Props) {
   const { theme } = useUnistyles()
   const s = useMemo(() => buildStyles(theme), [theme])
   const [hover, setHover] = useState(false)
@@ -32,6 +33,7 @@ export default function IconButton({ name, onPress, hitSlop = 8, size, color, ho
     <Pressable
       {...guard(onPress)}
       hitSlop={hitSlop}
+      accessibilityLabel={accessibilityLabel}
       onHoverIn={() => setHover(true)}
       onHoverOut={() => setHover(false)}
       style={[s.btn, hover && s.btnHover]}

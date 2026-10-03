@@ -43,6 +43,40 @@ type Device struct {
 	LastSeenAt *string `json:"last_seen_at"`
 }
 
+type Digest struct {
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	Enabled       int64   `json:"enabled"`
+	Period        string  `json:"period"`
+	Weekdays      string  `json:"weekdays"`
+	Hour          int64   `json:"hour"`
+	SourceFeedIds string  `json:"source_feed_ids"`
+	Questions     string  `json:"questions"`
+	Provider      string  `json:"provider"`
+	Model         string  `json:"model"`
+	Color         string  `json:"color"`
+	NextRunAt     string  `json:"next_run_at"`
+	LastRunAt     *string `json:"last_run_at"`
+	CreatedAt     string  `json:"created_at"`
+	UpdatedAt     string  `json:"updated_at"`
+	Rev           int64   `json:"rev"`
+	DeletedAt     *string `json:"deleted_at"`
+}
+
+type DigestIssue struct {
+	ID          string  `json:"id"`
+	DigestID    string  `json:"digest_id"`
+	WindowStart string  `json:"window_start"`
+	WindowEnd   string  `json:"window_end"`
+	Status      string  `json:"status"`
+	Topics      string  `json:"topics"`
+	Metadata    string  `json:"metadata"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
+	Rev         int64   `json:"rev"`
+	DeletedAt   *string `json:"deleted_at"`
+}
+
 type Document struct {
 	ID            string  `json:"id"`
 	CanonicalUrl  string  `json:"canonical_url"`

@@ -14,8 +14,8 @@ import { useShallow } from 'zustand/react/shallow'
 import { useIndex, JUNCTION_KEY, type IndexState } from './memoryIndex'
 import { getDocument } from './repo'
 import type {
-  Annotation, AnnotationWithContext, Document, DocumentMeta, HighlightFilter,
-  HighlightWithDoc, JunctionType, Tag, TagWithCounts,
+  Annotation, AnnotationWithContext, Digest, DigestIssue, Document, DocumentMeta,
+  HighlightFilter, HighlightWithDoc, JunctionType, Tag, TagWithCounts,
 } from './types'
 
 // ── pure selectors ────────────────────────────────────────────────────────────
@@ -131,6 +131,98 @@ export function selectTagLinks(
   return s[JUNCTION_KEY[type]][objectId] ?? []
 }
 
+export function selectDigests(s: Pick<IndexState, 'digests'>): Digest[] {
+  return Object.values(s.digests)
+    .filter((g) => !g.deleted_at)
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+// Newest first — the server's order (window_end DESC, created_at DESC).
+export function selectDigestIssues(s: Pick<IndexState, 'digestIssues'>, digestId: string): DigestIssue[] {
+  return Object.values(s.digestIssues)
+    .filter((i) => !i.deleted_at && i.digest_id === digestId)
+    .sort((a, b) => b.window_end.localeCompare(a.window_end) || b.created_at.localeCompare(a.created_at))
+}
+
+// A Digest that cites a Highlight, and the issue a press on its chip opens.
+export type HighlightDigest = { digestId: string; issueId: string; name: string; color: string }
+
+// Every Highlight a DigestIssue topic cites → the Digests citing it, by name. One pass
+// over the issues, built once per screen: a card looks its id up, it never queries.
+// The issue kept per Digest is the newest that cites the Highlight; a deleted Digest
+// or issue contributes nothing.
+export function selectHighlightDigests(
+  s: Pick<IndexState, 'digests' | 'digestIssues'>,
+): Map<string, HighlightDigest[]> {
+  const cited = new Map<string, HighlightDigest[]>()
+  const newestFirst = Object.values(s.digestIssues)
+    .filter((i) => !i.deleted_at)
+    .sort((a, b) => b.window_end.localeCompare(a.window_end) || b.created_at.localeCompare(a.created_at))
+  for (const issue of newestFirst) {
+    const digest = s.digests[issue.digest_id]
+    if (!digest || digest.deleted_at) continue
+    for (const topic of issue.topics) {
+      for (const ref of topic.refs) {
+        const list = cited.get(ref.highlight_id) ?? []
+        if (list.some((d) => d.digestId === digest.id)) continue
+        list.push({ digestId: digest.id, issueId: issue.id, name: digest.name, color: digest.color })
+        cited.set(ref.highlight_id, list)
+      }
+    }
+  }
+  for (const list of cited.values()) list.sort((a, b) => a.name.localeCompare(b.name))
+  return cited
+}
+
+// Mirrors the server's digest.BulletText: body line `bullet` without its list marker,
+// or the whole body for -1 (and for an index the body no longer has).
+const BULLET_MARKER = /^\s*(?:[-*•]|\d+[.)])\s+/
+
+export function bulletText(body: string, bullet: number): string {
+  const lines = body.split('\n')
+  if (bullet < 0 || bullet >= lines.length) return body.trim()
+  return lines[bullet].replace(BULLET_MARKER, '').trim()
+}
+
+// One issue with its refs resolved from local rows only — what GET /digest-issues/{id}
+// serves, minus `feed_title`: Feeds are not in the replica, so offline a bullet is
+// labelled by its Document. A Highlight that never synced (or was deleted) is `missing`.
+export function selectDigestIssue(
+  s: Pick<IndexState, 'digestIssues' | 'highlights' | 'documents'>,
+  issueId: string,
+): DigestIssue | null {
+  const issue = s.digestIssues[issueId]
+  if (!issue || issue.deleted_at) return null
+  return {
+    ...issue,
+    topics: issue.topics.map((t) => ({
+      ...t,
+      refs: t.refs.map((ref) => {
+        const h = s.highlights[ref.highlight_id]
+        if (!h) return { ...ref, missing: true }
+        return {
+          ...ref,
+          text: bulletText(h.body, ref.bullet),
+          highlight_title: h.title,
+          document_id: h.document_id,
+          document_title: s.documents[h.document_id]?.title ?? '',
+        }
+      }),
+    })),
+  }
+}
+
+// The Feeds that have produced at least one Highlight. A Digest reads Highlights, never
+// Documents, so a Feed outside this set contributes nothing to it.
+export function selectFeedIdsWithHighlights(s: Pick<IndexState, 'highlights' | 'documents'>): Set<string> {
+  const ids = new Set<string>()
+  for (const h of Object.values(s.highlights)) {
+    const feedId = h.deleted_at ? null : s.documents[h.document_id]?.source_feed_id
+    if (feedId) ids.add(feedId)
+  }
+  return ids
+}
+
 export function selectSyncStatus(s: Pick<IndexState, 'syncStatus' | 'syncError' | 'lastSyncedAt'>) {
   return { status: s.syncStatus, error: s.syncError, lastSyncedAt: s.lastSyncedAt }
 }
@@ -241,4 +333,36 @@ export function useTagLinks(type: JunctionType, objectId: string): string[] {
     () => selectTagLinks({ documentTags, annotationTags, highlightTags }, type, objectId),
     [documentTags, annotationTags, highlightTags, type, objectId],
   )
+}
+
+export function useDigests(): Digest[] {
+  const digests = useIndex((s) => s.digests)
+  return useMemo(() => selectDigests({ digests }), [digests])
+}
+
+export function useDigestIssues(digestId: string): DigestIssue[] {
+  const digestIssues = useIndex((s) => s.digestIssues)
+  return useMemo(() => selectDigestIssues({ digestIssues }, digestId), [digestIssues, digestId])
+}
+
+export function useDigestIssue(issueId: string | null): DigestIssue | null {
+  const digestIssues = useIndex((s) => s.digestIssues)
+  const highlights = useIndex((s) => s.highlights)
+  const documents = useIndex((s) => s.documents)
+  return useMemo(
+    () => (issueId ? selectDigestIssue({ digestIssues, highlights, documents }, issueId) : null),
+    [digestIssues, highlights, documents, issueId],
+  )
+}
+
+export function useHighlightDigests(): Map<string, HighlightDigest[]> {
+  const digests = useIndex((s) => s.digests)
+  const digestIssues = useIndex((s) => s.digestIssues)
+  return useMemo(() => selectHighlightDigests({ digests, digestIssues }), [digests, digestIssues])
+}
+
+export function useFeedIdsWithHighlights(): Set<string> {
+  const highlights = useIndex((s) => s.highlights)
+  const documents = useIndex((s) => s.documents)
+  return useMemo(() => selectFeedIdsWithHighlights({ highlights, documents }), [highlights, documents])
 }

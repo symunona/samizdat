@@ -34,6 +34,7 @@ var highlightCardPair = parityPair{
 - app/src/HighlightCard.tsx       React Native (feed list; native + RN-Web)
 - app/src/webview/document-viewer.ts   raw DOM inside a WebView (document body; React does not run here)
 A change to the action set, an icon, a label, or the card layout in one MUST be mirrored in the other. Icons differ in FORM only (Ionicons component on the RN side vs inline SVG of the same glyph in the WebView) — the glyph, size and meaning must match.
+DIGEST CHIPS: a Highlight cited by a DigestIssue shows one chip per Digest — the Digest's name on its palette colour, dark text — first in the same row as the tag chips, and a press opens the citing issue. RN renders the DigestChip component (src/DigestChip.tsx) and navigates itself; the WebView renders .hl-digest-chip buttons and posts hl_digest. Flag a chip present on one side only, or a differing fill/text colour.
 ICON-BUTTON STYLE: the footer action buttons (delete, tags, annotate) must look the same in both renderers — FLAT and BORDERLESS (transparent background, no border/box outline), with a fill-background hover. The RN side uses the IconButton component (src/IconButton.tsx); the WebView uses the .hl-icon-btn CSS class. Their geometry (padding, radius, glyph size, hover scale) is shared via src/iconButtonSpec.ts and must come from there in BOTH files — flag any re-introduction of a border/box on one side, a divergent hover treatment, or a hardcoded geometry value that bypasses iconButtonSpec.`,
 }
 

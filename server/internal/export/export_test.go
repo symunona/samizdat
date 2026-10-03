@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/symunona/samizdat/server/internal/digest"
 	"github.com/symunona/samizdat/server/internal/store"
 )
 
@@ -116,6 +117,8 @@ func TestSweepIsQuietWhenNothingChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	seedDigestIssue(ctx, t, q, now)
+
 	dir := t.TempDir()
 	e := New(q, dir, t.TempDir(), "none", linkWikilink)
 	for _, sub := range []string{docsSub, annsSub, assetsSub} {
@@ -128,6 +131,9 @@ func TestSweepIsQuietWhenNothingChanged(t *testing.T) {
 	before := mtimes(t, dir)
 	if len(before) == 0 {
 		t.Fatal("first sweep wrote nothing")
+	}
+	if e.issueFiles["issue-1"] == "" {
+		t.Fatal("first sweep wrote no DigestIssue note; the idle check below would not cover one")
 	}
 	// mtime has second resolution on some filesystems; make a rewrite visible.
 	past := time.Now().Add(-2 * time.Hour)
@@ -152,6 +158,149 @@ func TestSweepIsQuietWhenNothingChanged(t *testing.T) {
 		} else if !ts.Equal(old) {
 			t.Errorf("second sweep rewrote %s (mtime %v → %v) with no DB change", path, old, ts)
 		}
+	}
+}
+
+// seedDigestIssue gives doc-1 (which the caller made) a Highlight of two bullets
+// and a done issue of Digest "AI Weekly" whose one topic cites the second. Every
+// row is stamped at.
+func seedDigestIssue(ctx context.Context, t *testing.T, q *store.Queries, at string) {
+	t.Helper()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := q.InsertPipeline(ctx, store.InsertPipelineParams{
+		ID: "pipe-1", Name: "p", Enabled: 1, Trigger: "manual", Filter: "{}", Steps: "[]", CreatedAt: at, UpdatedAt: at,
+	})
+	must(err)
+	_, err = q.InsertPipelineRun(ctx, store.InsertPipelineRunParams{
+		ID: "run-1", PipelineID: "pipe-1", DocumentID: "doc-1", CreatedAt: at, UpdatedAt: at,
+	})
+	must(err)
+	_, err = q.InsertHighlight(ctx, store.InsertHighlightParams{
+		ID: "hl-1", DocumentID: "doc-1", PipelineRunID: "run-1", Kind: "summary", Title: "Summary",
+		Body: "- first thing\n- a [new tool](https://tool.example) shipped", Metadata: "{}", CreatedAt: at, UpdatedAt: at,
+	})
+	must(err)
+	_, err = q.InsertDigest(ctx, store.InsertDigestParams{
+		ID: "digest-1", Name: "AI Weekly", Enabled: 1, Period: digest.PeriodDaily, Weekdays: "[]", Hour: 7,
+		SourceFeedIds: "[]", Questions: "[]", NextRunAt: at, CreatedAt: at, UpdatedAt: at,
+	})
+	must(err)
+	_, err = q.UpsertDigestIssue(ctx, store.UpsertDigestIssueParams{
+		ID: "issue-1", DigestID: "digest-1", WindowStart: at, WindowEnd: at, CreatedAt: at, UpdatedAt: at,
+	})
+	must(err)
+	must(q.FinishDigestIssue(ctx, store.FinishDigestIssueParams{
+		Status: digest.StatusDone, UpdatedAt: at, ID: "issue-1",
+		Topics: `[{"question_id":"tools","question_title":"Cool tools","rank":1,"title":"A new tool",` +
+			`"why":"Two newsletters\ncovered it.","refs":[{"highlight_id":"hl-1","bullet":1}]}]`,
+		Metadata: `{"questions":[{"question_id":"tools","truncated":true,"candidates":9,"candidates_sent":4}]}`,
+	}))
+}
+
+// TestDigestIssueNote: a done issue is one note under its Digest's folder —
+// question, topic, why, and the STORED bullet linking to its Document's note. A
+// rename moves it; deleting the Digest removes it.
+func TestDigestIssueNote(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	q := store.New(db)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	at := now.Format(time.RFC3339)
+	if _, err := q.UpsertDocument(ctx, store.UpsertDocumentParams{
+		ID: "doc-1", CanonicalUrl: "https://a.example/1", Title: "Doc One",
+		Markdown: "hello", FetchedAt: at, MediaType: "article", CreatedAt: at, UpdatedAt: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seedDigestIssue(ctx, t, q, at)
+	// A run still in flight has nothing to export.
+	if _, err := q.UpsertDigestIssue(ctx, store.UpsertDigestIssueParams{
+		ID: "issue-running", DigestID: "digest-1", WindowStart: at, WindowEnd: at, CreatedAt: at, UpdatedAt: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	e := New(q, dir, t.TempDir(), "none", linkWikilink)
+	e.sweep(ctx)
+
+	rel := digestSub + "/ai-weekly/" + now.In(time.Local).Format("2006-01-02") + ".md"
+	if got := e.issueFiles["issue-1"]; got != rel {
+		t.Fatalf("issue note at %q, want %q", got, rel)
+	}
+	if _, ok := e.issueFiles["issue-running"]; ok {
+		t.Error("an issue that is not done got a note")
+	}
+	note, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"id: issue-1\n" + issueMark + "\n",
+		"\n## Cool tools\n",
+		"> [!warning] Only the newest 4 of 9 items fit",
+		"\n### 1. A new tool\n\nTwo newsletters covered it.\n",
+		"\n- a [new tool](https://tool.example) shipped — [[doc-one|Doc One]]\n",
+	} {
+		if !strings.Contains(string(note), want) {
+			t.Errorf("issue note lacks %q:\n%s", want, note)
+		}
+	}
+	if strings.Contains(string(note), "first thing") {
+		t.Errorf("a bullet the topic does not cite was exported:\n%s", note)
+	}
+
+	// A fresh Exporter over the same vault finds the note it owns.
+	reopened := New(q, dir, t.TempDir(), "none", linkWikilink)
+	reopened.loadIndex()
+	if got := reopened.issueFiles["issue-1"]; got != rel {
+		t.Errorf("reloaded index has the issue at %q, want %q", got, rel)
+	}
+
+	later := now.Add(time.Second).Format(time.RFC3339)
+	if _, err := q.UpdateDigest(ctx, store.UpdateDigestParams{
+		Name: "Local models", Enabled: 1, Period: digest.PeriodDaily, Weekdays: "[]", Hour: 7,
+		SourceFeedIds: "[]", Questions: "[]", NextRunAt: at, UpdatedAt: later, ID: "digest-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.sweep(ctx)
+	moved := digestSub + "/local-models/" + relBase(rel)
+	if got := e.issueFiles["issue-1"]; got != moved {
+		t.Errorf("after a rename the note is at %q, want %q", got, moved)
+	}
+	if _, err := os.Stat(filepath.Join(dir, digestSub, "ai-weekly")); !os.IsNotExist(err) {
+		t.Errorf("the renamed Digest's old folder survived (err=%v)", err)
+	}
+
+	gone := now.Add(2 * time.Second).Format(time.RFC3339)
+	if err := q.SoftDeleteDigestIssuesByDigest(ctx, store.SoftDeleteDigestIssuesByDigestParams{
+		DeletedAt: &gone, UpdatedAt: gone, DigestID: "digest-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.SoftDeleteDigest(ctx, store.SoftDeleteDigestParams{DeletedAt: &gone, UpdatedAt: gone, ID: "digest-1"}); err != nil {
+		t.Fatal(err)
+	}
+	e.sweep(ctx)
+	if _, err := os.Stat(filepath.Join(dir, moved)); !os.IsNotExist(err) {
+		t.Errorf("the note of a deleted Digest's issue survived (err=%v)", err)
+	}
+	if _, ok := e.issueFiles["issue-1"]; ok {
+		t.Error("a deleted issue is still in the export index")
+	}
+	if got := e.Snapshot().LastError; got != "" {
+		t.Errorf("export reported an error: %q", got)
 	}
 }
 
@@ -242,7 +391,8 @@ func TestPruneGroupDirKeepsSharedFolder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	removeIfMoved(dir, annsSub+"/2026-W33/a.md", annsSub+"/2026-W34/a.md")
+	e := &Exporter{dir: dir}
+	e.track(map[string]string{"a": annsSub + "/2026-W33/a.md"}, "a", annsSub+"/2026-W34/a.md")
 	if _, err := os.Stat(group); err != nil {
 		t.Errorf("folder with a remaining note was pruned: %v", err)
 	}
@@ -252,7 +402,7 @@ func TestPruneGroupDirKeepsSharedFolder(t *testing.T) {
 	if err := os.MkdirAll(stale, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	(&Exporter{dir: dir}).pruneEmptyGroups()
+	e.pruneEmptyGroups()
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Errorf("stale empty grouping dir survived the boot pass (err=%v)", err)
 	}
