@@ -110,14 +110,14 @@ export default function DigestIssueScreen() {
         style={s.ref}
         onPress={open}
         accessibilityRole="link"
-        accessibilityLabel={`Open source: ${ref.document_title ?? ''}`}
+        accessibilityLabel={`Open ${ref.history ? 'earlier source' : 'source'}: ${ref.document_title ?? ''}`}
       >
         {/* The stored Highlight text is markdown. A link inside it takes the press, so
             it goes where the rest of the bullet does: the source Document. */}
         <MarkdownBody onLinkAction={open} onDocumentPress={open}>{ref.text ?? ''}</MarkdownBody>
         {/* Offline there is no Feed title to show — the replica has no Feeds. */}
         <Text style={s.refFrom} numberOfLines={1}>
-          {[ref.feed_title, ref.document_title].filter(Boolean).join(' · ')} →
+          {[ref.history ? `Earlier · ${ref.date ?? ''}` : '', ref.feed_title, ref.document_title].filter(Boolean).join(' · ')} →
         </Text>
       </Pressable>
     )
@@ -211,6 +211,11 @@ export default function DigestIssueScreen() {
                   <View key={topic.rank} style={s.topic}>
                     <Text style={s.topicTitle}>{topic.rank}. {topic.title}</Text>
                     {topic.why ? <Text style={s.why}>{topic.why}</Text> : null}
+                    {topic.diff ? (
+                      <Text style={s.diff} testID={`digest-topic-diff-${topic.rank}`}>
+                        <Text style={s.diffVs}>vs {topic.previous}: </Text>{topic.diff}
+                      </Text>
+                    ) : null}
                     {topic.refs.map((ref, i) => renderRef(ref, `${ref.highlight_id}:${ref.bullet}:${i}`))}
                   </View>
                 ))}
@@ -280,6 +285,8 @@ function buildStyles(t: Theme) {
     },
     topicTitle: { color: t.colors.text, fontSize: 15, fontWeight: '700' },
     why: { color: t.colors.muted, fontSize: 13, marginTop: 2, marginBottom: t.spacing.xs },
+    diff: { color: t.colors.text, fontSize: 13, marginBottom: t.spacing.xs },
+    diffVs: { fontWeight: '700' },
     ref: { paddingTop: t.spacing.xs, paddingBottom: t.spacing.sm, borderTopWidth: 1, borderTopColor: t.colors.border + '55' },
     refFrom: { color: t.colors.accent, fontSize: 11, marginTop: 2 },
     refMissing: { color: t.colors.placeholder, fontSize: 12, fontStyle: 'italic', paddingVertical: t.spacing.xs },

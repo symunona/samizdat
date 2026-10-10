@@ -60,6 +60,9 @@ type Question struct {
 	Prompt  string `json:"prompt"`
 	TopN    int    `json:"top_n"`
 	Enabled bool   `json:"enabled"`
+	// History compares each topic the question finds with earlier Highlights of
+	// the same family, from before the window (history.go).
+	History bool `json:"history,omitempty"`
 }
 
 // Digest is the config as the API serves it: the row with its JSON columns

@@ -35,7 +35,8 @@ type QuestionDraft = Omit<DigestQuestion, 'top_n'> & { key: string; topN: string
 type Draft = Omit<DigestConfig, 'hour' | 'questions'> & { hour: string; questions: QuestionDraft[] }
 
 const toQuestionDraft = (q: DigestQuestion): QuestionDraft => ({
-  key: uuidv4(), id: q.id, title: q.title, prompt: q.prompt, enabled: q.enabled, topN: String(q.top_n),
+  key: uuidv4(), id: q.id, title: q.title, prompt: q.prompt, enabled: q.enabled, history: !!q.history,
+  topN: String(q.top_n),
 })
 
 // A new Digest starts empty: no name, no question, no newsletter picked.
@@ -65,7 +66,7 @@ function toConfig(draft: Draft): DigestConfig {
     // Blank = 0, which the server reads as "its default".
     const topN = Number(q.topN || 0)
     if (!Number.isInteger(topN) || topN < 0) throw new Error(`Question ${i + 1}: top N must be a whole number`)
-    return { id: q.id, title: q.title, prompt: q.prompt, enabled: q.enabled, top_n: topN }
+    return { id: q.id, title: q.title, prompt: q.prompt, enabled: q.enabled, history: !!q.history, top_n: topN }
   })
   return { ...draft, hour, questions }
 }
@@ -303,6 +304,16 @@ export default function DigestEditor({
                 maxLength={2}
               />
               <Text style={s.hint}>topics</Text>
+            </View>
+            {/* A second pass per topic: what changed since the release before it. */}
+            <View style={s.chips}>
+              <Switch
+                value={!!q.history}
+                onValueChange={history => setQuestion(q.key, { history })}
+                accessibilityLabel={`Question ${n} compare with earlier Highlights`}
+                {...switchColors}
+              />
+              <Text style={s.hint}>Compare each topic with earlier Highlights</Text>
             </View>
           </View>
         )

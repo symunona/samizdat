@@ -1090,7 +1090,11 @@ export async function updateSettings(serverUrl: string, token: string, patch: Pa
 // since its last DigestIssue (server: internal/digest). Lists and flags arrive as
 // real arrays and booleans, never JSON-in-a-string.
 
-export type DigestQuestion = { id: string; title: string; prompt: string; top_n: number; enabled: boolean }
+// `history`: each topic the question finds is compared with earlier Highlights of
+// the same family, from before the issue's window.
+export type DigestQuestion = {
+  id: string; title: string; prompt: string; top_n: number; enabled: boolean; history?: boolean
+}
 
 export type DigestPeriod = 'daily' | 'weekly'
 
@@ -1124,11 +1128,13 @@ export type Digest = DigestConfig & {
 export type DigestRef = {
   highlight_id: string
   bullet: number
+  history?: boolean   // earlier text the topic's `diff` rests on, not part of the window
   text?: string
   highlight_title?: string
   document_id?: string
   document_title?: string
   feed_title?: string
+  date?: string       // the day the Highlight was written
   missing?: boolean
 }
 
@@ -1138,6 +1144,9 @@ export type DigestTopic = {
   rank: number
   title: string
   why: string
+  // Set by a `history` question: the earlier release compared against, and what changed.
+  previous?: string
+  diff?: string
   refs: DigestRef[]
 }
 

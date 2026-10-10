@@ -103,14 +103,21 @@ export function setStubLLMFailing(on) { stubLLMFailing = on }
 // (a Feed outside the Digest's scope) ends up cited, and visible on the page.
 export const STUB_DIGEST_MATCH = 'Zephyr'
 export const STUB_DIGEST_TOPIC = { title: 'Zephyr 2 is out', why: 'More than one newsletter covered the release.' }
+// What it answers a `history` question's second pass with: the same reading of the
+// EARLIER ITEMS, so an earlier item from outside the scope would be cited too.
+export const STUB_DIGEST_DIFF = { previous: 'Zephyr 1', diff: 'Zephyr 1 had the original tokenizer; this one is twice as fast.' }
+
+const stubRefs = items => items.split('\n')
+  .filter(line => line.includes(STUB_DIGEST_MATCH))
+  .map(line => /^\[(h?[\d.]+)\]/.exec(line)?.[1])
+  .filter(Boolean)
 
 function stubDigestReply(prompt) {
+  const earlier = prompt.split('\nEARLIER ITEMS:\n')[1]
+  if (earlier !== undefined) return JSON.stringify({ diffs: [{ ...STUB_DIGEST_DIFF, refs: stubRefs(earlier) }] })
   const items = prompt.split('\nITEMS:\n')[1]
   if (items === undefined) return null
-  const refs = items.split('\n')
-    .filter(line => line.includes(STUB_DIGEST_MATCH))
-    .map(line => /^\[([\d.]+)\]/.exec(line)?.[1])
-    .filter(Boolean)
+  const refs = stubRefs(items)
   return JSON.stringify({ topics: refs.length ? [{ ...STUB_DIGEST_TOPIC, refs }] : [] })
 }
 

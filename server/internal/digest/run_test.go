@@ -108,6 +108,11 @@ func (f *fixture) titledFeed(id, url, title string) {
 // highlight adds one Highlight, on its own Document in feedID, created age ago.
 func (f *fixture) highlight(id, feedID, body string, age time.Duration) {
 	f.t.Helper()
+	f.titledHighlight(id, feedID, "Title "+id, body, age)
+}
+
+func (f *fixture) titledHighlight(id, feedID, title, body string, age time.Duration) {
+	f.t.Helper()
 	at := f.stamp(-age)
 	if _, err := f.q.UpsertDocument(f.ctx, store.UpsertDocumentParams{
 		ID: "doc-" + id, CanonicalUrl: "https://" + feedID + ".example/" + id, Title: "Issue " + id,
@@ -122,7 +127,7 @@ func (f *fixture) highlight(id, feedID, body string, age time.Duration) {
 	}
 	if _, err := f.q.InsertHighlight(f.ctx, store.InsertHighlightParams{
 		ID: id, DocumentID: "doc-" + id, PipelineRunID: "run-" + id, Kind: "summary",
-		Title: "Title " + id, Body: body, Metadata: "{}", CreatedAt: at, UpdatedAt: at,
+		Title: title, Body: body, Metadata: "{}", CreatedAt: at, UpdatedAt: at,
 	}); err != nil {
 		f.t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/symunona/samizdat/server/internal/pipeline"
@@ -81,12 +82,19 @@ type candidate struct {
 // same step's summary is a real list.
 //
 // The model sees numbers, never UUIDs: a small local model mangles a UUID.
-func buildCandidates(rows []store.ListDigestCandidatesRow) []candidate {
+//
+// prefix sets a second list apart from the window's in the same prompt ("h3");
+// dated leads each line with the day its Highlight was written, which is what
+// tells one release from the one before it.
+func buildCandidates(rows []store.ListDigestCandidatesRow, prefix string, dated bool) []candidate {
 	var out []candidate
 	for i, h := range rows {
-		n := strconv.Itoa(i + 1)
+		n := prefix + strconv.Itoa(i+1)
 		whole := candidate{key: n, ref: Ref{HighlightID: h.ID, Bullet: -1}, feed: h.FeedID}
 		head := store.FeedTitle(h.FeedTitle, h.FeedUrl) + " · " + h.Title + " — "
+		if dated {
+			head = day(h.CreatedAt) + " · " + head
+		}
 		// Link targets are noise to the model and most of a newsletter's bulk; the
 		// stored body, which is what a reader is shown, keeps them.
 		body := pipeline.CompactForLLM(h.Body)
@@ -144,6 +152,11 @@ func wholeText(body string, bullets []int) string {
 		return clip(Flatten(body), 2*fieldRunes)
 	}
 	return strings.Join(parts, " ")
+}
+
+// day is the date of a stored RFC3339 stamp.
+func day(stamp string) string {
+	return stamp[:min(len(stamp), len(time.DateOnly))]
 }
 
 // clip cuts s to at most n runes, at a word boundary, marking the cut.

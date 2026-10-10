@@ -100,7 +100,8 @@ async function runSmoke() {
     questions: [DIGEST_QUESTION],
     topics: [{
       question_id: DIGEST_QUESTION.id, question_title: DIGEST_QUESTION.title, rank: 1,
-      title: 'Smoke topic', why: 'Seeded.', refs: [{ highlight_id: 'no-such-highlight', bullet: 0 }],
+      title: 'Smoke topic', why: 'Seeded.', previous: 'Older topic', diff: 'Seeded diff.',
+      refs: [{ highlight_id: 'no-such-highlight', bullet: 0 }, { highlight_id: 'no-such-highlight', bullet: 0, history: true }],
     }],
     metadata: { questions: [{ question_id: DIGEST_QUESTION.id, truncated: true, candidates: 9, candidates_sent: 4 }] },
   })

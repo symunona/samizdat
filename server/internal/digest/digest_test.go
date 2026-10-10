@@ -158,7 +158,7 @@ func TestBuildCandidatesKeepsFieldListsWhole(t *testing.T) {
 		{ID: "bold", FeedTitle: "Nate", Title: "Qwen", Body: "- **Who**: Alibaba\n- **What**: " + long + "\n- **Params**: 35B MoE"},
 		{ID: "sum", FeedTitle: "Thorsten", Title: "Week", Body: "- **Zed** ships an agent panel\n- **Why** it matters: cheaper tokens\n- hiring news"},
 	}
-	cands := buildCandidates(rows)
+	cands := buildCandidates(rows, "", false)
 	keys := make([]string, len(cands))
 	for i, c := range cands {
 		keys[i] = c.key

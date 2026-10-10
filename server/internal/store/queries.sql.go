@@ -664,7 +664,7 @@ func (q *Queries) GetDigestIssue(ctx context.Context, id string) (DigestIssue, e
 }
 
 const getDigestRef = `-- name: GetDigestRef :one
-SELECT h.id, h.title, h.body,
+SELECT h.id, h.title, h.body, h.created_at,
        d.id AS document_id, d.title AS document_title,
        COALESCE(f.title, '') AS feed_title, COALESCE(f.url, '') AS feed_url
 FROM highlights h
@@ -677,6 +677,7 @@ type GetDigestRefRow struct {
 	ID            string `json:"id"`
 	Title         string `json:"title"`
 	Body          string `json:"body"`
+	CreatedAt     string `json:"created_at"`
 	DocumentID    string `json:"document_id"`
 	DocumentTitle string `json:"document_title"`
 	FeedTitle     string `json:"feed_title"`
@@ -692,6 +693,7 @@ func (q *Queries) GetDigestRef(ctx context.Context, id string) (GetDigestRefRow,
 		&i.ID,
 		&i.Title,
 		&i.Body,
+		&i.CreatedAt,
 		&i.DocumentID,
 		&i.DocumentTitle,
 		&i.FeedTitle,

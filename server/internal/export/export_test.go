@@ -162,8 +162,9 @@ func TestSweepIsQuietWhenNothingChanged(t *testing.T) {
 }
 
 // seedDigestIssue gives doc-1 (which the caller made) a Highlight of two bullets
-// and a done issue of Digest "AI Weekly" whose one topic cites the second. Every
-// row is stamped at.
+// and a done issue of Digest "AI Weekly" whose one topic cites the second, once
+// as the news and once as the earlier text its diff rests on. Every row is
+// stamped at.
 func seedDigestIssue(ctx context.Context, t *testing.T, q *store.Queries, at string) {
 	t.Helper()
 	must := func(err error) {
@@ -197,7 +198,8 @@ func seedDigestIssue(ctx context.Context, t *testing.T, q *store.Queries, at str
 	must(q.FinishDigestIssue(ctx, store.FinishDigestIssueParams{
 		Status: digest.StatusDone, UpdatedAt: at, ID: "issue-1",
 		Topics: `[{"question_id":"tools","question_title":"Cool tools","rank":1,"title":"A new tool",` +
-			`"why":"Two newsletters\ncovered it.","refs":[{"highlight_id":"hl-1","bullet":1}]}]`,
+			`"why":"Two newsletters\ncovered it.","previous":"The old tool","diff":"Now twice\nas fast.",` +
+			`"refs":[{"highlight_id":"hl-1","bullet":1},{"highlight_id":"hl-1","bullet":1,"history":true}]}]`,
 		Metadata: `{"questions":[{"question_id":"tools","truncated":true,"candidates":9,"candidates_sent":4}]}`,
 	}))
 }
@@ -249,7 +251,8 @@ func TestDigestIssueNote(t *testing.T) {
 		"id: issue-1\n" + issueMark + "\n",
 		"\n## Cool tools\n",
 		"> [!warning] Only the newest 4 of 9 items fit",
-		"\n### 1. A new tool\n\nTwo newsletters covered it.\n",
+		"\n### 1. A new tool\n\nTwo newsletters covered it.\n\n**vs The old tool:** Now twice as fast.\n",
+		"\n- *Earlier, " + at[:10] + ":* a [new tool](https://tool.example) shipped — [[doc-one|Doc One]]\n",
 		"\n- a [new tool](https://tool.example) shipped — [[doc-one|Doc One]]\n",
 	} {
 		if !strings.Contains(string(note), want) {

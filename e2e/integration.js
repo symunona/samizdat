@@ -17,7 +17,7 @@ import {
   BASE_URL, ROOT, sleep, resetTestEnv, startServer, pairDevice, launchBrowser,
   newConnectedPage, seedTextDoc, seedTextDocs, seedVideoDoc, seedHighlight, seedLLMHealth,
   seedPipeline, seedJob, seedActiveJob, seedFeed,
-  startStubLLM, setStubLLMFailing, STUB_LLM_MODELS, STUB_LLM_PORT, STUB_DIGEST_MATCH, STUB_DIGEST_TOPIC,
+  startStubLLM, setStubLLMFailing, STUB_LLM_MODELS, STUB_LLM_PORT, STUB_DIGEST_MATCH, STUB_DIGEST_TOPIC, STUB_DIGEST_DIFF,
   makeCleanup,
 } from './harness.js'
 
@@ -3245,6 +3245,9 @@ async function runReadingMode(token, deviceId) {
 // Picking a newsletter is what holds it: once the Digest is saved, a pipeline run
 // finishing for Alpha's Document archives Alpha's Highlight, which then reads from
 // the issue and from Archived but never from the feed.
+// The question compares with earlier Highlights: Alpha and Gamma each covered the
+// release before this one, a month ago. Alpha's is the earlier text the topic's diff
+// must rest on; Gamma's must stay off the page like the rest of Gamma.
 const DG_NAME = 'Launch Watch'
 const DG_PROMPT = `Which releases did more than one newsletter cover? Mention ${STUB_DIGEST_MATCH}.`
 const DG_FEEDS = {
@@ -3264,6 +3267,14 @@ const DG_ALPHA_TEXT = `${STUB_DIGEST_MATCH} 2 ships today with a tokenizer twice
 const DG_BETA_BULLET_TAIL = 'cut their second major version.'
 const DG_BETA_OTHER = 'Unrelated pricing change at a cloud vendor.'
 const DG_GAMMA_TEXT = `Gamma also heard about ${STUB_DIGEST_MATCH} from a reader.`
+const DG_OLD_DOCS = {
+  alpha: { id: 'dddddddd-0000-4000-8000-0000000000b1', title: 'Alpha Issue 8' },
+  gamma: { id: 'dddddddd-0000-4000-8000-0000000000b3', title: 'Gamma Issue 1' },
+}
+const DG_ALPHA_OLD_TEXT = `${STUB_DIGEST_MATCH} 1 shipped with the original tokenizer.`
+const DG_GAMMA_OLD_TEXT = `Gamma's first note on ${STUB_DIGEST_MATCH} 1.`
+const DG_HISTORY_SWITCH = 'input[aria-label="Question 1 compare with earlier Highlights"]'
+const DG_EARLIER_BULLETS = '[aria-label^="Open earlier source:"]'
 const DG_SHOTS = join(ROOT, 'tmp', 'screenshots')
 
 const dgField = label => `[aria-label="${label}"]`
@@ -3305,6 +3316,23 @@ function seedDigestFixtures() {
     body: `- A quiet week for conference news.\n- [The ${STUB_DIGEST_MATCH} team](https://beta.example.com/z) cut their second major version.\n- ${DG_BETA_OTHER}`,
   })
   seedHighlight({ id: DG_HIGHLIGHTS.gamma, documentId: DG_DOCS.gamma.id, title: 'Gamma aside', body: DG_GAMMA_TEXT })
+
+  // Before the window of a first daily run: history, never a candidate.
+  const monthAgo = new Date(Date.now() - 30 * 86_400_000).toISOString()
+  seedTextDocs(Object.entries(DG_OLD_DOCS).map(([key, doc]) => ({
+    ...doc,
+    canonicalUrl: `https://${key}.example.com/${doc.id}`,
+    markdown: `# ${doc.title}\n\nBody of ${doc.title}.`,
+    sourceFeedId: DG_FEEDS[key].id,
+  })))
+  seedHighlight({
+    id: 'ffffffff-0000-4000-8000-0000000000b1', documentId: DG_OLD_DOCS.alpha.id,
+    title: `${STUB_DIGEST_MATCH} 1 launch`, body: DG_ALPHA_OLD_TEXT, createdAt: monthAgo,
+  })
+  seedHighlight({
+    id: 'ffffffff-0000-4000-8000-0000000000b3', documentId: DG_OLD_DOCS.gamma.id,
+    title: `${STUB_DIGEST_MATCH} 1 rumours`, body: DG_GAMMA_OLD_TEXT, createdAt: monthAgo,
+  })
 }
 
 async function apiDigest(token) {
@@ -3402,6 +3430,8 @@ async function runDigests(token, deviceId) {
     if (blank.some(v => v !== '')) return `"+ Add question" gave a prefilled question: ${JSON.stringify(blank)}`
     await page.type(dgField('Question 1 title'), DG_QUESTION_TITLE)
     await page.type(dgField('Question 1 prompt'), DG_PROMPT)
+    if (await page.$eval(DG_HISTORY_SWITCH, el => el.checked)) return 'a new question already compares with earlier Highlights'
+    await page.$eval(DG_HISTORY_SWITCH, el => el.click())
     const preselected = await page.$$eval('[aria-label^="Digest color "][aria-selected="true"]', els => els.length)
     if (preselected !== 0) return 'a new digest already has a color selected'
     await page.click(dgSwatch(DG_COLOR.name))
@@ -3447,6 +3477,7 @@ async function runDigests(token, deviceId) {
     await openDigestEditor(page)
     const prompt = await page.$eval(dgField('Question 1 prompt'), el => el.value)
     if (prompt !== DG_PROMPT) return `the prompt reloaded as "${prompt}"`
+    if (!await page.$eval(DG_HISTORY_SWITCH, el => el.checked)) return 'the "compare with earlier Highlights" switch reloaded as OFF'
     if (await page.$(dgField('Question 2 prompt'))) return 'a question nobody added is in the editor'
     const checked = {}
     for (const key of ['alpha', 'beta', 'gamma']) checked[key] = await feedChecked(page, DG_FEEDS[key].title)
@@ -3504,8 +3535,21 @@ async function runDigests(token, deviceId) {
 
   await check('digests: nothing from the newsletter outside the scope is on the issue', async () => {
     const txt = await page.evaluate(() => document.body.innerText)
-    for (const leak of [DG_FEEDS.gamma.title, DG_DOCS.gamma.title, DG_GAMMA_TEXT]) {
+    for (const leak of [DG_FEEDS.gamma.title, DG_DOCS.gamma.title, DG_GAMMA_TEXT, DG_OLD_DOCS.gamma.title, DG_GAMMA_OLD_TEXT]) {
       if (txt.includes(leak)) return `"${leak}" is on the page — Gamma is not in this digest`
+    }
+    return null
+  })
+
+  await check('digests: the topic says what changed since the earlier release, over the dated earlier bullet', async () => {
+    const diff = await page.$eval('[data-testid="digest-topic-diff-1"]', el => el.innerText).catch(() => null)
+    if (diff === null) return 'the topic shows no diff line'
+    if (!diff.includes(`vs ${STUB_DIGEST_DIFF.previous}:`) || !diff.includes(STUB_DIGEST_DIFF.diff)) return `the diff line reads "${diff}"`
+    const earlier = await page.$$eval(DG_EARLIER_BULLETS, els => els.map(el => el.innerText))
+    if (earlier.length !== 1) return `${earlier.length} earlier bullets under the topic, want 1: ${JSON.stringify(earlier)}`
+    if (!earlier[0].includes(DG_ALPHA_OLD_TEXT)) return `the earlier bullet is not Alpha's month-old Highlight: "${earlier[0]}"`
+    if (!/Earlier · \d{4}-\d{2}-\d{2}/.test(earlier[0]) || !earlier[0].includes(DG_OLD_DOCS.alpha.title)) {
+      return `the earlier bullet does not carry its date and Document: "${earlier[0]}"`
     }
     return null
   })
@@ -3541,6 +3585,10 @@ async function runDigests(token, deviceId) {
     if (bullets.length !== 2) return `${bullets.length} bullets offline, want 2`
     if (!bullets[0].includes(DG_ALPHA_TEXT)) return `Alpha's bullet did not resolve from the replica: "${bullets[0]}"`
     if (!bullets[1].includes(DG_DOCS.beta.title)) return `Beta's bullet does not name its Document offline: "${bullets[1]}"`
+    const earlier = await page.$$eval(DG_EARLIER_BULLETS, els => els.map(el => el.innerText))
+    if (earlier.length !== 1 || !earlier[0].includes(DG_ALPHA_OLD_TEXT) || !/Earlier · \d{4}-\d{2}-\d{2}/.test(earlier[0])) {
+      return `the earlier bullet did not resolve from the replica with its date: ${JSON.stringify(earlier)}`
+    }
     const txt = await page.evaluate(() => document.body.innerText)
     return txt.includes(DG_NAME) ? null : 'the digest name is not shown offline'
   })

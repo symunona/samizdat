@@ -154,6 +154,37 @@ func TestDigestCRUD(t *testing.T) {
 	}
 }
 
+// An app older than `history` rewrites the whole question list without the
+// field. That must not switch it off; only a request that names it may.
+func TestDigestQuestionHistorySurvivesAnOlderClient(t *testing.T) {
+	h, _ := digestsFixture(t)
+	var d digest.Digest
+	body := `{"name":"AI","provider":"box.example:11434","questions":[
+		{"title":"Frontier","prompt":"which?","enabled":true,"history":true},
+		{"title":"Tools","prompt":"which?","enabled":true}]}`
+	if code := call(t, h.create, http.MethodPost, "", body, &d); code != http.StatusCreated {
+		t.Fatalf("create = %d", code)
+	}
+	if !d.Questions[0].History || d.Questions[1].History {
+		t.Fatalf("created questions = %+v", d.Questions)
+	}
+
+	old := `{"questions":[{"id":"` + d.Questions[0].ID + `","title":"Renamed","prompt":"which?","enabled":true,"top_n":5},
+		{"id":"` + d.Questions[1].ID + `","title":"Tools","prompt":"which?","enabled":true,"top_n":5}]}`
+	var patched digest.Digest
+	call(t, h.update, http.MethodPatch, d.ID, old, &patched)
+	if patched.Questions[0].Title != "Renamed" || !patched.Questions[0].History || patched.Questions[1].History {
+		t.Fatalf("after an older client's save: %+v", patched.Questions)
+	}
+
+	off := `{"questions":[{"id":"` + d.Questions[0].ID + `","title":"Renamed","prompt":"which?","enabled":true,"history":false}]}`
+	var switched digest.Digest // a fresh one: `history` is omitted when false
+	call(t, h.update, http.MethodPatch, d.ID, off, &switched)
+	if len(switched.Questions) != 1 || switched.Questions[0].History {
+		t.Fatalf("after switching it off: %+v", switched.Questions)
+	}
+}
+
 // A Digest saved without a colour gets the first one no other Digest uses; a
 // named colour is kept, and anything off the palette is refused.
 func TestDigestColor(t *testing.T) {

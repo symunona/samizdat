@@ -153,9 +153,16 @@ func (r Runner) answer(ctx context.Context, d Digest, issueID, start, end string
 			return nil, meta, err
 		}
 	}
-	cands := buildCandidates(rows)
+	cands := buildCandidates(rows, "", false)
 	if len(cands) == 0 {
 		return nil, meta, nil
+	}
+
+	var history []store.ListDigestCandidatesRow
+	if slices.ContainsFunc(questions, func(q Question) bool { return q.History }) {
+		if history, err = r.history(ctx, d, start); err != nil {
+			return nil, meta, err
+		}
 	}
 
 	covered := r.covered(ctx, d.ID, issueID)
@@ -194,11 +201,23 @@ func (r Runner) answer(ctx context.Context, d Digest, issueID, start, end string
 			return nil, meta, err
 		}
 
-		prov := pipeline.NewProvenance(Kind, route, promptContract+q.Prompt, usage)
+		template := promptContract + q.Prompt
+		if q.History {
+			template += diffContract
+		}
+		prov := pipeline.NewProvenance(Kind, route, template, usage)
 		prov.Truncated, prov.OutputTruncated = truncated, usage.Truncated
+		diffs, droppedDiffs := 0, 0
+		if q.History {
+			call := diffCall{d: d, route: route, ctxTokens: ctxTokens, replyTokens: replyTokens, sent: sent, history: history}
+			if diffs, droppedDiffs, err = r.diffTopics(ctx, call, got, &prov); err != nil {
+				return nil, meta, err
+			}
+		}
 		meta.Questions = append(meta.Questions, QuestionMeta{
 			QuestionID: q.ID, Provenance: prov,
 			Candidates: len(cands), CandidatesSent: len(sent), DroppedTopics: dropped, TrimmedRefs: trimmed,
+			Diffs: diffs, DroppedDiffs: droppedDiffs,
 		})
 		topics = append(topics, got...)
 	}

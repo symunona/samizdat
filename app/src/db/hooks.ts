@@ -206,6 +206,7 @@ export function selectDigestIssue(
           highlight_title: h.title,
           document_id: h.document_id,
           document_title: s.documents[h.document_id]?.title ?? '',
+          date: h.created_at.slice(0, 10),
         }
       }),
     })),

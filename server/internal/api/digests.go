@@ -31,10 +31,33 @@ type digestRequest struct {
 	Weekdays      *[]int             `json:"weekdays"`
 	Hour          *int               `json:"hour"`
 	SourceFeedIDs *[]string          `json:"source_feed_ids"`
-	Questions     *[]digest.Question `json:"questions"`
+	Questions     *[]questionRequest `json:"questions"`
 	Provider      *string            `json:"provider"`
 	Model         *string            `json:"model"`
 	Color         *string            `json:"color"`
+}
+
+// questionRequest is a DigestQuestion as a client sends it. History is optional
+// so that an app older than the field, which rewrites the whole list without
+// it, does not switch it off on a question it only renamed.
+type questionRequest struct {
+	digest.Question
+	History *bool `json:"history"`
+}
+
+// questions is the list a request asks for, each question keeping the stored
+// History where the request names none.
+func (req digestRequest) questions(stored []digest.Question) []digest.Question {
+	out := make([]digest.Question, len(*req.Questions))
+	for i, q := range *req.Questions {
+		out[i] = q.Question
+		if q.History != nil {
+			out[i].History = *q.History
+		} else if at := slices.IndexFunc(stored, func(s digest.Question) bool { return s.ID == q.ID }); at >= 0 {
+			out[i].History = stored[at].History
+		}
+	}
+	return out
 }
 
 func patch[T any](dst *T, src *T) {
@@ -50,7 +73,9 @@ func (req digestRequest) apply(d *digest.Digest) {
 	patch(&d.Weekdays, req.Weekdays)
 	patch(&d.Hour, req.Hour)
 	patch(&d.SourceFeedIDs, req.SourceFeedIDs)
-	patch(&d.Questions, req.Questions)
+	if req.Questions != nil {
+		d.Questions = req.questions(d.Questions)
+	}
 	patch(&d.Provider, req.Provider)
 	patch(&d.Model, req.Model)
 	patch(&d.Color, req.Color)

@@ -826,11 +826,18 @@ func renderIssue(digestName string, is digest.Issue, docNames map[string]string)
 		if t.Why != "" {
 			fmt.Fprintf(&b, "%s\n\n", strings.Join(strings.Fields(t.Why), " "))
 		}
+		if t.Diff != "" {
+			fmt.Fprintf(&b, "**vs %s:** %s\n\n", firstLine(t.Previous), strings.Join(strings.Fields(t.Diff), " "))
+		}
 		for _, ref := range t.Refs {
 			if ref.Missing {
 				continue
 			}
-			b.WriteString("- " + digest.Flatten(ref.Text))
+			b.WriteString("- ")
+			if ref.History {
+				fmt.Fprintf(&b, "*Earlier, %s:* ", ref.Date)
+			}
+			b.WriteString(digest.Flatten(ref.Text))
 			if link := documentLink(ref, docNames); link != "" {
 				b.WriteString(" — " + link)
 			}

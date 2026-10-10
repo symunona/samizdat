@@ -856,7 +856,7 @@ ORDER BY h.created_at DESC, h.id ASC;
 -- What a DigestTopic ref points at. Tombstoned rows still resolve: an issue is
 -- immutable, and a later regenerate must not blank the bullets it was built on.
 -- name: GetDigestRef :one
-SELECT h.id, h.title, h.body,
+SELECT h.id, h.title, h.body, h.created_at,
        d.id AS document_id, d.title AS document_title,
        COALESCE(f.title, '') AS feed_title, COALESCE(f.url, '') AS feed_url
 FROM highlights h

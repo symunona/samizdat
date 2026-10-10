@@ -18,24 +18,35 @@ import (
 type Ref struct {
 	HighlightID string `json:"highlight_id"`
 	Bullet      int    `json:"bullet"`
+	// History marks earlier text a topic's Diff rests on: written before the
+	// issue's window, not part of what the question was asked over.
+	History bool `json:"history,omitempty"`
 
 	Text           string `json:"text,omitempty"`
 	HighlightTitle string `json:"highlight_title,omitempty"`
 	DocumentID     string `json:"document_id,omitempty"`
 	DocumentTitle  string `json:"document_title,omitempty"`
 	FeedTitle      string `json:"feed_title,omitempty"`
+	// Date is the day the Highlight was written.
+	Date string `json:"date,omitempty"`
 	// Missing: the Highlight row is gone, so there is no text to show.
 	Missing bool `json:"missing,omitempty"`
 }
 
 // Topic is one grouped answer item. The model wrote Title and Why; everything a
 // reader sees under it is stored Highlight text, reached through Refs.
+//
+// Previous and Diff are set by a History question: the earlier release the model
+// compared against and what it says changed. They are model-written too, and are
+// kept only alongside at least one History ref — the stored text they rest on.
 type Topic struct {
 	QuestionID    string `json:"question_id"`
 	QuestionTitle string `json:"question_title"`
 	Rank          int    `json:"rank"`
 	Title         string `json:"title"`
 	Why           string `json:"why"`
+	Previous      string `json:"previous,omitempty"`
+	Diff          string `json:"diff,omitempty"`
 	Refs          []Ref  `json:"refs"`
 }
 
@@ -51,6 +62,11 @@ type QuestionMeta struct {
 	DroppedTopics int `json:"dropped_topics,omitempty"`
 	// TrimmedRefs counts refs cut from topics citing more than maxTopicRefs.
 	TrimmedRefs int `json:"trimmed_refs,omitempty"`
+	// Diffs counts topics a History question gave a Diff, DroppedDiffs the ones
+	// whose Diff was discarded: no earlier ref that resolved, no named previous
+	// release, or no room for one earlier item.
+	Diffs        int `json:"diffs,omitempty"`
+	DroppedDiffs int `json:"dropped_diffs,omitempty"`
 }
 
 // IssueMeta is the DigestIssue's metadata JSON.
@@ -121,6 +137,7 @@ func (is *Issue) Resolve(ctx context.Context, q *store.Queries) error {
 			ref.DocumentID = row.DocumentID
 			ref.DocumentTitle = row.DocumentTitle
 			ref.FeedTitle = store.FeedTitle(row.FeedTitle, row.FeedUrl)
+			ref.Date = day(row.CreatedAt)
 		}
 	}
 	return nil

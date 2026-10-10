@@ -2,7 +2,7 @@
 created: 2026-10-10
 topic: Digests — diff a new release against earlier Highlights
 excerpt: A DigestQuestion can be marked `history`. Each topic it finds is then compared with older Highlights of the same model family, from before the window, and gains a "vs <previous release>" line plus the earlier bullets it rests on. AI Weekly gets a fourth question, "Frontier releases", using it.
-status: in-progress
+status: shipped
 ---
 
 # Digest history diff
@@ -114,7 +114,35 @@ the switch and the `vs` line (an old app ignores the new fields).
 Add question 4 "Frontier releases" to the prod AI Weekly (PATCH the full
 questions array, the other three verbatim).
 
+## What the real run changed (2026-10-10)
+
+A copy of AI Weekly, one `history` question, over the real Highlights:
+
+- Haiku compared across tiers (Sonnet 5.5 "vs Claude Opus 5") → `sameLine`: the
+  previous name's family words must contain, or be contained in, the topic's.
+- Haiku named "Gemini 4" while citing a line about Gemini 3.8 Flash → `names`: a
+  kept earlier ref's own line must mention the previous release, version included.
+- "Previous major release" was read as either GPT-6 Sol or GPT-5.6 Sol on
+  different runs → the prompt now asks for the most recent earlier release of the
+  line, by date.
+- The diff described only the new side → the prompt asks for a before and an
+  after per sentence, like with like.
+
+Sonnet 4.6, final code, window from 2026-09-23: Opus 5.5 vs Opus 5, Grok 4.7 vs
+Grok 4.6 correct; Haiku 5.5 and Sonnet 5.5 left without a diff (no earlier
+release of their tier on record). Window from 2026-09-30: GPT-6.1 Sol vs GPT-6
+Sol, every claim found in the stored Highlights.
+
+Haiku 4.5 is the weak link, and mostly in pass 1: on some runs it did not list
+GPT-6.1 Sol or Opus 5.5 at all.
+
 ## Open
+
+- Two releases of one line inside the same window: the earlier one is a
+  candidate, not history, so the later one is diffed against whatever came before
+  both.
+- A tier word alone ("Pro", "Flash") matches unrelated titles and costs a call
+  that comes back empty.
 
 - Title-only matching misses history that lives in a summary bullet or under
   another release's title ("~ Opus 4.8" comparisons). Body matching pulls in every
