@@ -22,6 +22,7 @@ type fakeBox struct {
 	mu     sync.Mutex
 	prompt []string // the user message of each call, in order
 	model  []string // the model each call asked for
+	format []string // the response_format each call carried, "" for none
 	reply  func(call int, model, prompt string) (string, int)
 }
 
@@ -30,7 +31,8 @@ func newFakeBox(t *testing.T, reply func(call int, model, prompt string) (string
 	b := &fakeBox{reply: reply}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Model    string `json:"model"`
+			Model    string          `json:"model"`
+			Format   json.RawMessage `json:"response_format"`
 			Messages []struct {
 				Content string `json:"content"`
 			} `json:"messages"`
@@ -45,6 +47,7 @@ func newFakeBox(t *testing.T, reply func(call int, model, prompt string) (string
 		call := len(b.prompt)
 		b.prompt = append(b.prompt, msg)
 		b.model = append(b.model, req.Model)
+		b.format = append(b.format, string(req.Format))
 		b.mu.Unlock()
 
 		text, status := b.reply(call, req.Model, msg)
@@ -74,6 +77,12 @@ func (b *fakeBox) prompts() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]string(nil), b.prompt...)
+}
+
+func (b *fakeBox) formats() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.format...)
 }
 
 // bandRouter builds a Router over one fake box with the given size bands.

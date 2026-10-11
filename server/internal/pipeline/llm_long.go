@@ -110,6 +110,10 @@ type longRequest struct {
 	Content string
 	// Vars carries template placeholders beyond title/content (recently_covered).
 	Vars map[string]string
+	// ReplySchema is the JSON Schema of the step's own reply, for a step that
+	// parses one. It rides every call made with the step's OWN prompt and never
+	// the map pass, whose reply is prose (see llm.Params.ReplySchema).
+	ReplySchema json.RawMessage
 }
 
 // longResult is the reply plus everything the step needs to finish. Step is not
@@ -320,7 +324,7 @@ func singleCall(ctx context.Context, q *store.Queries, run store.PipelineRun,
 	// nothing of its own it resolves to the same endpoint, and callWithFallback
 	// skips it rather than retrying the same box twice.
 	reply, err := callWithFallback(ctx, q, run, req.Kind, c, role, bigFallback(lim, req.Cfg, c.Prompt), lim.MaxTries,
-		renderPrompt(c.Prompt, req.vars(content)), router, &acc, !toleratesTruncatedReply(req.Kind))
+		renderPrompt(c.Prompt, req.vars(content)), req.ReplySchema, router, &acc, !toleratesTruncatedReply(req.Kind))
 	if err != nil {
 		return longResult{}, err
 	}
@@ -411,7 +415,7 @@ func partitionTick(ctx context.Context, q *store.Queries, run store.PipelineRun,
 	// parsed by the handler, so a completion cut at max_tokens is not a degraded
 	// answer worth keeping — see toleratesTruncatedReply.
 	reply, err := callWithFallback(ctx, q, run, req.Kind, c, "map", bigFallback(lim, req.Cfg, req.Cfg.Prompt),
-		lim.MaxTries, renderPrompt(c.Prompt, vars), router, acc, !toleratesTruncatedReply(req.Kind))
+		lim.MaxTries, renderPrompt(c.Prompt, vars), req.ReplySchema, router, acc, !toleratesTruncatedReply(req.Kind))
 	if err != nil {
 		// The tick fails, the job retries, and the saved state resumes AT THIS
 		// CHUNK — same recovery contract as mapTick.
@@ -460,8 +464,9 @@ func mapTick(ctx context.Context, q *store.Queries, run store.PipelineRun,
 	// never the step's own JSON — a truncated chunk just loses some facts, folded
 	// into the reduce pass same as a chunk that was navigation/ads and came back
 	// empty. The reply that actually gets parsed is the reduce/big call below.
+	// For the same reason it carries no reply schema.
 	reply, err := callWithFallback(ctx, q, run, req.Kind, c, "map", bigFallback(lim, req.Cfg, c.Prompt),
-		lim.MaxTries, renderPrompt(c.Prompt, vars), router, acc, false)
+		lim.MaxTries, renderPrompt(c.Prompt, vars), nil, router, acc, false)
 	if err != nil {
 		// The tick fails, the job retries, and the saved state resumes AT THIS CHUNK.
 		// Nothing already summarized is re-paid for, and no half-document summary is
@@ -511,7 +516,7 @@ func reduceTick(ctx context.Context, q *store.Queries, run store.PipelineRun,
 	// This IS the call whose reply becomes the step's output — strict rules apply
 	// exactly as they do in singleCall.
 	reply, err := callWithFallback(ctx, q, run, req.Kind, c, role, bigFallback(lim, req.Cfg, c.Prompt),
-		lim.MaxTries, renderPrompt(c.Prompt, req.vars(joined)), router, acc, !toleratesTruncatedReply(req.Kind))
+		lim.MaxTries, renderPrompt(c.Prompt, req.vars(joined)), req.ReplySchema, router, acc, !toleratesTruncatedReply(req.Kind))
 	if err != nil {
 		return longResult{}, err
 	}
@@ -605,9 +610,12 @@ func bigCtxTokens(lim config.SummarizeLimits) int {
 // (see job 461fce04: 3 tries, 3 identical truncations, 45s, before the real cause
 // surfaced). Escalating to a genuinely different endpoint (fb, when it isn't the
 // same one) still happens — a bigger cap there might actually not truncate.
+//
+// replySchema belongs to userMsg — the shape that prompt asks for — so it rides
+// primary and fb alike; nil for a prose reply.
 func callWithFallback(ctx context.Context, q *store.Queries, run store.PipelineRun,
 	kind string, primary llmStepConfig, primaryRole string, fb *llmStepConfig, tries int,
-	userMsg string, router *llm.Router, acc *usageAcc, strict bool,
+	userMsg string, replySchema json.RawMessage, router *llm.Router, acc *usageAcc, strict bool,
 ) (string, error) {
 	if tries < 1 {
 		tries = 1
@@ -623,7 +631,7 @@ func callWithFallback(ctx context.Context, q *store.Queries, run store.PipelineR
 				s.Try, s.Tries, s.Fallback = i, tries, escalated
 				s.Provider, s.Model = "", ""
 			})
-			reply, err := llmCall(ctx, q, run, kind, c, userMsg, router, acc)
+			reply, err := llmCall(ctx, q, run, kind, c, userMsg, replySchema, router, acc)
 			if err == nil {
 				if strict && acc.last.Truncated {
 					return "", truncatedReplyErr(kind, role, acc.last)

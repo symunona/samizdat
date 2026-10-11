@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -32,6 +33,10 @@ type Params struct {
 	Model     string
 	MaxTokens int      // 0 = the adapter's default
 	Temp      *float64 // nil = the provider's default (never guess a number)
+	// ReplySchema is the JSON Schema the reply must satisfy, for a caller that
+	// parses it. Only a local openai_compat box is sent it (see openai_compat.go);
+	// every other endpoint ignores it, so the caller's tolerant parser stays.
+	ReplySchema json.RawMessage
 }
 
 // Usage holds token counts returned by the provider, plus the model and params

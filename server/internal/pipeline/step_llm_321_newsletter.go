@@ -28,6 +28,24 @@ type nl321Highlight struct {
 	Body  string `json:"body"`
 }
 
+// nl321ReplySchema is the reply as a local box is held to it
+// (llm.Params.ReplySchema): the "highlights" wrapper around nl321Highlight.
+var nl321ReplySchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["highlights"],
+  "properties": {
+    "highlights": {"type": "array", "items": {
+      "type": "object",
+      "required": ["kind", "title", "body"],
+      "properties": {
+        "kind": {"type": "string"},
+        "title": {"type": "string"},
+        "body": {"type": "string"}
+      }
+    }}
+  }
+}`)
+
 const nl321DefaultPrompt = `You parse James Clear's 3-2-1 newsletter. Return ONLY valid JSON, no prose, no markdown fences.
 
 Schema:
@@ -59,10 +77,11 @@ func handleLLM321Newsletter(ctx context.Context, q *store.Queries, run store.Pip
 	}
 
 	out, err := llmStepCallLong(ctx, q, run, longRequest{
-		Kind:    kindLLM321Newsletter,
-		Cfg:     c,
-		Title:   doc.Title,
-		Content: doc.Markdown,
+		Kind:        kindLLM321Newsletter,
+		Cfg:         c,
+		Title:       doc.Title,
+		Content:     doc.Markdown,
+		ReplySchema: nl321ReplySchema,
 	}, router)
 	if err != nil {
 		return StepResult{}, err

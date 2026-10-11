@@ -28,6 +28,23 @@ type topicHighlight struct {
 	Body  string `json:"body"`
 }
 
+// topicsReplySchema is the reply as a local box is held to it
+// (llm.Params.ReplySchema): the "highlights" wrapper around topicHighlight.
+var topicsReplySchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["highlights"],
+  "properties": {
+    "highlights": {"type": "array", "items": {
+      "type": "object",
+      "required": ["title", "body"],
+      "properties": {
+        "title": {"type": "string"},
+        "body": {"type": "string"}
+      }
+    }}
+  }
+}`)
+
 // topicsDefaultPrompt splits ANY newsletter into its distinct sections/topics. Unlike
 // llm_summarize / llm_ai_newsletter, it does NOT summarize — each topic body is the
 // section's original text, verbatim. Source language is preserved.
@@ -64,10 +81,11 @@ func handleLLMTopics(ctx context.Context, q *store.Queries, run store.PipelineRu
 	// Unwrap the legacy ``` fence a plaintext email used to get so the model sees
 	// prose, not one code literal.
 	out, err := llmStepCallLong(ctx, q, run, longRequest{
-		Kind:    kindLLMTopics,
-		Cfg:     c,
-		Title:   doc.Title,
-		Content: StripCodeFence(doc.Markdown),
+		Kind:        kindLLMTopics,
+		Cfg:         c,
+		Title:       doc.Title,
+		Content:     StripCodeFence(doc.Markdown),
+		ReplySchema: topicsReplySchema,
 	}, router)
 	if err != nil {
 		return StepResult{}, err

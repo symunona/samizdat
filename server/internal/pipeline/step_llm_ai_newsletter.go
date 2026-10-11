@@ -102,6 +102,26 @@ type aiNewsletterResponse struct {
 	Highlights []aiNewsletterHighlight `json:"highlights"`
 }
 
+// aiNewsletterReplySchema is aiNewsletterResponse as a local box is held to it
+// (llm.Params.ReplySchema). body is pinned to the array the prompt documents:
+// unconstrained, gemma4 returned it as one ";"-joined string.
+var aiNewsletterReplySchema = json.RawMessage(`{
+  "type": "object",
+  "required": ["summary", "highlights"],
+  "properties": {
+    "summary": {"type": "array", "items": {"type": "string"}},
+    "highlights": {"type": "array", "items": {
+      "type": "object",
+      "required": ["kind", "title", "body"],
+      "properties": {
+        "kind": {"type": "string"},
+        "title": {"type": "string"},
+        "body": {"type": "array", "items": {"type": "string"}}
+      }
+    }}
+  }
+}`)
+
 // aiNewsletterSummaryCap is the prompt's own "Max 7 bullets" instruction,
 // re-enforced here: a partitioned run concatenates one chunk-local summary per
 // chunk, which can run past what any single call was asked to keep to.
@@ -197,11 +217,12 @@ func handleLLMAINewsletter(ctx context.Context, q *store.Queries, run store.Pipe
 
 	seen := recentlyCoveredBlock(ctx, q, doc, c.DedupLookbackDays)
 	out, err := llmStepCallLong(ctx, q, run, longRequest{
-		Kind:    kindLLMAINewsletter,
-		Cfg:     c.llmStepConfig,
-		Title:   doc.Title,
-		Content: doc.Markdown,
-		Vars:    map[string]string{"recently_covered": seen},
+		Kind:        kindLLMAINewsletter,
+		Cfg:         c.llmStepConfig,
+		Title:       doc.Title,
+		Content:     doc.Markdown,
+		Vars:        map[string]string{"recently_covered": seen},
+		ReplySchema: aiNewsletterReplySchema,
 	}, router)
 	if err != nil {
 		return StepResult{}, err

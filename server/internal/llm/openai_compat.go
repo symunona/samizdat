@@ -24,11 +24,30 @@ type openAICompatClient struct {
 	baseURL      string
 	apiKey       string
 	defaultModel string
-	// noThinking asks a local box not to reason before answering. Ollama thinks by
-	// default on a model that can (gemma4, qwen3.5): ~250 hidden tokens even for
-	// one sentence, which at a CPU-bound 3 tok/s turned a 2-minute summary into 9.
-	// Local only — OpenAI rejects reasoning_effort on a non-reasoning model.
-	noThinking bool
+	// local marks a self-hosted box, which gets two things a cloud endpoint never
+	// does:
+	//
+	// reasoning_effort "none". Ollama thinks by default on a model that can
+	// (gemma4, qwen3.5): ~250 hidden tokens even for one sentence, which at a
+	// CPU-bound 3 tok/s turned a 2-minute summary into 9. OpenAI rejects the field
+	// on a non-reasoning model.
+	//
+	// Params.ReplySchema as a json_schema response_format, so the reply is
+	// grammar-constrained. A 12B local model asked for JSON in prose drops quotes,
+	// repeats the object or trails junk (7 of 13 runs of one pipeline); cloud
+	// endpoints disagree on strict-schema rules and do not need it.
+	local bool
+}
+
+// replyFormat is the OpenAI json_schema response_format.
+type replyFormat struct {
+	Type       string          `json:"type"`
+	JSONSchema replyFormatSpec `json:"json_schema"`
+}
+
+type replyFormatSpec struct {
+	Name   string          `json:"name"`
+	Schema json.RawMessage `json:"schema"`
 }
 
 func (c *openAICompatClient) Complete(ctx context.Context, p Params, messages []Message) (reply string, u Usage, err error) {
@@ -51,11 +70,12 @@ func (c *openAICompatClient) Complete(ctx context.Context, p Params, messages []
 	// Both knobs are omitted when unset: a local box (Ollama / LM Studio) has its own
 	// Modelfile defaults, and sending a made-up number would override them silently.
 	type reqBody struct {
-		Model       string   `json:"model"`
-		MaxTokens   int      `json:"max_tokens,omitempty"`
-		Temperature *float64 `json:"temperature,omitempty"`
-		Reasoning   string   `json:"reasoning_effort,omitempty"`
-		Messages    []oaiMsg `json:"messages"`
+		Model       string       `json:"model"`
+		MaxTokens   int          `json:"max_tokens,omitempty"`
+		Temperature *float64     `json:"temperature,omitempty"`
+		Reasoning   string       `json:"reasoning_effort,omitempty"`
+		ReplyFormat *replyFormat `json:"response_format,omitempty"`
+		Messages    []oaiMsg     `json:"messages"`
 	}
 
 	msgs := make([]oaiMsg, len(messages))
@@ -63,10 +83,16 @@ func (c *openAICompatClient) Complete(ctx context.Context, p Params, messages []
 		msgs[i] = oaiMsg(m)
 	}
 	rb := reqBody{Model: model, MaxTokens: max(p.MaxTokens, 0), Temperature: p.Temp, Messages: msgs}
-	if c.noThinking {
+	if c.local {
 		rb.Reasoning = "none"
+		if len(p.ReplySchema) > 0 {
+			rb.ReplyFormat = &replyFormat{Type: "json_schema", JSONSchema: replyFormatSpec{Name: "reply", Schema: p.ReplySchema}}
+		}
 	}
-	body, _ := json.Marshal(rb)
+	body, err := json.Marshal(rb)
+	if err != nil {
+		return "", Usage{}, fmt.Errorf("openai_compat: encode request: %w", err)
+	}
 
 	url := strings.TrimRight(c.baseURL, "/") + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))

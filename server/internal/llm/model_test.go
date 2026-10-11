@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -151,5 +152,55 @@ func TestReasoningOffOnlyForLocal(t *testing.T) {
 	}
 	if got != "" {
 		t.Fatalf("cloud endpoint was sent reasoning_effort %q", got)
+	}
+}
+
+// A local box is held to the caller's reply schema; a cloud openai_compat
+// endpoint is never sent it (their strict-schema rules differ), and a call that
+// names none sends no response_format at all.
+func TestReplySchemaOnlyForLocal(t *testing.T) {
+	clearLLMEnv(t)
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = nil
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	schema := json.RawMessage(`{"type":"object","required":["highlights"],"properties":{"highlights":{"type":"array"}}}`)
+	msgs := []Message{{Role: "user", Content: "hi"}}
+
+	local := newProvider(config.LLMSection{Provider: "openai_compat", BaseURL: srv.URL, DefaultModel: "m"}, "config", "primary").client()
+	if _, _, err := local.Complete(context.Background(), Params{ReplySchema: schema}, msgs); err != nil {
+		t.Fatal(err)
+	}
+	format, _ := got["response_format"].(map[string]any)
+	spec, _ := format["json_schema"].(map[string]any)
+	if format["type"] != "json_schema" || spec["name"] != "reply" {
+		t.Fatalf("local box: response_format = %v", got["response_format"])
+	}
+	var want any
+	if err := json.Unmarshal(schema, &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(spec["schema"], want) {
+		t.Fatalf("local box: schema on the wire = %v, want %v", spec["schema"], want)
+	}
+
+	if _, _, err := local.Complete(context.Background(), Params{}, msgs); err != nil {
+		t.Fatal(err)
+	}
+	if f, ok := got["response_format"]; ok {
+		t.Fatalf("no schema set, yet response_format = %v", f)
+	}
+
+	cloud := newProvider(config.LLMSection{Provider: "openai_compat", BaseURL: "https://openrouter.ai/api/v1", APIKey: "k", DefaultModel: "m"}, "config", "primary").client().(*openAICompatClient)
+	cloud.baseURL = srv.URL
+	if _, _, err := cloud.Complete(context.Background(), Params{ReplySchema: schema}, msgs); err != nil {
+		t.Fatal(err)
+	}
+	if f, ok := got["response_format"]; ok {
+		t.Fatalf("cloud endpoint was sent response_format %v", f)
 	}
 }

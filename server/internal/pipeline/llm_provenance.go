@@ -127,9 +127,11 @@ func MeteredComplete(ctx context.Context, q *store.Queries, router *llm.Router,
 // Steps do not call it directly: they go through llmStepCallLong, which decides
 // how many calls the document needs. See llm_long.go.
 func llmCall(ctx context.Context, q *store.Queries, run store.PipelineRun,
-	kind string, c llmStepConfig, userMsg string, router *llm.Router, acc *usageAcc,
+	kind string, c llmStepConfig, userMsg string, replySchema json.RawMessage, router *llm.Router, acc *usageAcc,
 ) (string, error) {
-	reply, usage, err := MeteredComplete(ctx, q, router, kind, c.route(), &run.ID, userMsg)
+	route := c.route()
+	route.Params.ReplySchema = replySchema
+	reply, usage, err := MeteredComplete(ctx, q, router, kind, route, &run.ID, userMsg)
 	if err != nil {
 		return "", err
 	}
