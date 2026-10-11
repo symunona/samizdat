@@ -612,19 +612,33 @@ function segEls(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>('.seg[data-start-ms]'))
 }
 
+// Last segment starting at or before `ms` (segments are in time order), -1 before the first.
 function activeSegIndex(els: HTMLElement[], ms: number): number {
+  let lo = 0
+  let hi = els.length - 1
   let idx = -1
-  for (let i = 0; i < els.length; i++) {
-    if (Number(els[i].dataset.startMs) <= ms) idx = i
-    else break
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (Number(els[mid].dataset.startMs) <= ms) { idx = mid; lo = mid + 1 } else hi = mid - 1
   }
   return idx
 }
 
+// The transcript's segments never change after load (marks and find hits are added
+// inside or as classes), so the list is read once. A long podcast has thousands, and
+// re-querying + re-toggling all of them per playback tick was the screen's main cost.
+let _segCache: HTMLElement[] | null = null
+let _activeSeg: HTMLElement | null = null
+
 function setActiveSeg(ms: number): void {
-  const els = segEls()
+  const els = _segCache && _segCache.length ? _segCache : (_segCache = segEls())
   const idx = activeSegIndex(els, ms)
-  els.forEach((el, i) => el.classList.toggle('active', i === idx))
+  const next = idx >= 0 ? els[idx] : null
+  if (next !== _activeSeg) {
+    _activeSeg?.classList.remove('active')
+    next?.classList.add('active')
+    _activeSeg = next
+  }
   // Never yank the view while the reader holds a selection: the selection gestures
   // (mouse drag, native long-press + handle drag) emit neither `wheel` nor
   // `touchmove`, so without this the next playback tick scrolls the active line back

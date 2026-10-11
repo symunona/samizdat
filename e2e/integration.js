@@ -2001,6 +2001,89 @@ async function runTranscriptPlayback(token, deviceId) {
     return null
   })
 
+  // ── Player: seek bar, transcript follow, surviving a connection blip ──
+  // The fixture audio is a real minute of silence; its three segments are 0–3–6–9s.
+  const seekTime = () => page.evaluate(() => document.querySelector('[data-testid="seek-time"]')?.innerText ?? '')
+  const secs = t => { const [m, s] = t.split(':').map(Number); return m * 60 + s }
+  const setPlaying = async want => {
+    const label = await page.evaluate(() => document.querySelector('[data-testid="play-toggle"]')?.getAttribute('aria-label'))
+    if ((label === 'Pause') !== want) await page.click('[data-testid="play-toggle"]')
+    await sleep(300)
+  }
+  // Drag the seek bar from one second mark to another with a real pointer.
+  const dragSeek = async (fromSec, toSec, { release = true } = {}) => {
+    const box = await (await page.$('[data-testid="seek-track"]')).boundingBox()
+    const x = sec => box.x + ((sec + 0.4) / 60) * box.width
+    const y = box.y + box.height / 2
+    await page.mouse.move(x(fromSec), y)
+    await page.mouse.down()
+    await page.mouse.move(x(toSec), y, { steps: 6 })
+    if (release) { await page.mouse.up(); await sleep(300) }
+  }
+  // What the HOST posts into the viewer (the collector above hears the other way).
+  await page.evaluate(() => {
+    window.__hostMsgs = []
+    document.querySelector('iframe').contentWindow.addEventListener('message', e => {
+      try { window.__hostMsgs.push(JSON.parse(e.data)) } catch { /* not ours */ }
+    })
+  })
+  const mediaTimes = () => page.evaluate(() => window.__hostMsgs.filter(m => m.type === 'mediaTime').length)
+  const activeSeg = () => page.evaluate(() => {
+    const d = document.querySelector('iframe').contentDocument
+    const on = [...d.querySelectorAll('.seg.active')]
+    return on.length === 1 ? [...d.querySelectorAll('.seg')].indexOf(on[0]) : `${on.length} active`
+  })
+
+  await check('player: dragging the seek bar previews, then seeks on release', async () => {
+    await setPlaying(false)
+    await dragSeek(6, 30, { release: false })
+    const mid = await seekTime()
+    await page.mouse.up()
+    await sleep(400)
+    const after = await seekTime()
+    if (mid !== '0:30') return `mid-drag the time reads "${mid}", expected the finger's 0:30`
+    if (after !== '0:30') return `after release the time reads "${after}", expected 0:30`
+    return null
+  })
+
+  await check('player: the transcript is told only when the line changes', async () => {
+    await dragSeek(30, 1)
+    if ((await activeSeg()) !== 0) return `at 0:01 the active line is ${await activeSeg()}, expected 0`
+    const before = await mediaTimes()
+    await dragSeek(1, 2)
+    const same = (await mediaTimes()) - before
+    if (same !== 0) return `a seek inside one line posted ${same} mediaTime message(s)`
+    await dragSeek(2, 4)
+    const crossed = (await mediaTimes()) - before
+    if (crossed !== 1) return `crossing into the next line posted ${crossed} mediaTime message(s), expected 1`
+    if ((await activeSeg()) !== 1) return `at 0:04 the active line is ${await activeSeg()}, expected 1`
+    return null
+  })
+
+  // One failed probe nulls activeUrl. That used to tear the player down: sound
+  // stopped and stayed stopped. Force one, let the connection come back, and the
+  // audio must still be running from where it was.
+  await check('player: playback survives a connection blip', async () => {
+    await dragSeek(4, 20)
+    await setPlaying(true)
+    const probe = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+    await page.evaluate(() => localStorage.setItem('samizdat_force_offline', '1'))
+    await probe()
+    await sleep(1500)
+    const during = secs(await seekTime())
+    await page.evaluate(() => localStorage.removeItem('samizdat_force_offline'))
+    await probe()
+    await sleep(1500)
+    const t1 = secs(await seekTime())
+    await sleep(1500)
+    const t2 = secs(await seekTime())
+    await setPlaying(false)
+    if (during < 21) return `while disconnected the time reads ${during}s — the source was dropped with the connection`
+    if (t1 < 21) return `after the blip the time reads ${t1}s — playback did not continue from 0:20`
+    if (t2 <= t1) return `after the blip the time is stuck at ${t1}s — the player stopped`
+    return null
+  })
+
   if (errors.length) fail('transcript playback: no console/HTTP errors', errors.slice(0, 4).join(' | '))
   else pass('transcript playback: no console/HTTP errors')
 

@@ -2,7 +2,7 @@
 created: 2026-10-03
 topic: Video/podcast player — survive the lock screen, a server blip and the gesture bar
 excerpt: One audio player per Document that never dies with the connection probe; no React work while locked; an honest offline-media button with three states; a seek bar the system gesture zone cannot steal.
-status: in progress
+status: shipped 2026-10-11 (native path unverified on device)
 ---
 
 # Player: lock screen, connection blips, offline button, seek bar
@@ -23,8 +23,9 @@ and reloaded the transcript WebView (`baseUrl`).
 - `useAudio` (native) subscribes to `playbackStatusUpdate` itself. Status lands in a
   ref; React state is only set while `AppState` is `active`, and resynced once on return.
 - `useMediaTimeline.onYtStatus` drops identical frames and everything while backgrounded.
-- `getPositionMs()` on the timeline reads the backend directly, so the 5s resume save
-  stays correct with frozen state.
+- `getPositionMs()` on the timeline reads the backend directly. JS timers are stopped
+  behind the lock (found in review), so the locked resume save and the error retry hang
+  off the audio status event instead of `setInterval`/`setTimeout`.
 - Transcript follow: the host binary-searches the segment and posts `mediaTime` only
   when the segment changes; the viewer caches its `.seg` list and toggles two nodes.
 - `ConnectionProvider` skips its interval probe while backgrounded, probes on return.

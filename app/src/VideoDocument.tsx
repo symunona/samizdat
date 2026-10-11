@@ -23,7 +23,9 @@ import { openExternal, isWebUrl } from './openExternal'
 import { useMediaTimeline } from './useMediaTimeline'
 import YtPlayer from './YtPlayer'
 import ServerVideoPlayer from './ServerVideoPlayer'
-import * as FileSystem from 'expo-file-system/legacy'
+import OfflineMediaButton from './OfflineMediaButton'
+import { useOfflineMedia } from './useOfflineMedia'
+import type { OfflineState } from './useOfflineMedia'
 import {
   fetchAnnotations,
   fetchDocumentHighlights,
@@ -36,7 +38,7 @@ import {
   parseMediaMetadata,
   fetchReadingProgress,
 } from './api'
-import type { Document, Annotation, HighlightWithDoc } from './api'
+import type { Document, Annotation, HighlightWithDoc, TranscriptSegment } from './api'
 import * as db from './db'
 import { useConnection } from './ConnectionContext'
 import { useToast } from './ToastContext'
@@ -103,6 +105,20 @@ function plainText(md: string): string {
     .replace(/`([^`]+)`/g, '$1')                 // inline code
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+}
+
+// Index of the segment playing at `ms` (the last one starting at or before it), -1
+// before the first. Binary search: a long podcast has thousands of segments and this
+// runs on every status frame.
+function segmentIndexAt(segments: TranscriptSegment[], ms: number): number {
+  let lo = 0
+  let hi = segments.length - 1
+  let idx = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (segments[mid].start_ms <= ms) { idx = mid; lo = mid + 1 } else hi = mid - 1
+  }
+  return idx
 }
 
 // NewPipe-style tabs below the player. Transcript is the default.
@@ -175,9 +191,10 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const [findCount, setFindCount] = useState(0)
   const [findIndex, setFindIndex] = useState(0)
   const [showVideo, setShowVideo] = useState(false)
-  const [localUri, setLocalUri] = useState<string | null>(null)
-  const [syncing, setSyncing] = useState(false)
+  const offline = useOfflineMedia(doc.id)
   const [trackWidth, setTrackWidth] = useState(0)
+  // Where the finger is on the seek bar mid-drag; null when nobody is scrubbing.
+  const [scrubMs, setScrubMs] = useState<number | null>(null)
   // YouTube IFrame error code, if any. 101/150/152/153 = the embed can't play here
   // → we swap the black player box for an "open in YouTube" fallback (see below).
   const [ytError, setYtError] = useState<number | null>(null)
@@ -214,18 +231,34 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   // One shared timeline for the bottom bar + transcript. The active backend is the
   // <audio> element (offline local file if synced, else the server stream) OR the
   // YouTube player while the video view is open — same interface either way.
-  const remoteUrl = activeUrl ? audioDocUrl(activeUrl, doc.id) : ''
-  const serverVideoUrl = activeUrl ? videoDocUrl(activeUrl, doc.id) : ''
-  // Which video backend (if any) is mounted: the native server stream when it's
-  // fetched, else the YouTube embed once the stream fetch has failed/timed out.
-  const serverMode = serverVideoState === 'ready'
+  // Media outlives a connection blip. `activeUrl` drops to null on ONE failed probe
+  // (every 30s) and comes back a probe later; deriving the stream from it stopped a
+  // locked phone mid-sentence, released the lock-screen session and reloaded the
+  // transcript. So media keeps the last server that answered.
+  const lastUrlRef = useRef(activeUrl)
+  if (activeUrl) lastUrlRef.current = activeUrl
+  const mediaBase = activeUrl ?? lastUrlRef.current
+  // The transcript's baseUrl is pinned harder still — to the first server seen —
+  // because any change to a WebView's source reloads it.
+  const webBaseRef = useRef('')
+  if (!webBaseRef.current && activeUrl) webBaseRef.current = activeUrl
+  const remoteUrl = mediaBase ? audioDocUrl(mediaBase, doc.id) : ''
+  const serverVideoUrl = mediaBase ? videoDocUrl(mediaBase, doc.id) : ''
+  // Which video backend (if any) is mounted: the native player when there is a file
+  // for it (on the phone, or fetched by the server), else the YouTube embed once the
+  // stream fetch has failed/timed out.
+  const serverMode = serverVideoState !== 'failed' && (!!offline.videoUri || serverVideoState === 'ready')
   const embedMode = serverVideoState === 'failed' && !!ytId
   const hasVideoBackend = serverMode || embedMode
   const preparingVideo = showVideo && (serverVideoState === 'probing' || serverVideoState === 'preparing')
+  const saveWhileLockedRef = useRef<() => void>(() => {})
   const {
     playing, positionMs, durationMs: mediaDurMs, rate,
-    play, pause, seek, setRate, videoActive, ytRef, onYtStatus,
-  } = useMediaTimeline({ audioUrl: localUri ?? remoteUrl, hasVideo: hasVideoBackend, showVideo, meta: nowPlaying })
+    play, pause, seek, setRate, getPositionMs, videoActive, ytRef, onYtStatus, videoSounding,
+  } = useMediaTimeline({
+    audioUrl: offline.audioUri ?? remoteUrl, hasVideo: hasVideoBackend, showVideo, meta: nowPlaying,
+    onBackgroundProgress: () => saveWhileLockedRef.current(),
+  })
   // Prefer the real media duration; fall back to the metadata estimate.
   const durationMs = mediaDurMs > 0 ? mediaDurMs : (meta.duration_ms ?? 0)
 
@@ -271,24 +304,18 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     if (status === 'connected') load()
   }, [status, load])
 
-  // Restore a previously synced local file.
-  useEffect(() => {
-    db.getMediaFile(doc.id).then(uri => {
-      if (uri) setLocalUri(uri)
-    }).catch(() => {})
-  }, [doc.id])
-
   // ── Resume playback position ──
   // Server-backed (read_states.media_pos_ms), so resume works across devices — the
   // same "where were we" the article reader uses for scroll. On return, resume 10s
-  // before where they left off. Read the freshest position via a ref so the
-  // throttled/unmount saves never capture a stale closure.
-  const positionRef = useRef(positionMs)
-  positionRef.current = positionMs
+  // before where they left off. The position is read from the BACKEND, never from
+  // `positionMs`: that is React state, and it is frozen while the phone is locked.
+  const getPositionRef = useRef(getPositionMs)
+  getPositionRef.current = getPositionMs
+  const positionNow = useCallback(() => Math.floor(getPositionRef.current()), [])
   const resumedRef = useRef(false)
 
   const savePosition = useCallback(() => {
-    const ms = Math.floor(positionRef.current)
+    const ms = positionNow()
     // Sticky resume anchor while scrubbing (UX): if the user keeps seeking around
     // to hunt for a specific part, we deliberately do NOT advance the saved resume
     // point on every jump — we keep the ORIGINAL spot until they COMMIT to a new
@@ -301,7 +328,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       else return
     }
     if (ms > 0) db.saveMediaPos(doc.id, ms)
-  }, [doc.id])
+  }, [doc.id, positionNow])
 
   // Read the saved point once on mount (feeds both the resume seek and the marker).
   useEffect(() => {
@@ -331,13 +358,30 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     return () => { clearInterval(id); savePosition() }
   }, [playing, savePosition])
 
+  // Behind the lock the interval above does not tick (React Native stops JS timers
+  // with the activity), so hours of listening would be saved only on unlock — or
+  // never, if the process dies first. The audio backend's status frames still
+  // arrive; save off those, at the same 5s pace.
+  const lastLockedSaveRef = useRef(0)
+  saveWhileLockedRef.current = () => {
+    if (Date.now() - lastLockedSaveRef.current < 5000) return
+    lastLockedSaveRef.current = Date.now()
+    savePosition()
+  }
+
   // Final save when the screen unmounts (navigate away / close).
   useEffect(() => () => savePosition(), [savePosition])
 
-  // Push playback time into the transcript so it follows along.
+  // Push playback time into the transcript so it follows along — only when the
+  // playing SEGMENT changes. Every status frame used to cross the bridge, and the
+  // viewer re-scanned every segment for each one.
+  const sentSegRef = useRef<number | null>(null)
   useEffect(() => {
+    const idx = segmentIndexAt(segments, positionMs)
+    if (idx === sentSegRef.current) return
+    sentSegRef.current = idx
     sendToWebView({ type: 'mediaTime', ms: positionMs })
-  }, [positionMs, sendToWebView])
+  }, [positionMs, segments, sendToWebView])
 
   const themeMsg = useMemo(() => ({
     background: theme.colors.background, text: theme.colors.text, surface: theme.colors.surface,
@@ -363,13 +407,13 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   // and opens the 10s resume-tracking grace window (see savePosition).
   const userSeek = useCallback((toMs: number) => {
     const clamped = Math.max(0, durationMs > 0 ? Math.min(durationMs, toMs) : toMs)
-    const fromMs = Math.floor(positionRef.current)
+    const fromMs = positionNow()
     seekTo(clamped)
     if (Math.abs(clamped - fromMs) >= 500) {
       setJumpFromMs(fromMs)
       graceAnchorRef.current = clamped
     }
-  }, [seekTo, durationMs])
+  }, [seekTo, durationMs, positionNow])
 
   // Open the annotation editor sheet for an existing note, optionally seeking to
   // its timestamp first. Shared by the transcript, the scrub markers and the list.
@@ -394,6 +438,10 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
         hlExpanded: false,
         scrollFraction: 0,
       })
+      // A (re)loaded viewer has no active line; the segment-change gate above would
+      // otherwise stay silent until playback crosses into the next one.
+      sentSegRef.current = segmentIndexAt(segments, positionMs)
+      sendToWebView({ type: 'mediaTime', ms: positionMs })
     } else if (msg.type === 'seek' && typeof msg.ms === 'number') {
       userSeek(msg.ms)
     } else if (msg.type === 'selection' && msg.data) {
@@ -428,7 +476,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       setFindCount(msg.count ?? 0)
       setFindIndex(msg.index ?? 0)
     }
-  }, [doc.title, annotations, themeMsg, sendToWebView, userSeek, openAnnotation, positionMs, pause, play])
+  }, [doc.title, annotations, themeMsg, sendToWebView, userSeek, openAnnotation, positionMs, segments, pause, play])
 
   // Jump the transcript back to the currently-playing segment and resume auto-follow.
   const scrollToActive = useCallback(() => {
@@ -550,16 +598,39 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     setAnnVisible(true)
   }, [])
 
-  const handleTrackPress = useCallback((e: { nativeEvent: { locationX: number } }) => {
-    if (trackWidth <= 0 || durationMs <= 0) return
-    const frac = Math.max(0, Math.min(1, e.nativeEvent.locationX / trackWidth))
-    userSeek(frac * durationMs)
-  }, [trackWidth, durationMs, userSeek])
+  // Seek bar: a tap seeks, a drag scrubs with a live preview and seeks on release.
+  // The handlers are created once and read what they need through `scrubRef`.
+  const scrubRef = useRef({ startX: 0, ms: 0, trackWidth, durationMs, userSeek })
+  Object.assign(scrubRef.current, { trackWidth, durationMs, userSeek })
+  const scrubPan = useMemo(() => {
+    const moveTo = (x: number) => {
+      const c = scrubRef.current
+      if (c.trackWidth <= 0 || c.durationMs <= 0) return
+      c.ms = Math.max(0, Math.min(1, x / c.trackWidth)) * c.durationMs
+      setScrubMs(c.ms)
+    }
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      // Once a scrub starts nothing above may take it over (a scroller, the drawer).
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: e => { scrubRef.current.startX = e.nativeEvent.locationX; moveTo(e.nativeEvent.locationX) },
+      // locationX is only trustworthy at grant (it is relative to whatever the finger
+      // is over); after that, the grant point plus the gesture's travel.
+      onPanResponderMove: (_e, g) => moveTo(scrubRef.current.startX + g.dx),
+      onPanResponderRelease: () => {
+        const c = scrubRef.current
+        if (c.trackWidth > 0 && c.durationMs > 0) c.userSeek(c.ms)
+        setScrubMs(null)
+      },
+      onPanResponderTerminate: () => setScrubMs(null),
+    })
+  }, [])
 
   // ± skip buttons — each is a jump (drops the flag + opens the grace window).
   const handleSkip = useCallback((delta: number) => {
-    userSeek(positionRef.current + delta)
-  }, [userSeek])
+    userSeek(positionNow() + delta)
+  }, [userSeek, positionNow])
 
   // Desktop keyboard shortcuts. ←/→ nudge ±1s, ↑/↓ jump ±10s (up = forward);
   // [ / ] slow down / speed up and = resets to 1× (VLC-style); n/a add a note.
@@ -639,17 +710,23 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   // playing while the stream was preparing, so the tap-time position is stale.
   const prevHasBackend = useRef(false)
   useEffect(() => {
-    if (hasVideoBackend && !prevHasBackend.current) setVideoStartMs(Math.floor(positionRef.current))
+    if (hasVideoBackend && !prevHasBackend.current) setVideoStartMs(positionNow())
     prevHasBackend.current = hasVideoBackend
-  }, [hasVideoBackend])
+  }, [hasVideoBackend, positionNow])
 
   // Show the video view as an alternate VIEW of the same timeline. Kicks off the
   // native-video fetch; the timeline hook handles the audio↔video handoff (pause the
   // <audio>, resume it on collapse) once a backend is mounted.
   const toggleVideo = useCallback(() => {
-    if (!showVideo) { setYtError(null); void ensureServerVideo() }
+    if (!showVideo) {
+      setYtError(null)
+      // Every open starts at the live position. Once a backend exists the effect
+      // above no longer fires, so a re-open used to jump back to the first open's spot.
+      setVideoStartMs(positionNow())
+      if (!offline.videoUri) void ensureServerVideo()
+    }
     setShowVideo(v => !v)
-  }, [showVideo, ensureServerVideo])
+  }, [showVideo, ensureServerVideo, positionNow, offline.videoUri])
 
   // The YouTube embed reported an error. Codes 101/150/152/153 mean it can't play
   // here (owner disabled embedding, or an ad-blocked network fails YT's ad-status
@@ -679,23 +756,28 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   // so there's nothing to remember or restore for them.
   // Refs keep the once-registered listener reading fresh values without re-subscribing.
   const showVideoRef = useRef(showVideo); showVideoRef.current = showVideo
-  const playingRef = useRef(playing); playingRef.current = playing
+  const videoActiveRef = useRef(videoActive); videoActiveRef.current = videoActive
   const restoreVideoRef = useRef(false)
   useEffect(() => {
     const sub = AppState.addEventListener('change', next => {
       if (next === 'background') {
-        if (showVideoRef.current && !!ytId && playingRef.current) {
+        // Hand off when the video is sounding — asked of the timeline, which allows for
+        // the player having paused itself a moment before this event — or when the
+        // view is open but still preparing (it must not start up behind the lock).
+        if (showVideoRef.current && (!videoActiveRef.current || videoSounding())) {
           restoreVideoRef.current = true // remember: was showing video → restore on unlock
+          log.log(`lock: video → audio at ${positionNow()}ms`)
           switchToAudio()
         }
       } else if (next === 'active' && restoreVideoRef.current) {
         restoreVideoRef.current = false
-        setVideoStartMs(Math.floor(positionRef.current)) // continue from where audio got to
+        log.log(`unlock: audio → video at ${positionNow()}ms`)
+        setVideoStartMs(positionNow()) // continue from where audio got to
         setShowVideo(true)
       }
     })
     return () => sub.remove()
-  }, [switchToAudio, ytId])
+  }, [switchToAudio, videoSounding, positionNow])
 
   // Web: request native fullscreen on the video container (the iframe fills it).
   // Native: the WebView's allowsFullscreenVideo enables the player's own control.
@@ -705,24 +787,32 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     el?.requestFullscreen?.()
   }, [])
 
-  const handleSync = useCallback(async () => {
-    if (!remoteUrl || syncing) return
-    setSyncing(true)
+  // Move the Document between its three offline states (see OfflineMediaButton):
+  // download what the target needs and is missing, remove what it does not include.
+  const handleOfflinePick = useCallback(async (target: OfflineState) => {
     try {
-      const dest = `${FileSystem.documentDirectory}video-audio-${doc.id}.m4a`
-      const res = await FileSystem.downloadAsync(remoteUrl, dest)
-      setLocalUri(res.uri)
-      await db.setMediaFile(doc.id, res.uri)
-      toast('Synced to device', 'success')
+      if (target === 'server') { await offline.remove('audio'); return }
+      if (target === 'audio' && offline.state === 'video') { await offline.remove('video'); return }
+      if (status !== 'connected' || !mediaBase) { toast('Not connected — cannot download', 'error'); return }
+      if (!offline.audioUri) await offline.download('audio', remoteUrl)
+      if (target === 'video') {
+        // The server fetches the video on demand; a download can only copy one it has.
+        if (!(await probeVideoReady(mediaBase, doc.id))) {
+          if (token) await queueVideo(mediaBase, token, doc.id)
+          toast('The server is still fetching the video — try again in a minute', 'info')
+          return
+        }
+        await offline.download('video', serverVideoUrl)
+      }
+      toast('On this phone — plays with no internet', 'success')
     } catch (e) {
-      log.error('sync failed', e)
-      toast('Sync failed', 'error')
-    } finally {
-      setSyncing(false)
+      log.error(`offline media → ${target} failed`, e)
+      toast(target === 'server' ? 'Could not remove' : 'Download failed', 'error')
     }
-  }, [remoteUrl, syncing, doc.id, toast])
+  }, [offline, status, mediaBase, remoteUrl, serverVideoUrl, token, doc.id, toast])
 
-  const progressPct = durationMs > 0 ? Math.min(100, (positionMs / durationMs) * 100) : 0
+  const shownMs = scrubMs ?? positionMs
+  const progressPct = durationMs > 0 ? Math.min(100, (shownMs / durationMs) * 100) : 0
   // Fraction (0–100) of a playback ms along the scrub track, for marker placement.
   const pct = useCallback((ms: number) => (durationMs > 0 ? Math.min(100, Math.max(0, (ms / durationMs) * 100)) : 0), [durationMs])
 
@@ -750,7 +840,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
           {videoActive ? (
             <View ref={videoBoxRef} style={[s.videoBox, playerDims]}>
               {serverMode ? (
-                <ServerVideoPlayer ref={ytRef} src={serverVideoUrl} startMs={videoStartMs} rate={rate} onStatus={onYtStatus} onError={handleServerVideoError} />
+                <ServerVideoPlayer ref={ytRef} src={offline.videoUri ?? serverVideoUrl} startMs={videoStartMs} rate={rate} onStatus={onYtStatus} onError={handleServerVideoError} />
               ) : (
                 <YtPlayer ref={ytRef} videoId={ytId as string} startMs={videoStartMs} rate={rate} onStatus={onYtStatus} onError={handleYtError} />
               )}
@@ -896,7 +986,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
           ) : (
             <WebView
               ref={webViewRef}
-              source={{ html: htmlContent, baseUrl: activeUrl ?? '' }}
+              source={{ html: htmlContent, baseUrl: webBaseRef.current }}
               style={s.fill}
               onMessage={handleMessage}
               originWhitelist={['*']}
@@ -981,7 +1071,51 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
       {/* ── Pinned footer control bar (does not scroll) ── */}
       <View style={[s.footer, { paddingBottom: insets.bottom }]}>
-        {/* Buttons row: skips · big play/pause · skips · note · sync · speed. */}
+        {/* Seek bar — the TOP of the footer, above the buttons. On the bottom edge it sat
+            inside Android's system-gesture zone, where a horizontal drag belongs to the
+            OS (app switch) and never reaches the app. Left time · scrub track · right time. */}
+        <View style={s.footerSeek}>
+          <Text style={[s.time, scrubMs != null && s.timeScrub]} testID="seek-time">{fmtTime(shownMs)}</Text>
+          <View style={s.scrub}>
+            {/* Flag labels above the track (resume = green, jump-from = amber). */}
+            <View style={s.flagStrip} pointerEvents="none">
+              {savedPosMs != null && durationMs > 0 ? (
+                <Text style={[s.flagLabel, s.flagResume, { left: `${pct(savedPosMs)}%` as `${number}%` }]} numberOfLines={1}>where I was</Text>
+              ) : null}
+              {jumpFromMs != null && durationMs > 0 ? (
+                <Text style={[s.flagLabel, s.flagJump, { left: `${pct(jumpFromMs)}%` as `${number}%` }]} numberOfLines={1}>last jumped from</Text>
+              ) : null}
+            </View>
+            <View style={s.track} onLayout={e => setTrackWidth(e.nativeEvent.layout.width)}>
+              {/* Seek layer sits at the bottom; decorations above are pointerEvents:none
+                  so a touch anywhere reaches it. A responder View (not Pressable) is used
+                  because Pressable's onPress omits locationX on RN-Web — the old tap-seek
+                  bug; the responder gives a reliable per-view offset on both runtimes. */}
+              <View style={s.trackHit} testID="seek-track" {...scrubPan.panHandlers} />
+              <View style={s.trackBg} pointerEvents="none" />
+              <View style={[s.trackFill, { width: `${progressPct}%` as `${number}%` }]} pointerEvents="none" />
+              {scrubMs != null ? (
+                <View pointerEvents="none" style={[s.trackThumb, { left: `${progressPct}%` as `${number}%` }]} />
+              ) : null}
+              {savedPosMs != null && durationMs > 0 ? (
+                <View pointerEvents="none" style={[s.markResume, { left: `${pct(savedPosMs)}%` as `${number}%` }]} />
+              ) : null}
+              {jumpFromMs != null && durationMs > 0 ? (
+                <View pointerEvents="none" style={[s.markJump, { left: `${pct(jumpFromMs)}%` as `${number}%` }]} />
+              ) : null}
+              {durationMs > 0 ? annotations.filter(a => a.media_ts_ms > 0).map(a => (
+                <Pressable
+                  key={a.id}
+                  style={[s.markAnn, { left: `${pct(a.media_ts_ms)}%` as `${number}%` }]}
+                  hitSlop={6}
+                  onPress={() => openAnnotation(a, true)}
+                />
+              )) : null}
+            </View>
+          </View>
+          <Text style={s.time}>{fmtTime(durationMs)}</Text>
+        </View>
+        {/* Buttons row: skips · big play/pause · skips · note · offline · speed. */}
         <View style={s.footerBtns}>
           {SKIPS.slice(0, 2).map(sk => (
             <Pressable key={`${sk.icon}${sk.delta}`} onPress={() => handleSkip(sk.delta)} style={s.skipBtn} hitSlop={6}>
@@ -989,7 +1123,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
               <Text style={s.skipText}>{sk.delta < 0 ? '−' : '+'}{sk.label}s</Text>
             </Pressable>
           ))}
-          <Pressable onPress={togglePlay} style={s.playBtnBig} hitSlop={8}>
+          <Pressable onPress={togglePlay} style={s.playBtnBig} hitSlop={8} testID="play-toggle" accessibilityLabel={playing ? 'Pause' : 'Play'}>
             <Ionicons name={playing ? 'pause' : 'play'} size={28} color={theme.colors.background} />
           </Pressable>
           {SKIPS.slice(2).map(sk => (
@@ -1002,10 +1136,13 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
             <Ionicons name="create-outline" size={22} color={theme.colors.accent} />
           </Pressable>
           {Platform.OS !== 'web' ? (
-            <Pressable onPress={handleSync} style={s.iconBtn} hitSlop={8} disabled={syncing}>
-              {syncing ? <ActivityIndicator size="small" color={theme.colors.accent} />
-                : <Ionicons name={localUri ? 'cloud-done-outline' : 'cloud-download-outline'} size={22} color={localUri ? theme.colors.accent : theme.colors.muted} />}
-            </Pressable>
+            <OfflineMediaButton
+              state={offline.state}
+              busy={offline.busy}
+              percent={offline.percent}
+              sizeBytes={offline.sizeBytes}
+              onPick={handleOfflinePick}
+            />
           ) : null}
           <View style={s.speedWrap}>
             {/* Dropup opens UPWARD into the room above the footer. */}
@@ -1028,49 +1165,6 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
           </View>
         </View>
 
-        {/* Seek bar — the very bottom edge. Left time · scrub track · right time. */}
-        <View style={s.footerSeek}>
-          <Text style={s.time}>{fmtTime(positionMs)}</Text>
-          <View style={s.scrub}>
-            {/* Flag labels above the track (resume = green, jump-from = amber). */}
-            <View style={s.flagStrip} pointerEvents="none">
-              {savedPosMs != null && durationMs > 0 ? (
-                <Text style={[s.flagLabel, s.flagResume, { left: `${pct(savedPosMs)}%` as `${number}%` }]} numberOfLines={1}>where I was</Text>
-              ) : null}
-              {jumpFromMs != null && durationMs > 0 ? (
-                <Text style={[s.flagLabel, s.flagJump, { left: `${pct(jumpFromMs)}%` as `${number}%` }]} numberOfLines={1}>last jumped from</Text>
-              ) : null}
-            </View>
-            <View style={s.track} onLayout={e => setTrackWidth(e.nativeEvent.layout.width)}>
-              {/* Seek layer sits at the bottom; decorations above are pointerEvents:none
-                  so a tap anywhere reaches it. A responder View (not Pressable) is used
-                  because Pressable's onPress omits locationX on RN-Web — the old tap-seek
-                  bug; onResponderRelease gives a reliable per-view offset on both runtimes. */}
-              <View
-                style={s.trackHit}
-                onStartShouldSetResponder={() => true}
-                onResponderRelease={handleTrackPress}
-              />
-              <View style={s.trackBg} pointerEvents="none" />
-              <View style={[s.trackFill, { width: `${progressPct}%` as `${number}%` }]} pointerEvents="none" />
-              {savedPosMs != null && durationMs > 0 ? (
-                <View pointerEvents="none" style={[s.markResume, { left: `${pct(savedPosMs)}%` as `${number}%` }]} />
-              ) : null}
-              {jumpFromMs != null && durationMs > 0 ? (
-                <View pointerEvents="none" style={[s.markJump, { left: `${pct(jumpFromMs)}%` as `${number}%` }]} />
-              ) : null}
-              {durationMs > 0 ? annotations.filter(a => a.media_ts_ms > 0).map(a => (
-                <Pressable
-                  key={a.id}
-                  style={[s.markAnn, { left: `${pct(a.media_ts_ms)}%` as `${number}%` }]}
-                  hitSlop={6}
-                  onPress={() => openAnnotation(a, true)}
-                />
-              )) : null}
-            </View>
-          </View>
-          <Text style={s.time}>{fmtTime(durationMs)}</Text>
-        </View>
       </View>
 
       <AnnotationPanel
@@ -1150,16 +1244,16 @@ function buildStyles(t: Theme) {
       backgroundColor: t.colors.surface,
       borderTopWidth: 1, borderTopColor: t.colors.border,
     },
-    // Buttons row (top of footer). Wrap so every control shows at narrow widths.
+    // Buttons row (bottom of footer). Wrap so every control shows at narrow widths.
     footerBtns: {
       flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center',
       gap: t.spacing.sm, rowGap: 6,
-      paddingHorizontal: t.spacing.md, paddingTop: t.spacing.sm, paddingBottom: 6,
+      paddingHorizontal: t.spacing.md, paddingTop: 6, paddingBottom: t.spacing.sm,
     },
-    // Seek bar (bottom edge of footer).
+    // Seek bar (top of footer — clear of the system gesture zone).
     footerSeek: {
       flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,
-      paddingHorizontal: t.spacing.md, paddingBottom: t.spacing.sm,
+      paddingHorizontal: t.spacing.md, paddingTop: t.spacing.xs,
     },
     playBtnBig: {
       width: 52, height: 52, borderRadius: 26, backgroundColor: t.colors.accent,
@@ -1182,14 +1276,17 @@ function buildStyles(t: Theme) {
     },
     flagResume: { color: '#052e16', backgroundColor: MARK_RESUME },
     flagJump: { color: '#3a2a00', backgroundColor: MARK_JUMP },
-    track: { height: 24, justifyContent: 'center', position: 'relative' },
+    // 32px tall: the whole height takes the touch, the 4px line is only what shows.
+    track: { height: 32, justifyContent: 'center', position: 'relative' },
+    trackThumb: { position: 'absolute', width: 14, height: 14, marginLeft: -7, borderRadius: 7, backgroundColor: t.colors.accent },
+    timeScrub: { color: t.colors.accent, fontWeight: '700' },
     trackHit: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
     trackBg: { position: 'absolute', left: 0, right: 0, height: 4, borderRadius: 2, backgroundColor: t.colors.border },
     trackFill: { position: 'absolute', left: 0, height: 4, borderRadius: 2, backgroundColor: t.colors.accent },
     // Resume (green) + jump-from (amber) flag poles; annotation ticks (purple).
-    markResume: { position: 'absolute', width: 2, height: 14, top: 5, marginLeft: -1, borderRadius: 1, backgroundColor: MARK_RESUME },
-    markJump: { position: 'absolute', width: 2, height: 14, top: 5, marginLeft: -1, borderRadius: 1, backgroundColor: MARK_JUMP },
-    markAnn: { position: 'absolute', width: 3, height: 10, top: 7, marginLeft: -1.5, borderRadius: 1.5, backgroundColor: MARK_ANN },
+    markResume: { position: 'absolute', width: 2, height: 14, top: 9, marginLeft: -1, borderRadius: 1, backgroundColor: MARK_RESUME },
+    markJump: { position: 'absolute', width: 2, height: 14, top: 9, marginLeft: -1, borderRadius: 1, backgroundColor: MARK_JUMP },
+    markAnn: { position: 'absolute', width: 3, height: 10, top: 11, marginLeft: -1.5, borderRadius: 1.5, backgroundColor: MARK_ANN },
     iconBtn: { padding: 6, flexShrink: 0 },
     speedWrap: { flexShrink: 0, position: 'relative' },
     // Fixed width so the pill never reflows as the value changes width

@@ -3,7 +3,7 @@
 // satisfies the SAME YtPlayerHandle/YtStatus contract as YtPlayer, so
 // useMediaTimeline drives it unchanged (play/pause/seek/rate + a status frame).
 // Metro resolves ServerVideoPlayer.web.tsx for web (a plain HTML5 <video>).
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { StyleSheet } from 'react-native'
 import { useVideoPlayer, VideoView } from 'expo-video'
 import type { YtPlayerHandle, YtStatus } from './YtPlayer.types'
@@ -30,7 +30,12 @@ const ServerVideoPlayer = forwardRef<YtPlayerHandle, ServerVideoPlayerProps>(fun
   const onStatusRef = useRef(onStatus); onStatusRef.current = onStatus
   const onErrorRef = useRef(onError); onErrorRef.current = onError
 
-  const player = useVideoPlayer(src, p => {
+  // The source is pinned for the life of this mount. useVideoPlayer keys its player
+  // on the source, so a server URL that moves mid-watch (the connection probe picking
+  // another host) would release the playing player and start a new one at `startMs`.
+  // Closing and re-opening the video view picks up the current URL.
+  const [pinnedSrc] = useState(src)
+  const player = useVideoPlayer(pinnedSrc, p => {
     try { if (startRef.current > 0) p.currentTime = startRef.current / 1000 } catch (e) { log.error('seek on init', e) }
     p.playbackRate = rateRef.current
     p.play()

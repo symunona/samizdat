@@ -638,7 +638,7 @@ export default function DocumentViewer() {
   useWebPageTitle(docForId?.title || docForId?.canonical_url)
 
   if (docForId && docForId.media_type === 'video') {
-    return <VideoDocument doc={docForId} from={from} />
+    return <VideoDocument key={docForId.id} doc={docForId} from={from} />
   }
 
   return (

@@ -452,6 +452,18 @@ VALUES ('${q(id)}','${q(kind)}','${q(JSON.stringify(payload))}','done',1,'${now}
   console.log('  seeded job', id, `(${kind})`)
 }
 
+// A silent PCM WAV: 8 kHz, 8-bit, mono (0x80 is the unsigned midpoint).
+function silentWav(seconds) {
+  const rate = 8000
+  const data = Buffer.alloc(rate * seconds, 0x80)
+  const head = Buffer.alloc(44)
+  head.write('RIFF', 0); head.writeUInt32LE(36 + data.length, 4); head.write('WAVEfmt ', 8)
+  head.writeUInt32LE(16, 16); head.writeUInt16LE(1, 20); head.writeUInt16LE(1, 22)
+  head.writeUInt32LE(rate, 24); head.writeUInt32LE(rate, 28); head.writeUInt16LE(1, 32); head.writeUInt16LE(8, 34)
+  head.write('data', 36); head.writeUInt32LE(data.length, 40)
+  return Buffer.concat([head, data])
+}
+
 // Seed the video Document used by the smoke test's player + export checks.
 export function seedVideoDoc(deviceId, videoDocId) {
   const aid = 'eeeeeeee-0000-4000-8000-0000000000a1'
@@ -459,9 +471,11 @@ export function seedVideoDoc(deviceId, videoDocId) {
   const rsid = 'eeeeeeee-0000-4000-8000-0000000000b1'
   const mediaDir = '/tmp/samizdat-test/cache/media'
   fs.mkdirSync(mediaDir, { recursive: true })
-  // Placeholder files: make GET /documents/:id/{audio,video} return 200 (no 4xx);
-  // the headless run never plays them.
-  fs.writeFileSync(join(mediaDir, `${aid}.m4a`), Buffer.alloc(2048))
+  // The audio is REAL — a minute of silence — so the player has a duration, a seek
+  // lands and playback advances (the seek-bar and blip checks in integration.js need
+  // all three). Browsers sniff the container, so WAV bytes under the asset's .m4a
+  // name play fine. The video is a placeholder that only has to answer 200.
+  fs.writeFileSync(join(mediaDir, `${aid}.m4a`), silentWav(60))
   fs.writeFileSync(join(mediaDir, `${vid}.mp4`), Buffer.alloc(4096))
   const now = new Date().toISOString()
   const segs = [

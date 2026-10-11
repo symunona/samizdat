@@ -91,7 +91,9 @@ Tests: `just e2e-db` · `just e2e-offline` · `just e2e-int` (`runDbLayer`, `run
 
 ## Connection state — NEVER bypass `ConnectionProvider`
 
-`src/ConnectionContext.tsx` is the single owner: probes on mount and every 30s, picks the fastest reachable URL.
+`src/ConnectionContext.tsx` is the single owner: probes on mount, every 30s while the app is in the foreground, and on every return to it; picks the fastest reachable URL.
+
+**`activeUrl` is `null` after ONE failed probe and may come back as a different host.** Fine for "can I fetch now"; fatal as an identity. Never key a player, a WebView `baseUrl` or anything long-lived on it — hold the last URL that answered instead (`mediaBase` in `VideoDocument`).
 
 **Every screen reads `useConnection()`.** Never import `loadConnection` / `saveConnection` / `findReachable` in a screen — `findReachable` with no `lastSuccessfulUrl` hint tries ALL stored URLs sequentially with no timeout (localhost, docker bridges, Tailscale), so a remote client stalls indefinitely.
 
@@ -252,7 +254,9 @@ A figure is framed like a blockquote (border + inset background + padding) so a 
 `document/[id].tsx` early-returns `<VideoDocument>` before building article HTML.
 
 ### Layout — nothing scrolls the whole page
-Header · **pinned player** (thumbnail → inline YouTube player, 16:9 bounded to ≤32% viewport height) · "Audio only" button · **pinned tab bar** (Transcript · Details · Excerpt · Notes) · tab content (`flex:1`, scrolls internally; the transcript pane stays mounted so it keeps auto-following) · find bar · **floating resume button** (top-right, only while the playing segment has drifted off-screen; driven by `activeSegVisible`, taps post `scrollToActive`) · seeker bar (play/pause, time, scrub, speed lever, add-note, offline-sync) · `AnnotationPanel` sheet.
+Header · **pinned player** (thumbnail → inline video, 16:9 bounded to ≤32% viewport height) · "Audio only" button · **pinned tab bar** (Transcript · Details · Excerpt · Notes) · tab content (`flex:1`, scrolls internally; the transcript pane stays mounted so it keeps auto-following) · find bar · **floating resume button** (top-right, only while the playing segment has drifted off-screen; driven by `activeSegVisible`, taps post `scrollToActive`) · **footer**: seek row (time · scrub track · duration) **above** the buttons row (skips · play/pause · add-note · offline · speed) · `AnnotationPanel` sheet.
+
+**The seek row is the top of the footer on purpose.** On the bottom edge it sat inside Android's system-gesture zone, where a horizontal drag is the OS's app-switch and never reaches the app. It is a `PanResponder` drag (live preview, seek on release) that refuses termination; `locationX` is trusted only at grant.
 
 ### Keyboard shortcuts (desktop web)
 `handleHotkey`: **←/→** ±1s · **↑/↓** ±10s · **[** / **]** ∓0.1× · **=** reset to 1× · **n**/**a** add note.
@@ -266,8 +270,10 @@ const { playing, positionMs, durationMs, rate, play, pause, seek, setRate,
         videoActive, ytRef, onYtStatus } = useMediaTimeline({ audioUrl, ytId, showVideo })
 ```
 
-- **audio** — `useAudio` (platform-split). Audio-only mode + offline files.
-- **youtube** — `YtPlayer` (platform-split), driven via `ytRef`, reporting via `onYtStatus`. Active when `videoActive = showVideo && !!ytId`.
+- **audio** — `useAudio` (platform-split). Audio-only mode + offline files. **One player for the life of the screen**: sources go in through `replace`, an empty source is ignored. Never go back to `useAudioPlayer(source)` — see `../docs/decisions.md`.
+- **video** — `ServerVideoPlayer` (the file on the phone, else the server's fetched stream) or, once that failed, the `YtPlayer` embed. Same handle, driven via `ytRef`, reporting via `onYtStatus`. Active when `videoActive = showVideo && hasVideo`.
+- **`positionMs` is React state and freezes while backgrounded.** Callbacks and anything that runs locked read `getPositionMs()` (`positionNow()` in `VideoDocument`).
+- **Media URLs come from `mediaBase`** (the last server that answered), never straight from `activeUrl`, which is `null` after one failed probe.
 - **Rate is owned by the timeline** and fanned out to both, so speed survives a switch.
 - **Handoff (no double audio):** entering the video pauses the audio element; collapsing seeks audio to the video position and resumes if it was playing. The two never sound at once.
 - **Lock-screen handoff:** the WebView is suspended when the phone locks, so a playing video hands off to `expo-audio` (which holds the OS media session) and restores the video view on unlock. Full state machine: `../docs/media-playback-lockscreen.md`.
@@ -275,13 +281,13 @@ const { playing, positionMs, durationMs, rate, play, pause, seek, setRate,
 ### Platform-split backends
 - `src/useAudio.ts` (native, `expo-audio`) / `src/useAudio.web.ts` (HTML5 `<audio>`). **Never import `expo-audio` in a component** — go through `useAudio` or `useMediaTimeline`. Metro resolves `.web.ts`; the web file is knip-ignored.
 - `src/YtPlayer.web.tsx` (injects `youtube.com/iframe_api`, `new YT.Player`, `onStateChange` + 250ms poll) / `src/YtPlayer.tsx` (native WebView hosting the same IFrame API; commands via `injectJavaScript`, status via `postMessage`) / `src/YtPlayer.types.ts` (the shared contract). A plain `?src=` iframe is opaque — no `currentTime`, no control — so it could not share the timeline.
-- **Offline audio sync (native only):** `expo-file-system` (`legacy`) downloads to `documentDirectory`; the URI is persisted under `video_audio_<docId>` and restored on mount. Hidden on web.
+- **Offline media (native only; hidden on web):** `src/offlineCache.ts` is the only code that downloads, finds or deletes a Document's files; `useOfflineMedia(docId)` is its state for one Document; `OfflineMediaButton` is the control. Three states, one visual language: **cloud** = on the server, needs internet · **green tick + headset** = audio on this phone · **green tick + camera** = audio + video on this phone. The green tick means "plays with no internet" and nothing else on the player is green. Tapping the face opens a sheet listing all three; picking a row downloads what is missing or removes what is extra. **The face never starts a download** — the old button re-fetched the whole file on every tap. Audio has a `media_files` row; the video has none (deterministic path, moved into place only when complete, so the file existing is the record).
 
 ### Transcript rendering
 `buildTranscriptHtml()` renders `TranscriptSegment[]` as one **`.seg` span per sentence** (`data-start-ms`/`data-end-ms`), grouped into `.para` blocks on the server's `new_para` flag. **A block per segment is wrong** — see `server/CLAUDE.md` → video Documents. The hover timestamp chip hangs off the **paragraph**: an absolute `::after` on an inline span lands per line-box, i.e. mid-sentence.
 
 Everything keys off `.seg[data-start-ms]` and is indifferent to the tag. WebView messages:
-`mediaTime` (in) → highlight active `.seg` + auto-scroll (suppressed 2.5s after user scroll, entirely while a selection is up) · `activeSegVisible` (out) · `scrollToActive` (in) · `hotkey` (out) · `selection_start` / `play_from` (out) · `findTranscript` (in) / `findResult` (out) · `requestSegmentWindow` / `segmentWindow`.
+`mediaTime` (in; posted only when the playing segment changes, and once after `ready`) → highlight active `.seg` + auto-scroll (suppressed 2.5s after user scroll, entirely while a selection is up) · `activeSegVisible` (out) · `scrollToActive` (in) · `hotkey` (out) · `selection_start` / `play_from` (out) · `findTranscript` (in) / `findResult` (out) · `requestSegmentWindow` / `segmentWindow`.
 
 ### Transcript interaction contract
 Reading a transcript means touching it constantly, so touch must be cheap and playback must never move under the finger.

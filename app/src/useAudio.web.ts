@@ -13,11 +13,13 @@ export function useAudio(source: string): AudioControl {
   const [rate, setRate] = useState(1)
   const rateRef = useRef(1)
 
+  // ONE element for the life of the screen — same contract as the native backend:
+  // an empty source (a failed connection probe) is ignored, and a real change keeps
+  // the position and the play state instead of starting over paused at 0.
+  const loadedRef = useRef('')
   useEffect(() => {
-    if (!source) return
-    const a = new Audio(source)
+    const a = new Audio()
     a.preload = 'metadata'
-    a.playbackRate = rateRef.current // carry the chosen speed across source swaps
     ref.current = a
     const onTime = () => setPositionMs(a.currentTime * 1000)
     const onDur = () => setDurationMs((isFinite(a.duration) ? a.duration : 0) * 1000)
@@ -40,6 +42,20 @@ export function useAudio(source: string): AudioControl {
       a.src = ''
       ref.current = null
     }
+  }, [])
+
+  useEffect(() => {
+    const a = ref.current
+    if (!a || !source || source === loadedRef.current) return
+    const resumeAt = loadedRef.current ? a.currentTime : 0
+    const wasPlaying = !!loadedRef.current && !a.paused
+    loadedRef.current = source
+    a.src = source
+    a.addEventListener('loadedmetadata', () => {
+      a.playbackRate = rateRef.current // a new resource resets the rate
+      if (resumeAt > 0) a.currentTime = resumeAt
+      if (wasPlaying) a.play().catch(() => {})
+    }, { once: true })
   }, [source])
 
   return {
@@ -61,6 +77,7 @@ export function useAudio(source: string): AudioControl {
       if (ref.current) ref.current.playbackRate = r
       setRate(r)
     },
+    getPositionMs: () => (ref.current?.currentTime ?? 0) * 1000,
     // Web keeps its own <audio>; the tab stays alive when backgrounded, so no
     // native media session to claim. No-op to satisfy the shared interface.
     setLockScreen: () => {},
