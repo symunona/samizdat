@@ -2046,6 +2046,26 @@ async function runTranscriptPlayback(token, deviceId) {
     return null
   })
 
+  // Speed lives in its own row above the seek line: steppers either side of the
+  // value, and the value itself is the way back to 1×.
+  await check('player: speed steps by .1 and .01, and the value resets to 1×', async () => {
+    const value = () => page.evaluate(() => document.querySelector('[data-testid="rate-value"]')?.innerText ?? '')
+    const top = sel => page.evaluate(q => document.querySelector(q)?.getBoundingClientRect().top ?? -1, `[data-testid="${sel}"]`)
+    if ((await value()) !== '1×') return `the speed starts at "${await value()}", expected 1×`
+    await page.click('[data-testid="rate-step-0.1"]')
+    await page.click('[data-testid="rate-step-0.1"]')
+    await page.click('[data-testid="rate-step-0.01"]')
+    if ((await value()) !== '1.21×') return `+.1 +.1 +.01 reads "${await value()}", expected 1.21×`
+    await page.click('[data-testid="rate-step--0.1"]')
+    await page.click('[data-testid="rate-step--0.01"]')
+    if ((await value()) !== '1.1×') return `−.1 −.01 reads "${await value()}", expected 1.1×`
+    await page.click('[data-testid="rate-value"]')
+    if ((await value()) !== '1×') return `tapping the value reads "${await value()}", expected a reset to 1×`
+    const [speed, seek, play] = [await top('rate-value'), await top('seek-track'), await top('play-toggle')]
+    if (!(speed < seek && seek < play)) return `rows out of order: speed ${speed}, seek ${seek}, play ${play}`
+    return null
+  })
+
   await check('player: the transcript is told only when the line changes', async () => {
     await dragSeek(30, 1)
     if ((await activeSeg()) !== 0) return `at 0:01 the active line is ${await activeSeg()}, expected 0`

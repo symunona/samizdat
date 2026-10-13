@@ -71,17 +71,21 @@ type ParsedMsg = {
 // in-window fullscreen button to go bigger.
 const PLAYER_MAX_W = 720
 
-// Podcast playback-speed lever: a continuous 0.8×–2× range at 0.01 steps.
+// Podcast playback speed: 0.8×–2×, nudged by a fine and a coarse step.
 const RATE_MIN = 0.8
 const RATE_MAX = 2
-const RATE_RANGE = RATE_MAX - RATE_MIN
-const RATE_STEP = 0.01 // ± buttons fine-tune by this increment
-const KEY_RATE_STEP = 0.1 // keyboard [ / ] step, coarser than the ± buttons (VLC-style)
-const LEVER_H = 132 // px throw of the vertical lever
-const LEVER_THUMB_H = 12
+const RATE_FINE = 0.01
+const RATE_COARSE = 0.1 // also the keyboard [ / ] step (VLC-style)
+// Speed row, left to right around the value: coarse/fine down, coarse/fine up.
+const RATE_DOWN = [-RATE_COARSE, -RATE_FINE]
+const RATE_UP = [RATE_FINE, RATE_COARSE]
 
 function fmtRate(r: number): string {
   return `${parseFloat(r.toFixed(2))}×`
+}
+// ".01" / ".1" — the step a speed button applies, without its sign.
+function fmtStep(d: number): string {
+  return String(Math.abs(d)).replace(/^0/, '')
 }
 function clampRate(r: number): number {
   return Math.max(RATE_MIN, Math.min(RATE_MAX, Math.round(r * 100) / 100))
@@ -568,20 +572,9 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     if (playing) pause(); else play()
   }, [playing, play, pause])
 
-  // Speed dropup + lever. rateRef always holds the latest rate so the pan
-  // handlers (created once) read a fresh value at grant without re-binding.
-  const [speedOpen, setSpeedOpen] = useState(false)
+  // rateRef holds the latest rate so a burst of taps steps from the fresh value.
   const rateRef = useRef(rate)
   rateRef.current = rate
-  const dragStartRate = useRef(rate)
-  const leverPan = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: () => { dragStartRate.current = rateRef.current },
-    // Drag up = faster; a full lever throw spans the whole 0.8×–2× range.
-    onPanResponderMove: (_e, g) => setRate(clampRate(dragStartRate.current - (g.dy / LEVER_H) * RATE_RANGE)),
-  }), [setRate])
-  // ± buttons nudge the same rate by 0.01, clamped to the lever range.
   const stepRate = useCallback((delta: number) => setRate(clampRate(rateRef.current + delta)), [setRate])
 
   const handleAddNote = useCallback(() => {
@@ -641,8 +634,8 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       case 'ArrowRight': handleSkip(1000); return true
       case 'ArrowUp': handleSkip(10000); return true
       case 'ArrowDown': handleSkip(-10000); return true
-      case '[': stepRate(-KEY_RATE_STEP); return true
-      case ']': stepRate(KEY_RATE_STEP); return true
+      case '[': stepRate(-RATE_COARSE); return true
+      case ']': stepRate(RATE_COARSE); return true
       case '=': setRate(1); return true
       case 'n': case 'N': case 'a': case 'A': handleAddNote(); return true
       default: return false
@@ -1057,9 +1050,6 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
         ) : null}
         </View>
 
-      {/* Backdrop closes the speed dropup on an outside tap (full-screen). */}
-      {speedOpen ? <Pressable style={s.speedBackdrop} onPress={() => setSpeedOpen(false)} /> : null}
-
       {/* Way back from a jump: after any seek the amber flag marks where we left —
           this is the one tap that returns there (and back again). */}
       {jumpFromMs != null ? (
@@ -1071,9 +1061,36 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
       {/* ── Pinned footer control bar (does not scroll) ── */}
       <View style={[s.footer, { paddingBottom: insets.bottom }]}>
-        {/* Seek bar — the TOP of the footer, above the buttons. On the bottom edge it sat
-            inside Android's system-gesture zone, where a horizontal drag belongs to the
-            OS (app switch) and never reaches the app. Left time · scrub track · right time. */}
+        {/* Speed row: step down · value (tap = back to 1×) · step up, offline at the edge. */}
+        <View style={s.footerSpeed}>
+          {RATE_DOWN.map(d => (
+            <Pressable key={d} onPress={() => stepRate(d)} style={s.rateBtn} hitSlop={4} testID={`rate-step-${d}`}>
+              <Text style={s.skipText} selectable={false}>−{fmtStep(d)}</Text>
+            </Pressable>
+          ))}
+          <Pressable onPress={() => setRate(1)} style={s.speedPill} hitSlop={4} testID="rate-value" accessibilityLabel="Reset speed to 1×">
+            <Text style={s.speedText} selectable={false}>{fmtRate(rate)}</Text>
+          </Pressable>
+          {RATE_UP.map(d => (
+            <Pressable key={d} onPress={() => stepRate(d)} style={s.rateBtn} hitSlop={4} testID={`rate-step-${d}`}>
+              <Text style={s.skipText} selectable={false}>+{fmtStep(d)}</Text>
+            </Pressable>
+          ))}
+          {Platform.OS !== 'web' ? (
+            <View style={s.footerOffline}>
+              <OfflineMediaButton
+                state={offline.state}
+                busy={offline.busy}
+                percent={offline.percent}
+                sizeBytes={offline.sizeBytes}
+                onPick={handleOfflinePick}
+              />
+            </View>
+          ) : null}
+        </View>
+        {/* Seek bar — above the buttons. On the bottom edge it sat inside Android's
+            system-gesture zone, where a horizontal drag belongs to the OS (app switch)
+            and never reaches the app. Left time · scrub track · right time. */}
         <View style={s.footerSeek}>
           <Text style={[s.time, scrubMs != null && s.timeScrub]} testID="seek-time">{fmtTime(shownMs)}</Text>
           <View style={s.scrub}>
@@ -1115,7 +1132,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
           </View>
           <Text style={s.time}>{fmtTime(durationMs)}</Text>
         </View>
-        {/* Buttons row: skips · big play/pause · skips · note · offline · speed. */}
+        {/* Buttons row: skips · big play/pause · skips · note. */}
         <View style={s.footerBtns}>
           {SKIPS.slice(0, 2).map(sk => (
             <Pressable key={`${sk.icon}${sk.delta}`} onPress={() => handleSkip(sk.delta)} style={s.skipBtn} hitSlop={6}>
@@ -1135,34 +1152,6 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
           <Pressable onPress={handleAddNote} style={s.iconBtn} hitSlop={8}>
             <Ionicons name="create-outline" size={22} color={theme.colors.accent} />
           </Pressable>
-          {Platform.OS !== 'web' ? (
-            <OfflineMediaButton
-              state={offline.state}
-              busy={offline.busy}
-              percent={offline.percent}
-              sizeBytes={offline.sizeBytes}
-              onPick={handleOfflinePick}
-            />
-          ) : null}
-          <View style={s.speedWrap}>
-            {/* Dropup opens UPWARD into the room above the footer. */}
-            {speedOpen ? (
-              <View style={s.speedPanel}>
-                <Text style={s.speedPanelLabel} selectable={false}>{fmtRate(rate)}</Text>
-                <View style={s.speedStepRow}>
-                  <IconButton name="remove" onPress={() => stepRate(-RATE_STEP)} color={theme.colors.accent} />
-                  <IconButton name="add" onPress={() => stepRate(RATE_STEP)} color={theme.colors.accent} />
-                </View>
-                <View style={s.leverTrack} {...leverPan.panHandlers}>
-                  <View style={[s.leverFill, { height: ((rate - RATE_MIN) / RATE_RANGE) * LEVER_H }]} />
-                  <View style={[s.leverThumb, { bottom: ((rate - RATE_MIN) / RATE_RANGE) * (LEVER_H - LEVER_THUMB_H) }]} />
-                </View>
-              </View>
-            ) : null}
-            <Pressable onPress={() => setSpeedOpen(o => !o)} style={s.speedPill} hitSlop={8}>
-              <Text style={s.speedText} selectable={false}>{fmtRate(rate)}</Text>
-            </Pressable>
-          </View>
         </View>
 
       </View>
@@ -1250,7 +1239,19 @@ function buildStyles(t: Theme) {
       gap: t.spacing.sm, rowGap: 6,
       paddingHorizontal: t.spacing.md, paddingTop: 6, paddingBottom: t.spacing.sm,
     },
-    // Seek bar (top of footer — clear of the system gesture zone).
+    // Speed row (top of footer). Centered on the value; the offline face is pinned
+    // to the edge so it cannot pull the steppers off-centre.
+    footerSpeed: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+      paddingHorizontal: t.spacing.md, paddingTop: t.spacing.sm,
+    },
+    footerOffline: { position: 'absolute', right: t.spacing.md, top: t.spacing.sm, bottom: 0, justifyContent: 'center' },
+    rateBtn: {
+      minWidth: 44, paddingVertical: 6, borderRadius: 8, alignItems: 'center',
+      borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.background,
+      userSelect: 'none',
+    },
+    // Seek bar (middle of footer — clear of the system gesture zone).
     footerSeek: {
       flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,
       paddingHorizontal: t.spacing.md, paddingTop: t.spacing.xs,
@@ -1288,34 +1289,14 @@ function buildStyles(t: Theme) {
     markJump: { position: 'absolute', width: 2, height: 14, top: 9, marginLeft: -1, borderRadius: 1, backgroundColor: MARK_JUMP },
     markAnn: { position: 'absolute', width: 3, height: 10, top: 11, marginLeft: -1.5, borderRadius: 1.5, backgroundColor: MARK_ANN },
     iconBtn: { padding: 6, flexShrink: 0 },
-    speedWrap: { flexShrink: 0, position: 'relative' },
     // Fixed width so the pill never reflows as the value changes width
     // ("2×" vs "1.25×"); tabular-nums keeps the digits aligned inside it.
     speedPill: {
-      width: 46, paddingVertical: 3, borderRadius: 10, alignItems: 'center',
-      borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.background,
+      width: 60, paddingVertical: 6, borderRadius: 10, alignItems: 'center',
+      borderWidth: 1, borderColor: t.colors.accent, backgroundColor: t.colors.background,
       userSelect: 'none',
     },
-    speedText: { color: t.colors.accent, fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'], userSelect: 'none' },
-    speedBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-    // Dropup floats above the pill (bottom-anchored to the seeker row).
-    // Fixed width keeps the panel stable regardless of the value string.
-    speedPanel: {
-      position: 'absolute', bottom: 46, right: 0, width: 96, alignItems: 'center', gap: 8,
-      paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12,
-      backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
-      shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 3 }, elevation: 8,
-      userSelect: 'none',
-    },
-    speedPanelLabel: { color: t.colors.accent, fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'], userSelect: 'none' },
-    speedStepRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    leverTrack: {
-      width: 28, height: LEVER_H, borderRadius: 14, overflow: 'hidden',
-      backgroundColor: t.colors.background, borderWidth: 1, borderColor: t.colors.border,
-      userSelect: 'none',
-    },
-    leverFill: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(232,116,59,0.18)' },
-    leverThumb: { position: 'absolute', left: 2, right: 2, height: LEVER_THUMB_H, borderRadius: 5, backgroundColor: t.colors.accent },
+    speedText: { color: t.colors.accent, fontSize: 14, fontWeight: '700', fontVariant: ['tabular-nums'], userSelect: 'none' },
 
     // ── Tabs ──
     tabBar: {
