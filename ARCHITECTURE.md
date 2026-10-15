@@ -79,7 +79,7 @@ flowchart LR
 - **One Router owns every endpoint** (`server/internal/llm`). Providers are discovered from `config.toml`, env keys, and the well-known local Ollama. A step names a **provider id + model** — never a URL, never a key.
 - Two adapters: **Anthropic native** + **OpenAI-compatible** (covers OpenAI, OpenRouter, Ollama, LM Studio, llama.cpp).
 - **Chain vs pin:** an empty provider walks primary → fallbacks (transport errors only). A named provider is **pinned and never falls back**.
-- Tiers: triage → local or `claude-haiku-4-5`; breakdown → `claude-sonnet-4-6`; digest/draft → `claude-opus-4-8`.
+- Tiers: triage → local or `claude-haiku-5-5`; breakdown → `claude-sonnet-4-6`; digest/draft → `claude-opus-4-8`.
 - Long documents chunk by band (single call / partition / big-model) sized from the endpoint's real context.
 - **Privacy rule:** credentialed/paywalled jobs route to a local provider, never cloud.
 - Health is the outcome of the last *real* call (nothing probes on a render); `just check-llm` is the one active probe.

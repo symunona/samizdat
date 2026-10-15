@@ -34,8 +34,10 @@ type Params struct {
 	MaxTokens int      // 0 = the adapter's default
 	Temp      *float64 // nil = the provider's default (never guess a number)
 	// ReplySchema is the JSON Schema the reply must satisfy, for a caller that
-	// parses it. Only a local openai_compat box is sent it (see openai_compat.go);
-	// every other endpoint ignores it, so the caller's tolerant parser stays.
+	// parses it. A local openai_compat box (openai_compat.go) and an Anthropic
+	// model with structured outputs (anthropicCaps) are sent it; every other
+	// endpoint ignores it, so the caller's tolerant parser stays. Every object in
+	// it must carry additionalProperties:false — Anthropic rejects it otherwise.
 	ReplySchema json.RawMessage
 }
 

@@ -28,14 +28,16 @@ type topicHighlight struct {
 	Body  string `json:"body"`
 }
 
-// topicsReplySchema is the reply as a local box is held to it
+// topicsReplySchema is the reply as a constrained model is held to it
 // (llm.Params.ReplySchema): the "highlights" wrapper around topicHighlight.
 var topicsReplySchema = json.RawMessage(`{
   "type": "object",
+  "additionalProperties": false,
   "required": ["highlights"],
   "properties": {
     "highlights": {"type": "array", "items": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["title", "body"],
       "properties": {
         "title": {"type": "string"},

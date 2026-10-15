@@ -21,15 +21,17 @@ func jsonKeys(v any) []string {
 
 // objectSchema is the slice of JSON Schema the reply schemas use.
 type objectSchema struct {
-	Type       string                     `json:"type"`
-	Required   []string                   `json:"required"`
-	Properties map[string]json.RawMessage `json:"properties"`
-	Items      json.RawMessage            `json:"items"`
+	Type                 string                     `json:"type"`
+	AdditionalProperties *bool                      `json:"additionalProperties"`
+	Required             []string                   `json:"required"`
+	Properties           map[string]json.RawMessage `json:"properties"`
+	Items                json.RawMessage            `json:"items"`
 }
 
 // requireObject decodes an object schema and fails unless it declares and
 // requires exactly keys — a key the parser reads but the grammar leaves out is a
-// field a constrained model can never write.
+// field a constrained model can never write — and closes it with
+// additionalProperties:false, which Anthropic structured outputs require.
 func requireObject(t *testing.T, name string, raw json.RawMessage, keys []string) objectSchema {
 	t.Helper()
 	var s objectSchema
@@ -44,6 +46,9 @@ func requireObject(t *testing.T, name string, raw json.RawMessage, keys []string
 	slices.Sort(s.Required)
 	if s.Type != "object" || !slices.Equal(declared, keys) || !slices.Equal(s.Required, keys) {
 		t.Fatalf("%s: type %q declares %v, requires %v; the parser reads %v", name, s.Type, declared, s.Required, keys)
+	}
+	if s.AdditionalProperties == nil || *s.AdditionalProperties {
+		t.Fatalf("%s: additionalProperties must be false", name)
 	}
 	return s
 }

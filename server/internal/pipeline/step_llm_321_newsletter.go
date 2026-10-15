@@ -28,14 +28,16 @@ type nl321Highlight struct {
 	Body  string `json:"body"`
 }
 
-// nl321ReplySchema is the reply as a local box is held to it
+// nl321ReplySchema is the reply as a constrained model is held to it
 // (llm.Params.ReplySchema): the "highlights" wrapper around nl321Highlight.
 var nl321ReplySchema = json.RawMessage(`{
   "type": "object",
+  "additionalProperties": false,
   "required": ["highlights"],
   "properties": {
     "highlights": {"type": "array", "items": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["kind", "title", "body"],
       "properties": {
         "kind": {"type": "string"},

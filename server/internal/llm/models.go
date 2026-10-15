@@ -132,6 +132,7 @@ func (p *Provider) listFromDataArray(ctx context.Context, url string) ([]Model, 
 // breakdown → Sonnet, digest/draft → Opus). Used only when no key can list them.
 func anthropicTierModels() []Model {
 	return []Model{
+		{ID: "claude-haiku-5-5", Label: "Claude Haiku 5.5"},
 		{ID: "claude-haiku-4-5-20251001", Label: "Claude Haiku 4.5"},
 		{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6"},
 		{ID: "claude-opus-4-8", Label: "Claude Opus 4.8"},

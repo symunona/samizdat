@@ -102,16 +102,18 @@ type aiNewsletterResponse struct {
 	Highlights []aiNewsletterHighlight `json:"highlights"`
 }
 
-// aiNewsletterReplySchema is aiNewsletterResponse as a local box is held to it
+// aiNewsletterReplySchema is aiNewsletterResponse as a constrained model is held to it
 // (llm.Params.ReplySchema). body is pinned to the array the prompt documents:
 // unconstrained, gemma4 returned it as one ";"-joined string.
 var aiNewsletterReplySchema = json.RawMessage(`{
   "type": "object",
+  "additionalProperties": false,
   "required": ["summary", "highlights"],
   "properties": {
     "summary": {"type": "array", "items": {"type": "string"}},
     "highlights": {"type": "array", "items": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["kind", "title", "body"],
       "properties": {
         "kind": {"type": "string"},

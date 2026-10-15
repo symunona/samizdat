@@ -30,7 +30,7 @@ Banned fragments: `Content`, `Memory`, `Source`, `Parsed*`, `Cron`, `Url`.
 
 ## Locked stack
 - **Server:** Go · `modernc.org/sqlite` (pure Go) · `sqlc` (portable SQL — a Postgres swap stays a driver change) · CertMagic · queue = the `jobs` table.
-- **LLM:** two adapters — Anthropic native + OpenAI-compatible (OpenAI, OpenRouter, Ollama, LM Studio, llama.cpp). **One router owns every endpoint** (`server/internal/llm`); a step names a provider id, never a URL or key. Tiers: triage → local/`claude-haiku-4-5`, breakdown → `claude-sonnet-4-6`, digest → `claude-opus-4-8`. `just check-llm` probes them all.
+- **LLM:** two adapters — Anthropic native + OpenAI-compatible (OpenAI, OpenRouter, Ollama, LM Studio, llama.cpp). **One router owns every endpoint** (`server/internal/llm`); a step names a provider id, never a URL or key. Tiers: triage → local/`claude-haiku-5-5`, breakdown → `claude-sonnet-4-6`, digest → `claude-opus-4-8`. `just check-llm` probes them all.
 - **App:** Expo (RN + RN Web). All state in one local SQLite behind `app/src/db/`. CodeMirror 6-in-WebView for anchored edits.
 - **Clipper:** MV3; adapters ship as config/data, never remote code.
 - **Auth:** no accounts. Owner passphrase (Argon2id) → device tokens (Bearer, revocable) → CLI local trust.

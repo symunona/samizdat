@@ -21,6 +21,50 @@ type anthropicClient struct {
 // there is no "omit it" option, so this IS the effective value when a caller sets none.
 const anthropicDefaultMaxTokens = 4096
 
+// anthropicDefaultModel serves a call that names no model on an endpoint with no
+// default_model of its own.
+const anthropicDefaultModel = "claude-haiku-5-5"
+
+// anthropicModelCaps is how one model's Messages API surface differs from the
+// Haiku 4.5 / Sonnet / Opus 4.x one this adapter was written against. The zero
+// value is that baseline: send what the caller set, nothing more.
+type anthropicModelCaps struct {
+	// thinksByDefault: the model runs adaptive thinking unless told not to. It is
+	// sent thinking:disabled, so hidden tokens neither bill nor eat max_tokens —
+	// a 4096 cap a JSON step's reply already brushes (toleratesTruncatedReply).
+	thinksByDefault bool
+	// fixedSampling: any non-default temperature is a 400, so Params.Temp is
+	// dropped and Usage reports it unset.
+	fixedSampling bool
+	// replySchema: Params.ReplySchema goes out as output_config.format, so the
+	// reply is constrained to the step's JSON (a Haiku 4.5 llm_ai_newsletter
+	// reply was invalid JSON on its first attempt, 2026-10-11).
+	replySchema bool
+}
+
+// anthropicCaps is the one place a model id changes what goes on the wire.
+func anthropicCaps(model string) anthropicModelCaps {
+	if model == "claude-haiku-5-5" {
+		return anthropicModelCaps{thinksByDefault: true, fixedSampling: true, replySchema: true}
+	}
+	return anthropicModelCaps{}
+}
+
+// anthropicThinking and anthropicOutputConfig are the request fields only a
+// model with the matching anthropicModelCaps is sent.
+type anthropicThinking struct {
+	Type string `json:"type"`
+}
+
+type anthropicOutputConfig struct {
+	Format anthropicReplyFormat `json:"format"`
+}
+
+type anthropicReplyFormat struct {
+	Type   string          `json:"type"`
+	Schema json.RawMessage `json:"schema"`
+}
+
 func (c *anthropicClient) Complete(ctx context.Context, p Params, messages []Message) (reply string, u Usage, err error) {
 	// Every return path feeds the provider-health registry (see health.go) — that
 	// is the only place "Anthropic is out of credits" ever becomes visible.
@@ -31,7 +75,7 @@ func (c *anthropicClient) Complete(ctx context.Context, p Params, messages []Mes
 		model = c.defaultModel
 	}
 	if model == "" {
-		model = "claude-haiku-4-5-20251001"
+		model = anthropicDefaultModel
 	}
 	maxTokens := p.MaxTokens
 	if maxTokens <= 0 {
@@ -43,17 +87,33 @@ func (c *anthropicClient) Complete(ctx context.Context, p Params, messages []Mes
 		Content string `json:"content"`
 	}
 	type reqBody struct {
-		Model       string   `json:"model"`
-		MaxTokens   int      `json:"max_tokens"`
-		Temperature *float64 `json:"temperature,omitempty"`
-		Messages    []antMsg `json:"messages"`
+		Model        string                 `json:"model"`
+		MaxTokens    int                    `json:"max_tokens"`
+		Temperature  *float64               `json:"temperature,omitempty"`
+		Thinking     *anthropicThinking     `json:"thinking,omitempty"`
+		OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
+		Messages     []antMsg               `json:"messages"`
 	}
 
 	msgs := make([]antMsg, len(messages))
 	for i, m := range messages {
 		msgs[i] = antMsg(m)
 	}
-	body, _ := json.Marshal(reqBody{Model: model, MaxTokens: maxTokens, Temperature: p.Temp, Messages: msgs})
+	rb := reqBody{Model: model, MaxTokens: maxTokens, Temperature: p.Temp, Messages: msgs}
+	caps := anthropicCaps(model)
+	if caps.thinksByDefault {
+		rb.Thinking = &anthropicThinking{Type: "disabled"}
+	}
+	if caps.fixedSampling {
+		rb.Temperature = nil
+	}
+	if caps.replySchema && len(p.ReplySchema) > 0 {
+		rb.OutputConfig = &anthropicOutputConfig{Format: anthropicReplyFormat{Type: "json_schema", Schema: p.ReplySchema}}
+	}
+	body, err := json.Marshal(rb)
+	if err != nil {
+		return "", Usage{}, fmt.Errorf("anthropic: encode request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		trimSlash(c.baseURL)+"/v1/messages", bytes.NewReader(body))
@@ -101,7 +161,7 @@ func (c *anthropicClient) Complete(ctx context.Context, p Params, messages []Mes
 		InputTokens:  out.Usage.InputTokens,
 		OutputTokens: out.Usage.OutputTokens,
 		MaxTokens:    maxTokens,
-		Temp:         p.Temp,
+		Temp:         rb.Temperature,
 		Truncated:    out.StopReason == "max_tokens",
 	}
 	for _, c := range out.Content {

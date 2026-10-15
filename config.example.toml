@@ -31,7 +31,7 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 # provider      = "anthropic"                 # or "openai_compat" (OpenAI cloud / Ollama / LM Studio)
 # api_key       = ""                           # or env ANTHROPIC_API_KEY / OPENAI_API_KEY
 # base_url      = "http://localhost:11434/v1"  # openai_compat only (Ollama default)
-# default_model = "claude-haiku-4-5-20251001"
+# default_model = "claude-haiku-5-5"
 
 # Fallback chain: when the primary fails at the TRANSPORT level (connection refused,
 # timeout, DNS, or 5xx) the next provider is tried in order. Real API errors (4xx) do
@@ -49,7 +49,7 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 #
 # [[llm.fallback]]
 # provider      = "anthropic"                  # api_key from ANTHROPIC_API_KEY env
-# default_model = "claude-haiku-4-5-20251001"
+# default_model = "claude-haiku-5-5"
 #
 # Ollama's default context is 4096 tokens and it TRUNCATES silently — a summarize step
 # feeds up to 12k chars, so a stock model never sees the end of a long article. The
@@ -93,8 +93,8 @@ dev = false                     # true = plain HTTP on localhost:8787, no cert
 #
 # [llm.summarize.big]                      # the escalation target, and the large band
 # provider   = "anthropic"
-# model      = "claude-haiku-4-5-20251001"
-# ctx_tokens = 200000
+# model      = "claude-haiku-5-5"
+# ctx_tokens = 200000                     # Haiku 5.5 bills 5x per token past a 100K prompt
 # max_tokens = 4096
 #
 # Per-step overrides. The key is a step kind (`llm_summarize`, `llm_topics`,
