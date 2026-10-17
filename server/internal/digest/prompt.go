@@ -1,6 +1,7 @@
 package digest
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,27 @@ Answer with at most {{top_n}} topics, most important first.
 Return ONLY this JSON, no prose around it:
 {"topics":[{"title":"…","why":"…","refs":["17.2","31"]}]}
 `
+
+// topicsReplySchema is promptContract's reply as a constrained model is held to
+// it (llm.Params.ReplySchema). Unconstrained, Haiku 5.5 answered in prose often
+// enough to fail whole runs.
+var topicsReplySchema = json.RawMessage(`{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["topics"],
+  "properties": {
+    "topics": {"type": "array", "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "why", "refs"],
+      "properties": {
+        "title": {"type": "string"},
+        "why": {"type": "string"},
+        "refs": {"type": "array", "items": {"type": "string"}}
+      }
+    }}
+  }
+}`)
 
 // maxTopicRefs caps the refs one topic keeps. The cleanest grouping in the eval
 // cited 7; Haiku, told "at most 6", cited 25 — so the prompt asks and the server

@@ -167,7 +167,7 @@ func (r Runner) answer(ctx context.Context, d Digest, issueID, start, end string
 
 	covered := r.covered(ctx, d.ID, issueID)
 	ctxTokens, replyTokens := window(r.Router.Summarize(Kind), d)
-	route := llm.Route{Provider: d.Provider, Params: llm.Params{Model: d.Model}}
+	route := llm.Route{Provider: d.Provider, Params: llm.Params{Model: d.Model, ReplySchema: topicsReplySchema}}
 	rep := progress.From(ctx)
 
 	var topics []Topic

@@ -2,6 +2,7 @@ package digest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -140,6 +141,26 @@ Return ONLY this JSON, no prose around it:
 {"diffs":[{"previous":"…","diff":"…","refs":["h4"]}]}
 `
 
+// diffsReplySchema is diffContract's reply as a constrained model is held to it.
+// Unconstrained, Haiku 5.5 answered this pass in prose two runs in three.
+var diffsReplySchema = json.RawMessage(`{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["diffs"],
+  "properties": {
+    "diffs": {"type": "array", "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous", "diff", "refs"],
+      "properties": {
+        "previous": {"type": "string"},
+        "diff": {"type": "string"},
+        "refs": {"type": "array", "items": {"type": "string"}}
+      }
+    }}
+  }
+}`)
+
 func diffHead(title string) string {
 	return strings.NewReplacer("{{title}}", title, "{{max_refs}}", strconv.Itoa(maxHistoryRefs)).Replace(diffContract)
 }
@@ -237,7 +258,9 @@ func (r Runner) diffTopics(ctx context.Context, c diffCall, topics []Topic, prov
 			dropped++
 			continue
 		}
-		reply, usage, err := pipeline.MeteredComplete(ctx, r.Q, r.Router, Kind, c.route, nil, renderPrompt(head, earlier))
+		route := c.route
+		route.Params.ReplySchema = diffsReplySchema
+		reply, usage, err := pipeline.MeteredComplete(ctx, r.Q, r.Router, Kind, route, nil, renderPrompt(head, earlier))
 		if err != nil {
 			return diffs, dropped, err //nolint:wrapcheck // MeteredComplete already names the caller
 		}
