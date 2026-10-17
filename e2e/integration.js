@@ -2558,6 +2558,81 @@ async function runPageMode(token, deviceId) {
     return up && up.idx === before.idx ? null : `PageUp: page index went ${down.idx} → ${up && up.idx}`
   })
 
+  await check('page mode: saving an annotation stays on the page', async () => {
+    // The hard case: a page whose top paragraph began on the previous one. Its box
+    // starts a column back, so anchoring the reader on that element jumped back a page.
+    const press = (k) => page.evaluate((key) => {
+      const ifr = document.querySelector('iframe')
+      ifr.contentDocument.dispatchEvent(new ifr.contentWindow.KeyboardEvent('keydown', { key, bubbles: true }))
+    }, k)
+    // The checks after this one count pages from the start, at the suite's size.
+    const backToFirstPage = async () => {
+      for (let p = await pageTotal(page); p && p.idx > 1; p = await pageTotal(page)) {
+        await press('PageUp')
+        await sleep(400)
+      }
+      await page.setViewport({ width: 900, height: 700 })
+      await sleep(800)
+    }
+    const straddles = () => page.evaluate(() => {
+      const d = document.querySelector('iframe').contentDocument
+      const r = d.body.getBoundingClientRect()
+      const c = d.caretRangeFromPoint(r.left + 32, r.top + 24)
+      const p = c && c.startContainer.parentElement && c.startContainer.parentElement.closest('p')
+      return !!p && p.getBoundingClientRect().left < r.left
+    })
+    // At 900×700 every page of this fixture happens to break between sections;
+    // 620 tall breaks mid-paragraph on several.
+    await page.setViewport({ width: 900, height: 620 })
+    await sleep(800)
+    const { total } = await pageTotal(page)
+    let found = false
+    for (let i = 0; i < total && !(found = await straddles()); i++) {
+      await press('PageDown')
+      await sleep(500)
+    }
+    if (!found) {
+      await backToFirstPage()
+      return 'no page starts mid-paragraph — the fixture cannot exercise the bug'
+    }
+    const before = await pageTotal(page)
+    await page.evaluate(() => {
+      const ifr = document.querySelector('iframe')
+      const d = ifr.contentDocument, w = ifr.contentWindow
+      const br = d.body.getBoundingClientRect()
+      const c = d.caretRangeFromPoint(br.left + br.width / 2, br.top + br.height / 2)
+      const t = c.startContainer
+      const r = d.createRange()
+      r.setStart(t, Math.max(0, Math.min(c.startOffset, t.length - 12)))
+      r.setEnd(t, Math.min(t.length, r.startOffset + 12))
+      const sel = w.getSelection(); sel.removeAllRanges(); sel.addRange(r)
+      d.dispatchEvent(new w.MouseEvent('mouseup', { bubbles: true }))
+    })
+    await page.evaluate(() => {
+      const ifr = document.querySelector('iframe')
+      ifr.contentDocument.getElementById('ann-btn')
+        .dispatchEvent(new ifr.contentWindow.MouseEvent('click', { bubbles: true }))
+    })
+    await page.waitForSelector('textarea', { timeout: 6000 })
+    await page.evaluate(() => {
+      const ta = document.querySelector('textarea')
+      Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set.call(ta, 'page-mode note')
+      ta.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await page.focus('textarea')
+    await page.keyboard.down('Control')
+    await page.keyboard.press('Enter')
+    await page.keyboard.up('Control')
+    try {
+      await page.waitForFunction(() =>
+        document.querySelector('iframe').contentDocument.querySelector('mark[data-noted]'), { timeout: 6000 })
+    } catch { return 'no noted <mark> rendered after save' }
+    await sleep(600)
+    const after = await pageTotal(page)
+    await backToFirstPage()
+    return after && after.idx === before.idx ? null : `save moved the page ${before.idx} → ${after && after.idx}`
+  })
+
   await check('page mode: keys pressed on the host around the frame turn the page', async () => {
     // Real key presses with focus OUTSIDE the iframe: they land on the host window,
     // which must forward them — the frame's own listener never sees them.
@@ -2689,6 +2764,17 @@ async function runPageMode(token, deviceId) {
 
   await check('page mode: a narrower viewport recalculates the page count', async () => {
     const before = await pageTotal(page)
+    // The character the reader is on (top-left of the page) must still be on screen.
+    const probe = await page.evaluate(() => {
+      const d = document.querySelector('iframe').contentDocument
+      const r = d.body.getBoundingClientRect()
+      const c = d.caretRangeFromPoint(r.left + 32, r.top + 24)
+      const one = d.createRange()
+      one.setStart(c.startContainer, c.startOffset)
+      one.setEnd(c.startContainer, Math.min(c.startContainer.length, c.startOffset + 1))
+      window.__e2eProbe = one
+      return (c.startContainer.nodeValue || '').slice(c.startOffset, c.startOffset + 20)
+    })
     await page.setViewport({ width: 480, height: 620 })
     await sleep(1200) // > the 150ms resize throttle
     const after = await pageTotal(page)
@@ -2696,7 +2782,13 @@ async function runPageMode(token, deviceId) {
     if (after.total <= before.total) {
       return `narrower viewport did not add pages (${before.total} → ${after.total})`
     }
-    return after.idx >= 1 && after.idx <= after.total ? null : `page index ${after.idx} out of range`
+    if (after.idx < 1 || after.idx > after.total) return `page index ${after.idx} out of range`
+    const seen = await page.evaluate(() => {
+      const d = document.querySelector('iframe').contentDocument
+      const rect = window.__e2eProbe.getClientRects()[0]
+      return !!rect && rect.left >= 0 && rect.right <= d.documentElement.clientWidth
+    })
+    return seen ? null : `"${probe}" was on screen before the resize, not after (page ${after.idx}/${after.total})`
   })
 
   await check('page mode: switching to Flow restores continuous scrolling', async () => {

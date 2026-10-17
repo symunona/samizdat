@@ -606,7 +606,8 @@ function setAnnotations(anns: AnnData[]): void {
     if (id) unmarkSegAnnotation(id)
   })
   for (const a of anns) { applyMark(a); markSegAnnotation(a) }
-  setTimeout(relayout, 50)
+  // Marks never reflow text, so the pages stand; only the gutter dots move.
+  updateGutter()
 }
 
 // ── Transcript (video documents) ───────────────────────────────────────────────
@@ -1221,23 +1222,76 @@ function layoutPages(): void {
   _pageCount = Math.max(1, Math.round((b.scrollWidth - b.clientWidth) / _pageStep) + 1)
 }
 
-function pageOfElement(el: Element): number {
+function pageOfLeft(left: number): number {
   if (_pageStep <= 0) return 0
   const b = document.body
   const origin = b.getBoundingClientRect().left + parseFloat(getComputedStyle(b).paddingLeft)
-  const x = el.getBoundingClientRect().left - origin + b.scrollLeft
+  const x = left - origin + b.scrollLeft
   return Math.max(0, Math.min(_pageCount - 1, Math.floor(x / _pageStep + 0.01)))
 }
 
-// The element at the top-left of what the reader is currently looking at — the
-// anchor we keep them on across a repagination or a mode switch. Captured whenever
-// the scroll settles, because a `resize` fires AFTER the browser has already
-// reflowed: by then the old reading position is gone and can only come from state.
-let _anchor: Element | null = null
-function readingAnchor(): Element | null {
+// An element's FIRST page. A paragraph that runs over a page break spans two
+// columns, and its bounding box starts on the earlier one.
+function pageOfElement(el: Element): number {
+  return pageOfLeft(el.getBoundingClientRect().left)
+}
+
+// The text position at the top-left of what the reader is currently looking at —
+// the anchor we keep them on across a repagination or a mode switch. A character,
+// not its element: a paragraph continued from the previous page would put the
+// reader back one page. Held as a node + offset, not a live Range: re-marking moves
+// text nodes out of their <mark>s, which collapses a Range onto the parent element.
+// Captured whenever the scroll settles, because a `resize` fires AFTER the browser
+// has already reflowed: by then the old reading position is gone and can only come
+// from state.
+type Caret = { node: Text; offset: number }
+let _anchor: Caret | null = null
+function readingAnchor(): Caret | null {
   const r = document.body.getBoundingClientRect()
-  const el = document.elementFromPoint(Math.round(r.left + 32), Math.round(r.top + 24))
-  return el && el !== document.body && el !== document.documentElement ? el : null
+  const x = Math.round(Math.max(r.left, 0) + 32)
+  const y = Math.round(Math.max(r.top, 0) + 24)
+  let node: Node | null = null
+  let offset = 0
+  if (document.caretRangeFromPoint) {
+    const cr = document.caretRangeFromPoint(x, y)
+    if (cr) { node = cr.startContainer; offset = cr.startOffset }
+  } else {
+    const cp = (document as Document & { caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null })
+      .caretPositionFromPoint?.(x, y)
+    if (cp) { node = cp.offsetNode; offset = cp.offset }
+  }
+  if (!node) return null
+  if (node.nodeType === Node.TEXT_NODE) return { node: node as Text, offset }
+  // Between elements (an image, a card edge): the next text from there.
+  const w = visibleWalker()
+  w.currentNode = node.childNodes[offset] ?? node
+  return w.nextNode() ? { node: w.currentNode as Text, offset: 0 } : null
+}
+
+// One character at the caret, as a Range. A marked-up passage splits its text node
+// (the anchor keeps the first piece), so an offset past the end continues into the
+// following text. One character, not a collapsed caret: at a soft line break the
+// collapsed caret may report the end of the previous line — the previous page.
+function anchorRange(c: Caret): Range | null {
+  if (!c.node.isConnected) return null
+  const w = visibleWalker()
+  w.currentNode = c.node
+  let node: Text = c.node
+  let offset = c.offset
+  while (offset >= node.length) {
+    if (!w.nextNode()) return null
+    offset -= node.length
+    node = w.currentNode as Text
+  }
+  const r = document.createRange()
+  r.setStart(node, offset)
+  r.setEnd(node, offset + 1)
+  return r
+}
+
+function pageOfAnchor(c: Caret): number | null {
+  const rect = anchorRange(c)?.getClientRects()[0]
+  return rect ? pageOfLeft(rect.left) : null
 }
 
 // Bring an element into view in whichever mode is active.
@@ -1268,14 +1322,15 @@ function setPageMode(on: boolean): void {
   document.documentElement.classList.toggle('pg', on)
   if (on) {
     layoutPages()
-    goToPage(anchor ? pageOfElement(anchor) : 0, 'auto')
+    goToPage((anchor && pageOfAnchor(anchor)) ?? 0, 'auto')
     _anchor = anchor
   } else {
     _pageIdx = 0
     _pageStep = 0
     _pageCount = 1
     _anchor = null
-    if (anchor) anchor.scrollIntoView({ block: 'start' })
+    const rect = anchor && anchorRange(anchor)?.getClientRects()[0]
+    if (rect) window.scrollTo(0, window.scrollY + rect.top)
   }
   updateGutter()
 }
@@ -1325,7 +1380,10 @@ function relayout(): void {
     const anchor = _anchor
     const frac = _pageCount > 1 ? _pageIdx / (_pageCount - 1) : 0
     layoutPages()
-    goToPage(anchor && anchor.isConnected ? pageOfElement(anchor) : Math.round(frac * (_pageCount - 1)), 'auto')
+    goToPage((anchor && pageOfAnchor(anchor)) ?? Math.round(frac * (_pageCount - 1)), 'auto')
+    // Still the same reading position. A relayout that leaves scrollLeft unchanged
+    // fires no scroll, so nothing would recapture it and the next one would guess.
+    _anchor = anchor
   }
   updateGutter()
 }
