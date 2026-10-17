@@ -6,10 +6,11 @@ config.toml
 config.local.*
 credentials.toml
 secrets.*
-# Canonical Android debug keystore (see just build-android) + the saved build node.
+# Canonical Android debug keystore (see just build-android) + the saved build node(s):
+# build-node.env is the active one, build-node.env.<name> are saved alternatives.
 # The keystore is the app's install-over identity — back it up outside the repo.
 /secrets/
-/config/build-node.env
+/config/build-node.env*
 /config/build-times.json
 *.db
 *.db-wal
