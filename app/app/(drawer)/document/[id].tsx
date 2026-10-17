@@ -368,8 +368,12 @@ export default function DocumentViewer() {
       } else {
         setSourceFeed(null)
       }
-      if (progress && progress.scroll_y > 0) {
-        savedProgressRef.current = progress.scroll_y
+      const scrollY = db.pendingProgress(id) ?? progress?.scroll_y ?? 0
+      if (scrollY > 0) {
+        // The store-first render usually beats this fetch: the viewer is already up and
+        // was initialised at the top, so seek it now — unless the reader has moved since.
+        if (!isDocLoadedRef.current) savedProgressRef.current = scrollY
+        else if (lastScrollFracRef.current === 0) sendToWebView({ type: 'scrollTo', fraction: scrollY })
       }
     } catch (e: unknown) {
       // Network hiccup / offline — fall back to the cached copy before erroring.
@@ -378,7 +382,7 @@ export default function DocumentViewer() {
     } finally {
       setLoading(false)
     }
-  }, [activeUrl, token, id, loadFromStore, applyHtml])
+  }, [activeUrl, token, id, loadFromStore, applyHtml, sendToWebView])
 
   useEffect(() => {
     // Store-first: render the cached copy instantly (snappy, offline-ready, and no flash
@@ -445,6 +449,7 @@ export default function DocumentViewer() {
     }
     if (msg.type === 'ready') {
       isDocLoadedRef.current = true
+      lastScrollFracRef.current = 0
       sendToWebView({
         type: 'init',
         doc: { title: doc?.title ?? '' },

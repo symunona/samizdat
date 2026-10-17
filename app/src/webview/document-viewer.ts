@@ -1001,9 +1001,10 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
 
 // ── Reading progress ──────────────────────────────────────────────────────────
 // One fraction (0–1) reported to the host regardless of mode: vertical scroll
-// position when scrolling, page index when paginated.
+// position when scrolling, page index when paginated. Starts at 0 so laying out
+// page 1 on load is not reported as a move — it would overwrite saved progress.
 
-let _lastFrac = -1
+let _lastFrac = 0
 function reportFraction(frac: number): void {
   const f = Math.min(1, Math.max(0, frac))
   if (Math.abs(f - _lastFrac) <= 0.01) return
@@ -1234,6 +1235,10 @@ function revealElement(el: Element): void {
 
 function goToPage(i: number, behavior: ScrollBehavior = 'smooth'): void {
   _pageIdx = Math.max(0, Math.min(_pageCount - 1, i))
+  // The reader is leaving the anchored spot: until the scroll settles and captures a
+  // new one, a relayout must go by page index. A stale anchor sent a restored
+  // position back to page 1 when the highlight cards arrived and repaginated.
+  _anchor = null
   document.body.scrollTo({ left: _pageIdx * _pageStep, behavior })
   syncPageState()
 }

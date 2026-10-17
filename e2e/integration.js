@@ -2597,6 +2597,29 @@ async function runPageMode(token, deviceId) {
     return typing && typing.idx === before.idx ? null : `ArrowRight in a host input turned the page (${before.idx} → ${typing && typing.idx})`
   })
 
+  await check('page mode: a reload lands on the page you were on', async () => {
+    const before = await pageTotal(page)
+    if (!before || before.total < 3) return `need ≥3 pages to test restore (${before && before.total})`
+    const target = Math.min(before.total, 3)
+    await page.evaluate((n) => {
+      const ifr = document.querySelector('iframe')
+      for (let i = 0; i < n; i++) {
+        ifr.contentDocument.dispatchEvent(
+          new ifr.contentWindow.KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }))
+      }
+    }, target - before.idx)
+    await sleep(1800) // > the host's 1s progress-save debounce
+    const at = await pageTotal(page)
+    if (!at || at.idx !== target) return `could not reach page ${target} (on ${at && at.idx})`
+    await page.reload({ waitUntil: 'networkidle2', timeout: 15000 })
+    await waitViewerReady(page)
+    const err = await waitPaginated(page, true)
+    if (err) return err
+    await sleep(800)
+    const after = await pageTotal(page)
+    return after && after.idx === target ? null : `reload landed on page ${after && after.idx}, expected ${target}`
+  })
+
   await check('page mode: a narrower viewport recalculates the page count', async () => {
     const before = await pageTotal(page)
     await page.setViewport({ width: 480, height: 620 })

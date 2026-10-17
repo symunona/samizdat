@@ -678,6 +678,16 @@ export async function saveProgress(docId: string, scrollY: number): Promise<void
     async () => {}, () => ({}))
 }
 
+// The newest reading position still queued for the server. A reload can read
+// /progress before the outbox drains, and then the queued value is the newer one.
+export function pendingProgress(docId: string): number | null {
+  const q = useIndex.getState().outbox
+  for (let i = q.length - 1; i >= 0; i--) {
+    if (q[i].kind === 'read_progress' && q[i].args.docId === docId) return q[i].args.scrollY as number
+  }
+  return null
+}
+
 export async function saveMediaPos(docId: string, mediaPosMs: number): Promise<void> {
   await mutate('media_pos', { docId, mediaPosMs }, { coalesceKey: `media_pos:${docId}` },
     async () => {}, () => ({}))

@@ -27,7 +27,7 @@ export {
   listOutbox, onIntentSuccess, onIntentRetry, dropIntent,
   getDocument, getSetting, setSetting, getMediaFile, listMediaFiles, setMediaFile,
   pinHighlight, archiveHighlight, deleteHighlight, addTag, removeTag, createTag,
-  createAnnotation, updateAnnotation, deleteAnnotation, saveProgress, saveMediaPos,
+  createAnnotation, updateAnnotation, deleteAnnotation, saveProgress, pendingProgress, saveMediaPos,
 } from './repo'
 
 export {
