@@ -211,10 +211,8 @@ setup-build-node dest ws="":
     # node mints its own and the APK silently won't install over an existing one.
     just _apk-keystore >/dev/null
     rsync -q secrets/debug.keystore "${DEST}:${WS}/secrets/debug.keystore"
-    git remote remove build-node 2>/dev/null || true
-    git remote add build-node "${DEST}:${WS}"
     echo "── seeding the workspace ──"
-    git push -q --force build-node HEAD:refs/heads/build
+    git push -q --force "${DEST}:${WS}" HEAD:refs/heads/build
     LOCK=$(sha256sum app/pnpm-lock.yaml | cut -d' ' -f1)
     ssh "$DEST" bash -s -- "$WS" "$GRADLE_HOME" "$LOCK" <<'REMOTE'
     set -euo pipefail
@@ -559,7 +557,10 @@ build-android-remote level="patch":
     node tools/build-times.mjs estimate build-android-remote
     echo "→ ${VER} (code ${CODE}) on ${BUILD_NODE_DEST}:${BUILD_NODE_WS}"
     t0=$SECONDS
-    git push -q --force build-node HEAD:refs/heads/build
+    # Straight to the node build-node.env names — never a named git remote: that was a
+    # second copy of the address, and swapping the env file left it pushing to the old
+    # node while the new one built its own stale checkout.
+    git push -q --force "${BUILD_NODE_DEST}:${BUILD_NODE_WS}" HEAD:refs/heads/build
     # secrets/ is gitignored → the keystore never travels with the source. Re-sync it
     # every build: a node that mints its own signs an APK the phone refuses to install
     # over (verify-apk.sh catches it, but not before the build is spent).
