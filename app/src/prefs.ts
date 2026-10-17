@@ -17,6 +17,7 @@ const LAST_URL_KEY = 'samizdat_last_url'
 const URL_LAST_USED_KEY = 'samizdat_url_last_used'
 const READING_MODE_KEY = 'samizdat_reading_mode'
 const PAGE_THRESHOLD_KEY = 'samizdat_page_threshold'
+const HEADER_HOTKEY_USED_KEY = 'header_hotkey_used'
 
 // ── Server URLs ───────────────────────────────────────────────────────────────
 // Which of the stored URLs worked last, and when each was last reachable. Hints for
@@ -103,4 +104,15 @@ export async function saveReadingMode(mode: ReadingMode): Promise<void> {
 
 export async function savePageThreshold(n: number): Promise<void> {
   await setSetting(PAGE_THRESHOLD_KEY, String(clampThreshold(n)))
+}
+
+// Whether the reader has toggled the page-mode header with `h` yet. Device-local on
+// purpose: "learned the key" is a fact about this keyboard, not the library. Until
+// it flips, the viewer shows a hint for the key.
+export async function loadHeaderHotkeyUsed(): Promise<boolean> {
+  return (await getSetting(HEADER_HOTKEY_USED_KEY)) === '1'
+}
+
+export async function saveHeaderHotkeyUsed(): Promise<void> {
+  await setSetting(HEADER_HOTKEY_USED_KEY, '1')
 }

@@ -242,6 +242,7 @@ A reading preference, **strictly additive**: every rule is scoped to `html.pg` a
 - **Scroll containers never fragment**, so anything taller than a page spills. Cap each to the page box and let it scroll inside: `pre`, `img`, `table`, `details`, `.hl-card`. When nesting, cap the OUTER one only (`html.pg details>pre{max-height:none}`) or you get two scrollbars.
 - **Resize** is throttled 150ms, but capture the anchor when the scroll SETTLES, not in the handler — `resize` fires after the browser reflowed, so reading it there loses the reader's place.
 - One `reportFraction` for both modes (scroll position, or `pageIdx/(pageCount-1)`). `revealElement` is the single way to bring anything into view.
+- **The header is explicit in page mode, never scroll-driven** — `reportFraction` is a page index there, so the flow-mode direction rule hid it on every forward turn. Touch: shown 1.5s on open, then a plain tap (`tap_blank`, sent only when no link/mark/image/selection claimed the click) toggles it. Fine pointer: pinned, `h` toggles (host listener + frame-forwarded `hotkey`); a bottom-right hint shows until the first `h` (`header_hotkey_used` setting, device-local). The header is a fixed 40px strip the content area always sits below, so hiding it never resizes the viewer — a resize repaginates.
 
 ## PDF figures in the viewer
 

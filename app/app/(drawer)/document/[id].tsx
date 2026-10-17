@@ -37,7 +37,8 @@ import { openExternal, isWebUrl } from '../../../src/openExternal'
 import { useConnection } from '../../../src/ConnectionContext'
 import { useFailedJobs, documentErrorText } from '../../../src/failedJobs'
 import { useToast } from '../../../src/ToastContext'
-import { saveTheme } from '../../../src/prefs'
+import { loadHeaderHotkeyUsed, saveHeaderHotkeyUsed, saveTheme } from '../../../src/prefs'
+import { isTouchDevice } from '../../../src/touch'
 import { useWebPageTitle } from '../../../src/webPageTitle'
 import AnnotationPanel from '../../../src/AnnotationPanel'
 import type { PendingSelection, ExistingAnnotation } from '../../../src/AnnotationPanel'
@@ -93,7 +94,12 @@ type ParsedMsg = {
   pages?: number
   digestId?: string
   issueId?: string
+  key?: string
 }
+
+// Compact on purpose: the content area always starts below this strip, so hiding
+// the header never resizes the viewer — a resize would repaginate page mode.
+const HEADER_H = 40
 
 export default function DocumentViewer() {
   const { id, from, highlight } = useLocalSearchParams<{ id: string; from?: string; highlight?: string }>()
@@ -126,8 +132,10 @@ export default function DocumentViewer() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const savedProgressRef = useRef(0)
   const headerAnim = useRef(new Animated.Value(0)).current
-  const headerHeightRef = useRef(56)
+  const headerHRef = useRef(HEADER_H)
+  headerHRef.current = HEADER_H + insets.top
   const headerVisibleRef = useRef(true)
+  const paginatedRef = useRef(false)
   const lastScrollFracRef = useRef(0)
   const isDocLoadedRef = useRef(false)
   const htmlContentRef = useRef<string | null>(null)
@@ -404,9 +412,46 @@ export default function DocumentViewer() {
     }
   }, [id, status, load, loadFromStore])
 
-  const handleHeaderLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
-    headerHeightRef.current = e.nativeEvent.layout.height
-  }, [])
+  const showHeader = useCallback((show: boolean) => {
+    if (headerVisibleRef.current === show) return
+    headerVisibleRef.current = show
+    Animated.timing(headerAnim, { toValue: show ? 0 : -headerHRef.current, duration: 180, useNativeDriver: true }).start()
+  }, [headerAnim])
+
+  // Page mode: the header is explicit, never scroll-driven. Touch shows it briefly on
+  // open — so the reader learns it is up there — then hides it; a tap on the page
+  // toggles it, e-reader style. A keyboard reader keeps it pinned and toggles with `h`.
+  const pageMode = !!resolvedPaging?.paginated
+  useEffect(() => {
+    showHeader(true)
+    if (!pageMode || !isTouchDevice()) return
+    const t = setTimeout(() => showHeader(false), 1500)
+    return () => clearTimeout(t)
+  }, [pageMode, showHeader])
+
+  // Null until loaded, so the hint never flashes for a reader who already knows the key.
+  const [hotkeyUsed, setHotkeyUsed] = useState<boolean | null>(null)
+  useEffect(() => { loadHeaderHotkeyUsed().then(setHotkeyUsed).catch(() => {}) }, [])
+  const toggleHeaderByKey = useCallback(() => {
+    if (!paginatedRef.current) return
+    showHeader(!headerVisibleRef.current)
+    if (hotkeyUsed === false) {
+      setHotkeyUsed(true)
+      void saveHeaderHotkeyUsed()
+    }
+  }, [showHeader, hotkeyUsed])
+
+  useFocusEffect(useCallback(() => {
+    if (Platform.OS !== 'web') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'h' || e.ctrlKey || e.metaKey || e.altKey) return
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      toggleHeaderByKey()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [toggleHeaderByKey]))
 
   const handleLinkPress = useCallback(async (href: string) => {
     if (!activeUrl || !token) return
@@ -465,18 +510,23 @@ export default function DocumentViewer() {
       savedProgressRef.current = 0
     } else if (msg.type === 'readingMode') {
       // What the viewer actually resolved the preference to for THIS document.
+      paginatedRef.current = !!msg.paginated
       setResolvedPaging({ paginated: !!msg.paginated, pages: msg.pages ?? 0 })
+    } else if (msg.type === 'tap_blank') {
+      if (paginatedRef.current) showHeader(!headerVisibleRef.current)
+    } else if (msg.type === 'hotkey' && msg.key === 'h') {
+      // `h` pressed inside the frame, forwarded — the host listener below never sees it.
+      toggleHeaderByKey()
     } else if (msg.type === 'scroll') {
       const frac = msg.fraction ?? 0
       setScrollProgress(frac)
       const dy = frac - lastScrollFracRef.current
       lastScrollFracRef.current = frac
-      if (dy > 0.005 && headerVisibleRef.current) {
-        headerVisibleRef.current = false
-        Animated.timing(headerAnim, { toValue: -headerHeightRef.current, duration: 180, useNativeDriver: true }).start()
-      } else if (dy < -0.005 && !headerVisibleRef.current) {
-        headerVisibleRef.current = true
-        Animated.timing(headerAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start()
+      // Scroll direction drives the header only when scrolling: in page mode the
+      // fraction is a page index, so every forward turn would hide it (see below).
+      if (!paginatedRef.current) {
+        if (dy > 0.005) showHeader(false)
+        else if (dy < -0.005) showHeader(true)
       }
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       saveTimerRef.current = setTimeout(() => {
@@ -543,7 +593,7 @@ export default function DocumentViewer() {
         return next
       })
     }
-  }, [id, headerAnim, annotations, highlights, hlExpanded, highlight, readingMode, pageThreshold,
+  }, [id, showHeader, toggleHeaderByKey, annotations, highlights, hlExpanded, highlight, readingMode, pageThreshold,
     doc, bg, fg, su, bo, ac, mu, sendToWebView, toHlData, handleLinkPress, router])
 
   // Native WebView message handler
@@ -667,7 +717,7 @@ export default function DocumentViewer() {
 
   return (
     <SafeAreaView style={s.screen}>
-      <Animated.View style={[s.header, { paddingTop: theme.spacing.sm + insets.top, transform: [{ translateY: headerAnim }] }]} onLayout={handleHeaderLayout}>
+      <Animated.View style={[s.header, { height: HEADER_H + insets.top, paddingTop: insets.top, transform: [{ translateY: headerAnim }] }]} testID="doc-header">
         <Pressable onPress={() => router.navigate((from as string) ?? '/documents')} style={s.backBtn} hitSlop={12}>
           <Text style={s.backText}>←</Text>
         </Pressable>
@@ -685,7 +735,7 @@ export default function DocumentViewer() {
       </Animated.View>
 
       {docForId && htmlContent ? (
-        <View style={[s.contentArea, { marginTop: 56 + insets.top }]}>
+        <View style={[s.contentArea, { marginTop: HEADER_H + insets.top }]}>
           {docErrorText ? (
             <View style={s.docErrorBanner}>
               <Text style={s.docErrorBannerText}>⚠ {docErrorText}</Text>
@@ -726,12 +776,18 @@ export default function DocumentViewer() {
           <Pressable onPress={() => load()} style={s.retryBtn}><Text style={s.retryText}>Retry</Text></Pressable>
         </View>
       ) : docErrorText ? (
-        <View style={[s.centered, { marginTop: 56 + insets.top }]}>
+        <View style={[s.centered, { marginTop: HEADER_H + insets.top }]}>
           <View style={s.docErrorBanner}>
             <Text style={s.docErrorBannerText}>⚠ {docErrorText}</Text>
           </View>
         </View>
       ) : null}
+
+      {pageMode && hotkeyUsed === false && !isTouchDevice() && (
+        <View style={s.hotkeyHint} pointerEvents="none" testID="header-hotkey-hint">
+          <Text style={s.hotkeyHintText}>h — hide header</Text>
+        </View>
+      )}
 
       {docForId && (
         <View style={s.progressBar}>
@@ -940,22 +996,22 @@ function buildStyles(t: Theme) {
     screen: { flex: 1, backgroundColor: t.colors.background },
     header: {
       position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
-      paddingHorizontal: t.spacing.md, paddingVertical: t.spacing.sm,
+      paddingHorizontal: t.spacing.sm,
       borderBottomWidth: 1, borderBottomColor: t.colors.border,
       backgroundColor: t.colors.surface,
       flexDirection: 'row', alignItems: 'center', gap: t.spacing.sm,
     },
-    backBtn: { flexShrink: 0, padding: t.spacing.sm },
+    backBtn: { flexShrink: 0, paddingHorizontal: t.spacing.sm, paddingVertical: t.spacing.xs },
     backText: { color: t.colors.accent, fontSize: 20, fontWeight: '400' },
     headerTitle: { flex: 1, color: t.colors.text, fontSize: 15, fontWeight: '600' },
-    openWebBtn: { flexShrink: 0, padding: t.spacing.sm },
-    menuBtn: { flexShrink: 0, padding: t.spacing.sm },
+    openWebBtn: { flexShrink: 0, paddingHorizontal: t.spacing.sm, paddingVertical: t.spacing.xs },
+    menuBtn: { flexShrink: 0, paddingHorizontal: t.spacing.sm, paddingVertical: t.spacing.xs },
     menuText: { color: t.colors.text, fontSize: 22, fontWeight: '400', lineHeight: 24 },
-    centered: { flex: 1, marginTop: 56, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
+    centered: { flex: 1, marginTop: HEADER_H, justifyContent: 'center', alignItems: 'center', padding: t.spacing.xl },
     errorText: { color: t.colors.error, fontSize: 15, textAlign: 'center', marginBottom: t.spacing.md },
     retryBtn: { paddingHorizontal: t.spacing.lg, paddingVertical: t.spacing.sm },
     retryText: { color: t.colors.accent, fontSize: 15, fontWeight: '600' },
-    contentArea: { flex: 1, marginTop: 56 },
+    contentArea: { flex: 1 },
     docErrorBanner: {
       backgroundColor: t.colors.error + '1f',
       borderBottomWidth: 1,
@@ -966,6 +1022,12 @@ function buildStyles(t: Theme) {
     },
     docErrorBannerText: { color: t.colors.error, fontSize: 13, fontWeight: '700', textAlign: 'center' },
     webView: { flex: 1, backgroundColor: t.colors.background },
+    hotkeyHint: {
+      position: 'absolute', right: t.spacing.md, bottom: t.spacing.md, zIndex: 5,
+      backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+      borderRadius: 12, paddingHorizontal: 10, paddingVertical: 2,
+    },
+    hotkeyHintText: { color: t.colors.muted, fontSize: 12 },
     progressBar: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, overflow: 'hidden' },
     progressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: t.colors.accent, opacity: 0.6 },
     metaOverlay: {

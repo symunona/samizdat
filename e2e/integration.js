@@ -2597,6 +2597,73 @@ async function runPageMode(token, deviceId) {
     return typing && typing.idx === before.idx ? null : `ArrowRight in a host input turned the page (${before.idx} → ${typing && typing.idx})`
   })
 
+  await check('page mode: header stays put on page turns; h and a plain tap toggle it', async () => {
+    const state = () => page.evaluate(() => {
+      const h = document.querySelector('[data-testid="doc-header"]').getBoundingClientRect()
+      const f = document.querySelector('iframe').getBoundingClientRect()
+      return { shown: h.bottom > 1, hint: !!document.querySelector('[data-testid="header-hotkey-hint"]'), frameTop: f.top, frameH: f.height }
+    })
+    const frameKey = (k) => page.evaluate((key) => {
+      const ifr = document.querySelector('iframe')
+      ifr.contentDocument.dispatchEvent(new ifr.contentWindow.KeyboardEvent('keydown', { key, bubbles: true }))
+    }, k)
+    const tapBlank = () => page.evaluate(() => {
+      const ifr = document.querySelector('iframe')
+      const w = ifr.contentWindow
+      w.getSelection().removeAllRanges()
+      // Whatever text sits on the current page, as long as no link/mark/image claims it.
+      for (let y = 0.3; y < 0.9; y += 0.1) {
+        const el = ifr.contentDocument.elementFromPoint(w.innerWidth / 2, w.innerHeight * y)
+        if (!el || el.closest('a, img, mark, button, summary, [data-action]')) continue
+        el.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }))
+        return true
+      }
+      return false
+    })
+    const start = await state()
+    // The earlier checks turned pages both ways — the old scroll-driven hide fired on those.
+    if (!start.shown) return 'header hidden after page turns on a pointer device'
+    if (!start.hint) return 'no "h — hide header" hint before the key was ever used'
+    await page.evaluate(() => { document.querySelector('iframe').blur(); document.body.focus() })
+    await page.keyboard.press('h')
+    await sleep(500)
+    const hidden = await state()
+    if (hidden.shown) return 'host h did not hide the header'
+    if (hidden.hint) return 'hint still visible after the first h'
+    if (hidden.frameTop !== start.frameTop || hidden.frameH !== start.frameH) {
+      return `hiding the header resized the viewer (${start.frameTop}/${start.frameH} → ${hidden.frameTop}/${hidden.frameH})`
+    }
+    await frameKey('h')
+    await sleep(500)
+    if (!(await state()).shown) return 'h inside the frame did not show the header'
+    if (!await tapBlank()) return 'no plain text on the current page to tap'
+    await sleep(500)
+    if ((await state()).shown) return 'a plain tap did not hide the header'
+    await tapBlank()
+    await sleep(500)
+    if (!(await state()).shown) return 'a second plain tap did not show the header'
+    // Typing h in a field is text, not a toggle.
+    await page.evaluate(() => {
+      const inp = document.createElement('input')
+      inp.id = 'e2e-h-input'
+      document.body.appendChild(inp)
+      inp.focus()
+    })
+    await page.keyboard.press('h')
+    await sleep(500)
+    const typing = await state()
+    await page.evaluate(() => document.getElementById('e2e-h-input').remove())
+    if (!typing.shown) return 'h typed in an input toggled the header'
+    await page.reload({ waitUntil: 'networkidle2', timeout: 15000 })
+    await waitViewerReady(page)
+    const err = await waitPaginated(page, true)
+    if (err) return err
+    await sleep(800)
+    const after = await state()
+    if (after.hint) return 'hint came back after a reload — first use not remembered'
+    return after.shown ? null : 'header not shown on reopen'
+  })
+
   await check('page mode: a reload lands on the page you were on', async () => {
     const before = await pageTotal(page)
     if (!before || before.total < 3) return `need ≥3 pages to test restore (${before && before.total})`

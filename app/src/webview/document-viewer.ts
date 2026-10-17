@@ -974,7 +974,15 @@ document.addEventListener('click', (e: MouseEvent) => {
       if (a.dataset.docId) msg.doc_id = a.dataset.docId
       sendMsg(msg)
     }
+    return
   }
+
+  // A plain tap on the page — nothing above claimed it and it ends no selection —
+  // toggles the host's header in page mode. A pan never ends in a click, so swiping
+  // between pages does not trip it.
+  if (!_pageMode || _pendingSel || window.getSelection()?.isCollapsed === false) return
+  if (target.closest && target.closest('button, input, textarea, summary')) return
+  sendMsg({ type: 'tap_blank' })
 })
 
 // ── Keyboard shortcuts (transcript only) ────────────────────────────────────────
@@ -991,6 +999,11 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
   if (turn) {
     e.preventDefault()
     goToPage(_pageIdx + turn)
+    return
+  }
+  // `h` toggles the host's header in page mode — forwarded for the same reason.
+  if (_pageMode && e.key === 'h' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    sendMsg({ type: 'hotkey', key: 'h' })
     return
   }
   if (!HOTKEYS.has(e.key)) return
