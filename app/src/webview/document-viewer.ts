@@ -4,6 +4,7 @@
 // pull in react-native-unistyles here — keep the WebView bundle lean.
 import { iconButtonSpec as IB } from '../iconButtonSpec'
 import { ON_PALETTE, tagColor } from '../tagColor'
+import { PAGE_TURN_KEYS } from '../pageTurnKeys'
 // Type-only — esbuild strips it, so prefs.ts (and the DB layer behind it) never enters
 // the bundle.
 import type { ReadingMode } from '../prefs'
@@ -981,11 +982,11 @@ document.addEventListener('click', (e: MouseEvent) => {
 // host's own window listener never sees the key. Forward the raw key out and let
 // the RN host map it (see handleHotkey in VideoDocument). Transcript docs only, so
 // article reading keeps normal arrow-scroll.
-const PAGE_TURN_KEYS: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, PageUp: -1, PageDown: 1 }
 const HOTKEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '[', ']', '=', 'n', 'N', 'a', 'A'])
 window.addEventListener('keydown', (e: KeyboardEvent) => {
   // Page mode claims ←/→ and PgUp/PgDn for page turns. Same reason the transcript
   // forwards its hotkeys: the host's window listener never sees a key pressed inside this frame.
+  // The inverse — a key pressed on the host around the frame — arrives as 'pageTurn'.
   const turn = _pageMode ? PAGE_TURN_KEYS[e.key] : undefined
   if (turn) {
     e.preventDefault()
@@ -1435,6 +1436,10 @@ function handleMessage(event: MessageEvent): void {
       _mode = (msg.mode as ReadingMode) ?? _mode
       if (typeof msg.threshold === 'number') _threshold = msg.threshold
       applyReadingMode()
+      break
+
+    case 'pageTurn':
+      if (_pageMode) goToPage(_pageIdx + (msg.delta as number))
       break
 
     case 'setAnnotations':

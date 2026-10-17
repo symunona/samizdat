@@ -2558,6 +2558,45 @@ async function runPageMode(token, deviceId) {
     return up && up.idx === before.idx ? null : `PageUp: page index went ${down.idx} → ${up && up.idx}`
   })
 
+  await check('page mode: keys pressed on the host around the frame turn the page', async () => {
+    // Real key presses with focus OUTSIDE the iframe: they land on the host window,
+    // which must forward them — the frame's own listener never sees them.
+    const focusHost = () => page.evaluate(() => {
+      document.querySelector('iframe').blur()
+      document.body.focus()
+      return document.activeElement && document.activeElement.tagName
+    })
+    const focused = await focusHost()
+    if (focused === 'IFRAME') return 'could not move focus off the iframe'
+    const before = await pageTotal(page)
+    await page.keyboard.press('ArrowRight')
+    await sleep(600)
+    const right = await pageTotal(page)
+    if (!right || right.idx !== before.idx + 1) return `host ArrowRight: page index went ${before.idx} → ${right && right.idx}`
+    await page.keyboard.press('PageDown')
+    await sleep(600)
+    const down = await pageTotal(page)
+    if (!down || down.idx !== right.idx + 1) return `host PageDown: page index went ${right.idx} → ${down && down.idx}`
+    await page.keyboard.press('PageUp')
+    await sleep(600)
+    await page.keyboard.press('ArrowLeft')
+    await sleep(600)
+    const back = await pageTotal(page)
+    if (!back || back.idx !== before.idx) return `host PageUp+ArrowLeft: page index went ${down.idx} → ${back && back.idx}`
+    // A focused text field keeps its arrows: no page turn while typing.
+    await page.evaluate(() => {
+      const inp = document.createElement('input')
+      inp.id = 'e2e-host-input'
+      document.body.appendChild(inp)
+      inp.focus()
+    })
+    await page.keyboard.press('ArrowRight')
+    await sleep(600)
+    const typing = await pageTotal(page)
+    await page.evaluate(() => document.getElementById('e2e-host-input').remove())
+    return typing && typing.idx === before.idx ? null : `ArrowRight in a host input turned the page (${before.idx} → ${typing && typing.idx})`
+  })
+
   await check('page mode: a narrower viewport recalculates the page count', async () => {
     const before = await pageTotal(page)
     await page.setViewport({ width: 480, height: 620 })

@@ -14,7 +14,7 @@ import {
   View,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router'
 import { useUnistyles, UnistylesRuntime } from 'react-native-unistyles'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import WebView from 'react-native-webview'
@@ -48,6 +48,7 @@ import { useScrapeQueue } from '../../../src/ScrapeQueueContext'
 import { buildDocumentHtml, mdToHtml } from '../../../src/markdownToHtml'
 import VideoDocument from '../../../src/VideoDocument'
 import { useReadingModeStore } from '../../../src/store/readingModeStore'
+import { PAGE_TURN_KEYS } from '../../../src/pageTurnKeys'
 import type { ReadingMode } from '../../../src/prefs'
 import { ImageLightbox } from '../../../src/ImageViewer'
 import PendingPipelineBanner from '../../../src/PendingPipelineBanner'
@@ -561,6 +562,24 @@ export default function DocumentViewer() {
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
   }, [handleParsedMessage])
+
+  // Page turns while focus is on the app around the frame (header, margins): a key
+  // pressed on the host never reaches the iframe, so forward it. The viewer stays the
+  // authority on page mode; focus-scoped because drawer screens stay mounted on blur.
+  const paginated = !!resolvedPaging?.paginated
+  useFocusEffect(useCallback(() => {
+    if (Platform.OS !== 'web' || !paginated) return
+    const onKey = (e: KeyboardEvent) => {
+      const delta = PAGE_TURN_KEYS[e.key]
+      if (!delta || e.ctrlKey || e.metaKey || e.altKey) return
+      const el = e.target as HTMLElement | null
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+      e.preventDefault()
+      sendToWebView({ type: 'pageTurn', delta })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [paginated, sendToWebView]))
 
   // Local-first: write to the replica + outbox (no network), patch the local marks list.
   const handleAnnSave = useCallback(async (data: { note: string; color: string }) => {
