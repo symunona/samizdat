@@ -1078,10 +1078,11 @@ async function runHighlightSelectionLifecycle(token, deviceId) {
   }, NOTE)
   await page.waitForFunction((note) => document.querySelector('textarea')?.value === note,
     { timeout: 6000 }, NOTE)
-  await page.evaluate(() => {
-    const el = [...document.querySelectorAll('*')].find(e => e.innerText && e.innerText.trim() === 'Save' && e.offsetParent)
-    el.click()
-  })
+  // Save with Ctrl+Enter, not the button — the other annotation flows cover the click.
+  await page.focus('textarea')
+  await page.keyboard.down('Control')
+  await page.keyboard.press('Enter')
+  await page.keyboard.up('Control')
 
   // 3. The mark must RENDER — multi-piece because the span crosses the link. This alone
   //    proves the store now holds an annotation with this highlight_id (the marks source).

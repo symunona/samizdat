@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Keyboard,
   Modal,
+  NativeSyntheticEvent,
   Platform,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
+  TextInputKeyPressEventData,
   TouchableWithoutFeedback,
   View,
 } from 'react-native'
@@ -92,6 +94,15 @@ export default function AnnotationPanel({ visible, mode, selection, existing, in
     onSave({ note, color: existing?.color ?? 'yellow' })
   }
 
+  // Ctrl/Cmd+Enter saves. Hardware-keyboard only: RN Web passes the modifiers
+  // through on nativeEvent; native's soft keyboard never sets them.
+  function handleKeyPress(e: NativeSyntheticEvent<TextInputKeyPressEventData>) {
+    const k = e.nativeEvent as TextInputKeyPressEventData & { ctrlKey?: boolean; metaKey?: boolean }
+    if (k.key !== 'Enter' || !(k.ctrlKey || k.metaKey)) return
+    e.preventDefault()
+    handleSave()
+  }
+
   function handleDelete() {
     setMoreOpen(false)
     onDelete?.()
@@ -131,6 +142,7 @@ export default function AnnotationPanel({ visible, mode, selection, existing, in
             onChangeText={setNote}
             autoFocus={Platform.OS === 'web'}
             blurOnSubmit={false}
+            onKeyPress={handleKeyPress}
           />
 
           {/* Footer row */}
