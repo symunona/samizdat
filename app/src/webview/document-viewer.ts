@@ -132,6 +132,10 @@ mark.color-green{background-color:rgba(74,222,128,0.3)}
 mark.color-blue{background-color:rgba(96,165,250,0.3)}
 mark.color-pink{background-color:rgba(244,114,182,0.3)}
 mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);transition:filter 0.3s}
+/* An annotation with a note: a dot at the top-right of its LAST piece (where the
+   highlight ends, like a footnote marker). Negative margins cancel its width, so it
+   is centred on the corner and neither reflows text nor upsets page-mode columns. */
+mark[data-noted]::after{content:'';display:inline-block;width:6px;height:6px;margin:0 -3px;vertical-align:top;position:relative;top:-2px;border-radius:50%;background:var(--ac);pointer-events:none}
 /* Anchored to the current text selection (top/left set in JS by positionSelActions).
    The row holds Annotate + the ··· menu; only the ROW is positioned, so the two can
    never drift apart. */
@@ -572,6 +576,9 @@ function applyMark(a: AnnData): void {
   const idx = locateExact(text, a)
   if (idx < 0) return
   highlightRange(idx, a.exact.length, a.id, a.color || 'yellow')
+  if (!a.note?.trim()) return
+  const pieces = document.querySelectorAll<HTMLElement>(`mark[data-ann-id="${a.id}"]`)
+  pieces[pieces.length - 1]?.setAttribute('data-noted', '')
 }
 
 function removeMark(id: string): void {

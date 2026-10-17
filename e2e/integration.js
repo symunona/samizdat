@@ -1024,6 +1024,20 @@ async function openHighlightOverlay(page) {
   await openOverlayFor(page, 'Go 1.21 Release')
 }
 
+// Runs in the page: which pieces of the first annotation carry data-noted, and the
+// painted ::after dot (width + fill) of the last piece.
+function noteDotInfo() {
+  const d = document.querySelector('iframe').contentDocument
+  const first = d.querySelector('mark[data-ann-id]')
+  const pieces = first ? [...d.querySelectorAll(`mark[data-ann-id="${first.dataset.annId}"]`)] : []
+  const last = pieces[pieces.length - 1]
+  return {
+    pieces: pieces.length,
+    noted: pieces.map((m, i) => (m.hasAttribute('data-noted') ? i : -1)).filter(i => i >= 0),
+    dot: last ? (({ width, backgroundColor }) => `${width} ${backgroundColor}`)(d.defaultView.getComputedStyle(last, '::after')) : '',
+  }
+}
+
 async function runHighlightSelectionLifecycle(token, deviceId) {
   const { page, errors } = await newConnectedPage(browser, token, deviceId)
   await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 15000 })
@@ -1110,6 +1124,15 @@ async function runHighlightSelectionLifecycle(token, deviceId) {
     return null
   })
 
+  // 3b. A noted annotation carries the note dot on its LAST piece only, and the dot
+  //     actually paints (the ::after box-shadow), not just an attribute.
+  await check('hl overlay: noted highlight shows the note dot', async () => {
+    const info = await page.evaluate(noteDotInfo)
+    if (info.pieces < 2) return `expected multi-piece mark, got ${info.pieces}`
+    if (info.noted.join() !== String(info.pieces - 1)) return `data-noted on pieces [${info.noted}], want only the last`
+    return /^6px rgb/.test(info.dot) ? null : `note dot not painted ("${info.dot}")`
+  })
+
   // 4. Persistence via the STORE: close the overlay, reopen it, the mark must re-anchor
   //    (the fresh iframe seeds marks from useSyncStore — no reload, no network needed).
   await clickByText(page, e => (e.innerText || '').trim() === '✕', 'close overlay')
@@ -1141,6 +1164,36 @@ async function runHighlightSelectionLifecycle(token, deviceId) {
       return `edit panel note mismatch: "${val}"`
     }
   })
+  // 5a. Clear the note (whitespace counts as empty) and save → the dot goes away, the
+  //     highlight stays.
+  await page.evaluate(() => {
+    const ta = document.querySelector('textarea')
+    Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set.call(ta, '   ')
+    ta.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await page.focus('textarea')
+  await page.keyboard.down('Control')
+  await page.keyboard.press('Enter')
+  await page.keyboard.up('Control')
+  await check('hl overlay: clearing the note removes the dot', async () => {
+    try {
+      await page.waitForFunction(() => {
+        const d = document.querySelector('iframe').contentDocument
+        return d.querySelectorAll('mark[data-ann-id]').length >= 2 && !d.querySelector('mark[data-noted]')
+      }, { timeout: 6000 })
+      return null
+    } catch {
+      const info = await page.evaluate(noteDotInfo)
+      return `after clearing: ${info.pieces} piece(s), data-noted on [${info.noted}]`
+    }
+  })
+  // Reopen the (now note-less) annotation so the backdrop close below has a panel.
+  await page.evaluate(() => {
+    const d = document.querySelector('iframe').contentDocument
+    d.querySelector('mark[data-ann-id]').dispatchEvent(new d.defaultView.MouseEvent('click', { bubbles: true }))
+  })
+  await page.waitForSelector('textarea', { timeout: 6000 })
+
   // Close the edit panel (backdrop) before the offline leg.
   await page.evaluate(() => {
     const bd = [...document.querySelectorAll('*')].find(e => {
