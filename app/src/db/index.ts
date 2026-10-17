@@ -37,8 +37,9 @@ export {
   useAnnotations, useAnnotationsFor, useAnnotatedHighlightIds,
   useTags, useTagsWithCounts, useTagLinks,
   useDigests, useDigestIssues, useDigestIssue, useHighlightDigests, useFeedIdsWithHighlights,
+  useFeedDigestTopics, mergeFeedItems, isFeedDigestTopic,
 } from './hooks'
-export type { HighlightDigest } from './hooks'
+export type { FeedDigestTopic, HighlightDigest } from './hooks'
 
 export type {
   Annotation, AnnotationWithContext, Digest, DigestIssue, Document, DocumentMeta, Highlight,

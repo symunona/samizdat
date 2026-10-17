@@ -3985,6 +3985,63 @@ async function runDigests(token, deviceId) {
     return await page.$(`${dgCard('gamma')} [data-testid^="digest-chip-"]`) ? 'Gamma was not cited but its card has a chip' : null
   })
 
+  // The run's topic is a card of its own in the feed, its bullets the stored text of the
+  // Highlights it cites — Alpha's included, though Alpha's own card is held out.
+  const issueId = (await (await fetch(`${BASE_URL}/api/v1/digests/${digestId}/issues`,
+    { headers: { Authorization: `Bearer ${token}` } })).json())[0]?.id
+  const topicCard = `[data-testid^="digest-topic-card-${issueId}:"]`
+  await check('digests: the issue\'s topic is a feed card — title, why, the cited bullets, the chip', async () => {
+    await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 15000 })
+    try {
+      await page.waitForSelector(topicCard, { timeout: 15000 })
+    } catch {
+      return `no topic card in the feed: ${(await page.evaluate(() => document.body.innerText)).slice(0, 300)}`
+    }
+    await page.$eval(topicCard, el => el.scrollIntoView({ block: 'center' }))
+    await page.screenshot({ path: join(DG_SHOTS, 'feed-digest-topic.png') })
+    const card = await page.$eval(topicCard, el => el.innerText)
+    if (!card.includes(STUB_DIGEST_TOPIC.title) || !card.includes(STUB_DIGEST_TOPIC.why)) {
+      return `the card does not show the topic's title and why: "${card.slice(0, 300)}"`
+    }
+    if (!card.includes(DG_ALPHA_TEXT)) return `the card does not show Alpha's held bullet: "${card.slice(0, 300)}"`
+    if (!card.includes(DG_BETA_BULLET_TAIL)) return `the card does not show Beta's cited bullet: "${card.slice(0, 300)}"`
+    if (card.includes(DG_ALPHA_OLD_TEXT)) return 'the card shows the earlier (history) bullet; that belongs to the issue'
+    if (card.includes(DG_BETA_OTHER)) return 'the card shows the whole Beta Highlight, not the one bullet it cites'
+    const chipSel = `${topicCard} [data-testid="digest-chip-${digestId}"]`
+    const name = await page.$eval(chipSel, el => el.innerText.trim()).catch(() => null)
+    if (name !== DG_NAME) return `the card's chip reads "${name}", want "${DG_NAME}"`
+    const color = await background(page, chipSel)
+    if (color !== DG_COLOR.rgb) return `the card's chip is ${color}, want ${DG_COLOR.rgb}`
+    // Newest in the feed: the issue was written after every seeded Highlight.
+    const first = await page.$eval('[data-testid^="digest-topic-card-"], [data-testid^="highlight-card-"]',
+      el => el.getAttribute('data-testid'))
+    return first?.startsWith(`digest-topic-card-${issueId}:`)
+      ? null : `the first card is ${first}, want the topic (window_end is the newest stamp)`
+  })
+
+  await check('digests: pressing the topic card opens its issue', async () => {
+    // The title text, not the chip: the card itself must lead to the issue. A real
+    // click at the title's position, so whatever sits on top of it is what gets it.
+    const box = await page.$eval(topicCard, (card, t) => {
+      const el = [...card.querySelectorAll('*')].find(e => e.children.length === 0 && e.textContent === t)
+      if (!el) return null
+      el.scrollIntoView({ block: 'center' })
+      const r = el.getBoundingClientRect()
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+    }, STUB_DIGEST_TOPIC.title)
+    if (!box) return 'the topic title is not on the card'
+    await page.mouse.click(box.x, box.y)
+    try {
+      await page.waitForFunction(t => location.pathname.startsWith('/digest/') && document.body.innerText.includes(t),
+        { timeout: 10000 }, STUB_DIGEST_TOPIC.why)
+    } catch {
+      return `the card led to ${page.url()}`
+    }
+    const at = new URL(page.url())
+    return at.pathname === `/digest/${digestId}` && at.searchParams.get('issue') === issueId
+      ? null : `the card led to ${at.pathname}${at.search}, want /digest/${digestId}?issue=${issueId}`
+  })
+
   await check('digests: the held Highlight reads from Archived, with its chip', async () => {
     await page.goto(`${BASE_URL}/archived`, { waitUntil: 'networkidle2', timeout: 15000 })
     try {
@@ -3999,8 +4056,6 @@ async function runDigests(token, deviceId) {
   })
 
   await check('digests: pressing the held Highlight\'s chip opens the issue that cites it', async () => {
-    const res = await fetch(`${BASE_URL}/api/v1/digests/${digestId}/issues`, { headers: { Authorization: `Bearer ${token}` } })
-    const issueId = (await res.json())[0]?.id
     await page.click(chip('alpha'))
     try {
       await page.waitForFunction(t => location.pathname.startsWith('/digest/') && document.body.innerText.includes(t),

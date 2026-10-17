@@ -9,6 +9,7 @@ import { useConnection } from '../../src/ConnectionContext'
 import { fetchHighlights, fetchSettings, updateSettings, HighlightWithDoc } from '../../src/api'
 import * as db from '../../src/db'
 import HighlightCard from '../../src/HighlightCard'
+import DigestTopicCard from '../../src/DigestTopicCard'
 import IconButton from '../../src/IconButton'
 import TagSelectorModal from '../../src/TagSelectorModal'
 import AnnotationPanel, { type PendingSelection } from '../../src/AnnotationPanel'
@@ -23,6 +24,8 @@ import FeedSkeleton from '../../src/FeedSkeleton'
 // drag first (lower threshold), so a swipe only fires on a deliberately horizontal pull.
 // (ReanimatedSwipeable doesn't expose failOffsetY, so this threshold is the only lever.)
 const SWIPE_DRAG_OFFSET = 36
+
+type FeedItem = HighlightWithDoc | db.FeedDigestTopic
 
 // A feed card has no text selection — a note taken here anchors to the head of the
 // highlight body. ONE definition, used both for the quote the composer shows and for
@@ -128,9 +131,11 @@ export default function FeedScreen() {
   const pendingArchiveRef = useRef<Map<string, number>>(new Map())
 
   const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 30 }), [])
-  const onViewableItemsChanged = useCallback(({ changed }: { changed: Array<{ item: HighlightWithDoc; isViewable: boolean }> }) => {
+  const onViewableItemsChanged = useCallback(({ changed }: { changed: Array<{ item: FeedItem; isViewable: boolean }> }) => {
     const currentY = scrollYRef.current
     changed.forEach(({ item, isViewable }) => {
+      // A topic card has no Highlight row: scrolling past it archives nothing.
+      if (db.isFeedDigestTopic(item)) return
       if (isViewable) {
         itemFirstSeenYRef.current.set(item.id, currentY)
         pendingArchiveRef.current.delete(item.id)
@@ -164,6 +169,9 @@ export default function FeedScreen() {
   // payload has no annotation link, and a per-row hook would mount one per FlatList item.
   const notedIds = db.useAnnotatedHighlightIds()
   const citedBy = db.useHighlightDigests()
+  // A Digest's topics: replica-only, merged into whichever Highlight list is showing.
+  const digestTopics = db.useFeedDigestTopics()
+  const feedItems = useMemo(() => db.mergeFeedItems(highlights, digestTopics), [highlights, digestTopics])
   const storeHighlights = db.useFeedHighlights()
   const storeRef = useRef(storeHighlights)
   storeRef.current = storeHighlights
@@ -292,7 +300,10 @@ export default function FeedScreen() {
     startScrape(url, title)
   }, [startScrape])
 
-  const renderItem = useCallback(({ item }: { item: HighlightWithDoc }) => {
+  const renderItem = useCallback(({ item }: { item: FeedItem }) => {
+    // Not swipeable: archive and star mean nothing for a topic. It leaves the feed when
+    // its Digest's next issue lands.
+    if (db.isFeedDigestTopic(item)) return <DigestTopicCard item={item} />
     const isArchived = archivedIds.has(item.id)
     if (deletingIds.has(item.id)) {
       return (
@@ -383,7 +394,7 @@ export default function FeedScreen() {
   // highlights: the persisted store hasn't hydrated yet, the connection is still
   // resolving, a fetch is in flight, or a sync may pull rows. Only drop to
   // "No highlights yet" once everything has settled and there genuinely are none.
-  const settling = highlights.length === 0 &&
+  const settling = feedItems.length === 0 &&
     (loading || syncStatus === 'syncing' || !hasHydrated || status === 'loading')
 
   // The list is one of four states, but the sheets render in ALL of them — the header
@@ -400,7 +411,7 @@ export default function FeedScreen() {
         </Pressable>
       </View>
     )
-  } else if (highlights.length === 0) {
+  } else if (feedItems.length === 0) {
     body = (
       <View style={s.center}>
         <Text style={s.placeholder}>No highlights yet.</Text>
@@ -413,8 +424,8 @@ export default function FeedScreen() {
         <FlatList
           style={s.list}
           contentContainerStyle={s.listContent}
-          data={highlights}
-          keyExtractor={(item) => item.id}
+          data={feedItems}
+          keyExtractor={(item) => (db.isFeedDigestTopic(item) ? item.key : item.id)}
           renderItem={renderItem}
           onRefresh={load}
           refreshing={loading}

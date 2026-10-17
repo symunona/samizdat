@@ -14,7 +14,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useIndex, JUNCTION_KEY, type IndexState } from './memoryIndex'
 import { getDocument } from './repo'
 import type {
-  Annotation, AnnotationWithContext, Digest, DigestIssue, Document, DocumentMeta,
+  Annotation, AnnotationWithContext, Digest, DigestIssue, DigestTopic, Document, DocumentMeta,
   HighlightFilter, HighlightWithDoc, JunctionType, Tag, TagWithCounts,
 } from './types'
 
@@ -213,6 +213,83 @@ export function selectDigestIssue(
   }
 }
 
+// A DigestTopic as a feed card. `at` is its issue's window_end: the card's place among
+// the Highlights and the date it prints. `topic.refs` are resolved and keep only the
+// window's bullets that resolved — the card previews, the issue lists everything.
+export type FeedDigestTopic = {
+  key: string
+  digestId: string
+  issueId: string
+  name: string
+  color: string
+  at: string
+  topic: DigestTopic
+}
+
+export const isFeedDigestTopic = (item: object): item is FeedDigestTopic => 'topic' in item
+
+// The topics of the newest `done` issue of each enabled, live Digest — newest issue
+// first, then question order, then rank. The next done issue replaces them; a disabled
+// Digest no longer holds its Feeds, so its topics leave too. No row is written for a
+// card, so there is nothing to archive (plan/2026-10-15-digest-topics-in-feed.md).
+export function selectFeedDigestTopics(
+  s: Pick<IndexState, 'digests' | 'digestIssues' | 'highlights' | 'documents'>,
+): FeedDigestTopic[] {
+  const newest = new Map<string, DigestIssue>()
+  for (const issue of Object.values(s.digestIssues)) {
+    if (issue.deleted_at || issue.status !== 'done') continue
+    const digest = s.digests[issue.digest_id]
+    if (!digest || digest.deleted_at || !digest.enabled) continue
+    const held = newest.get(digest.id)
+    if (!held || issue.window_end.localeCompare(held.window_end) > 0
+      || (issue.window_end === held.window_end && issue.created_at.localeCompare(held.created_at) > 0)) {
+      newest.set(digest.id, issue)
+    }
+  }
+  const cards: FeedDigestTopic[] = []
+  const issues = [...newest.values()].sort((a, b) => b.window_end.localeCompare(a.window_end))
+  for (const { id } of issues) {
+    const issue = selectDigestIssue(s, id)
+    if (!issue) continue
+    const digest = s.digests[issue.digest_id]
+    const asked = issue.metadata.questions.map((q) => q.question_id)
+    const order = (t: DigestTopic) => {
+      const i = asked.indexOf(t.question_id)
+      return i < 0 ? asked.length : i
+    }
+    for (const t of [...issue.topics].sort((a, b) => order(a) - order(b) || a.rank - b.rank)) {
+      cards.push({
+        key: `${issue.id}:${t.question_id}:${t.rank}`,
+        digestId: digest.id,
+        issueId: issue.id,
+        name: digest.name,
+        color: digest.color,
+        at: issue.window_end,
+        topic: { ...t, refs: t.refs.filter((r) => !r.history && !r.missing) },
+      })
+    }
+  }
+  return cards
+}
+
+// Highlights (created_at DESC, as either feed path serves them) with the topic cards
+// placed by `at`. A topic goes before a Highlight of the same instant; one older than
+// every Highlight shown sits at the end.
+export function mergeFeedItems<H extends { created_at: string }>(
+  highlights: H[],
+  topics: FeedDigestTopic[],
+): (H | FeedDigestTopic)[] {
+  const out: (H | FeedDigestTopic)[] = []
+  let t = 0
+  for (const h of highlights) {
+    const hAt = Date.parse(h.created_at)
+    while (t < topics.length && Date.parse(topics[t].at) >= hAt) out.push(topics[t++])
+    out.push(h)
+  }
+  while (t < topics.length) out.push(topics[t++])
+  return out
+}
+
 // The Feeds that have produced at least one Highlight. A Digest reads Highlights, never
 // Documents, so a Feed outside this set contributes nothing to it.
 export function selectFeedIdsWithHighlights(s: Pick<IndexState, 'highlights' | 'documents'>): Set<string> {
@@ -360,6 +437,17 @@ export function useHighlightDigests(): Map<string, HighlightDigest[]> {
   const digests = useIndex((s) => s.digests)
   const digestIssues = useIndex((s) => s.digestIssues)
   return useMemo(() => selectHighlightDigests({ digests, digestIssues }), [digests, digestIssues])
+}
+
+export function useFeedDigestTopics(): FeedDigestTopic[] {
+  const digests = useIndex((s) => s.digests)
+  const digestIssues = useIndex((s) => s.digestIssues)
+  const highlights = useIndex((s) => s.highlights)
+  const documents = useIndex((s) => s.documents)
+  return useMemo(
+    () => selectFeedDigestTopics({ digests, digestIssues, highlights, documents }),
+    [digests, digestIssues, highlights, documents],
+  )
 }
 
 export function useFeedIdsWithHighlights(): Set<string> {

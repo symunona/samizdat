@@ -522,6 +522,67 @@ async function fresh(path = ':memory:') {
   eq('wipe clears digests', (await driver.all(Q.SELECT_DIGESTS)).length, 0)
 }
 
+// ── a Digest's topics as feed cards (pure: plain slices, no SQLite) ───────────
+{
+  const at = d => `2026-02-0${d}T07:00:00Z`
+  const g = (id, over = {}) => ({ id, name: id.toUpperCase(), color: 'green', enabled: true, deleted_at: null, ...over })
+  const topic = (question_id, rank, refs = []) => ({ question_id, question_title: question_id, rank, title: `${question_id}#${rank}`, why: 'w', refs })
+  const iss = (id, digest_id, window_end, over = {}) => ({
+    id, digest_id, window_start: at(1), window_end, status: 'done', topics: [topic('q1', 1)],
+    metadata: { questions: [] }, created_at: window_end, updated_at: window_end, rev: 1, deleted_at: null, ...over,
+  })
+  const st = {
+    digests: {
+      a: g('a'), b: g('b'),
+      off: g('off', { enabled: false }), gone: g('gone', { deleted_at: at(1) }),
+    },
+    digestIssues: {
+      // a: the newest done issue wins over an older one and over newer non-done ones.
+      a1: iss('a1', 'a', at(2)),
+      a2: iss('a2', 'a', at(4), {
+        metadata: { questions: [{ question_id: 'q2' }, { question_id: 'q1' }] },
+        topics: [
+          topic('q1', 2), topic('q1', 1, [
+            { highlight_id: 'h1', bullet: 1 },
+            { highlight_id: 'h9', bullet: 0 },
+            { highlight_id: 'h1', bullet: 0, history: true },
+          ]),
+          topic('q2', 1),
+        ],
+      }),
+      a3: iss('a3', 'a', at(6), { status: 'failed', topics: [] }),
+      a4: iss('a4', 'a', at(7), { status: 'running', topics: [] }),
+      a5: iss('a5', 'a', at(8), { deleted_at: at(8) }),
+      b1: iss('b1', 'b', at(5)),
+      off1: iss('off1', 'off', at(9)),
+      gone1: iss('gone1', 'gone', at(9)),
+      orphan: iss('orphan', 'nobody', at(9)),
+    },
+    highlights: { h1: hl({ body: '- first\n- second' }) },
+    documents: { d1: doc() },
+  }
+  const cards = hooks.selectFeedDigestTopics(st)
+  eq('feed topics: the newest done issue per enabled live Digest, newest issue first',
+    cards.map(c => c.issueId), ['b1', 'a2', 'a2', 'a2'])
+  eq('feed topics: question order, then rank', cards.slice(1).map(c => c.topic.title), ['q2#1', 'q1#1', 'q1#2'])
+  const cited = cards.find(c => c.issueId === 'a2' && c.topic.title === 'q1#1')
+  eq('feed topics: a card names its Digest, issue and date',
+    [cited.digestId, cited.name, cited.color, cited.at, cited.key], ['a', 'A', 'green', at(4), 'a2:q1:1'])
+  eq('feed topics: bullets resolve like the issue view; history and missing refs are left out',
+    cited.topic.refs.map(r => [r.text, r.document_title]), [['second', 'Doc One']])
+  eq('feed topics: no card from a disabled, deleted or unknown Digest',
+    cards.filter(c => ['off', 'gone', 'nobody'].includes(c.digestId)).length, 0)
+
+  const h = (id, d) => ({ id, created_at: at(d) })
+  const merged = hooks.mergeFeedItems([h('h6', 6), h('h4', 4), h('h3', 3)], cards)
+  eq('merge: topics sit by window_end among Highlights by created_at; a tie goes topic-first',
+    merged.map(x => hooks.isFeedDigestTopic(x) ? x.issueId : x.id), ['h6', 'b1', 'a2', 'a2', 'a2', 'h4', 'h3'])
+  eq('merge: a topic older than every Highlight sits at the end',
+    hooks.mergeFeedItems([h('h9', 9)], cards.slice(0, 1)).map(x => x.id ?? x.issueId), ['h9', 'b1'])
+  eq('merge: no Highlights still shows the topics', hooks.mergeFeedItems([], cards).length, 4)
+  eq('merge: no topics is the Highlights untouched', hooks.mergeFeedItems([h('h3', 3)], []).map(x => x.id), ['h3'])
+}
+
 // ── a v3 replica (digests without a color, with hold) upgrades in place ───────
 {
   const path = join(TMP, 'v3.db')

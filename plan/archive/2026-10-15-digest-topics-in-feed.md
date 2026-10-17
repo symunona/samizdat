@@ -2,7 +2,7 @@
 created: 2026-10-15
 topic: A Digest's topics land in the main feed, one card each
 excerpt: Picking a Feed for a Digest holds its Highlights, so the feed shows nothing from those newsletters. Show each DigestTopic of the newest done issue of every enabled Digest as its own card among the Highlights, ordered by the issue's window_end. App-only, read from the replica; no schema or server change.
-status: in progress
+status: shipped
 ---
 
 # Digest topics in the feed
