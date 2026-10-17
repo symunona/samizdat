@@ -300,7 +300,7 @@ webview-build:
 
 [group('dev')]
 [doc('Build app + server, restart background server (dev mode, HTTP)')]
-dev: _check-no-service webview-build build-server build-cli build-app-web build-clipper
+dev: _check-no-service build-server build-cli build-app-web build-clipper
     #!/usr/bin/env bash
     set -euo pipefail
     PORT={{_dev_port}}
@@ -466,7 +466,7 @@ sync-wasm:
 
 [group('build')]
 [doc('Export the Expo web build (served by the server)')]
-build-app-web: sync-wasm
+build-app-web: sync-wasm webview-build
     #!/usr/bin/env bash
     set -euo pipefail
     # Expo content-hashes the entry bundle (index-<hash>.js); an open web tab detects
@@ -803,7 +803,8 @@ fmt-js:
 # Every e2e suite drives the SERVED web bundle, so it must depend on build-app-web
 # as well as build-server. With only build-server, an app-only change is tested
 # against whatever bundle was last left on disk — the suite passes on code it never
-# ran, which is worse than no suite at all.
+# ran, which is worse than no suite at all. build-app-web regenerates the gitignored
+# WebView bundle for the same reason: viewer edits otherwise never reach the export.
 
 [group('quality')]
 [doc('E2E smoke test: builds server + web app, starts on port 8766, pairs device, navigates all pages, checks for JS errors')]

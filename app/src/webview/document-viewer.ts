@@ -974,13 +974,15 @@ document.addEventListener('click', (e: MouseEvent) => {
 // host's own window listener never sees the key. Forward the raw key out and let
 // the RN host map it (see handleHotkey in VideoDocument). Transcript docs only, so
 // article reading keeps normal arrow-scroll.
+const PAGE_TURN_KEYS: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, PageUp: -1, PageDown: 1 }
 const HOTKEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '[', ']', '=', 'n', 'N', 'a', 'A'])
 window.addEventListener('keydown', (e: KeyboardEvent) => {
-  // Page mode claims ←/→ for page turns. Same reason the transcript forwards its
-  // hotkeys: the host's window listener never sees a key pressed inside this frame.
-  if (_pageMode && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+  // Page mode claims ←/→ and PgUp/PgDn for page turns. Same reason the transcript
+  // forwards its hotkeys: the host's window listener never sees a key pressed inside this frame.
+  const turn = _pageMode ? PAGE_TURN_KEYS[e.key] : undefined
+  if (turn) {
     e.preventDefault()
-    goToPage(_pageIdx + (e.key === 'ArrowRight' ? 1 : -1))
+    goToPage(_pageIdx + turn)
     return
   }
   if (!HOTKEYS.has(e.key)) return
