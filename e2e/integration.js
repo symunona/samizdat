@@ -420,6 +420,71 @@ async function runAddUrlSheet(token, deviceId) {
   await page.close()
 }
 
+// ── Documents "Add URL" → reject a relative path · cancel a pending scrape ──
+// A vault path pasted into the URL box used to queue a scrape that burned the
+// whole retry schedule before dying. It must fail in the input, queueing nothing.
+// A real URL whose fetch hangs (blackholed IP) must be cancellable from its
+// pending row, and must not come back on the next poll.
+const RELATIVE_PATH = 'org/99-samizdat/documents/2016-W24/dive-in.md'
+const HANG_URL = 'http://10.255.255.1/e2e-cancel'
+
+async function runDocumentsAddCancel(token, deviceId) {
+  const { page, errors } = await newConnectedPage(browser, token, deviceId)
+  await page.goto(`${BASE_URL}/documents`, { waitUntil: 'networkidle2', timeout: 15000 })
+  await sleep(1500)
+
+  const scrapeJobs = () => page.evaluate(async (base) => {
+    const tok = JSON.parse(localStorage.getItem('samizdat_connection')).token
+    const r = await fetch(`${base}/api/v1/jobs?kind=scrape_url`, { headers: { Authorization: `Bearer ${tok}` } })
+    return r.json()
+  }, BASE_URL)
+  const submit = async (value) => {
+    await page.evaluate((v) => {
+      const input = [...document.querySelectorAll('input')].find(i => i.placeholder === 'https://example.com/article')
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, v)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }, value)
+    return clickByText(page, (e) => e.innerText === 'Add URL', 'Add URL button')
+  }
+
+  await check('documents: relative path is rejected in the input (no job queued)', async () => {
+    if (!await submit(RELATIVE_PATH)) return 'no Add URL button'
+    await sleep(400)
+    const body = await page.evaluate(() => document.body.innerText)
+    if (!/valid http/i.test(body)) return 'no validation message shown'
+    return (await scrapeJobs() || []).some(j => (j.payload || '').includes('dive-in.md'))
+      ? 'a scrape_url job was queued for the relative path' : null
+  })
+
+  await check('documents: ✕ on a pending scrape cancels it for good', async () => {
+    if (!await submit(HANG_URL)) return 'no Add URL button'
+    const job = await (async () => {
+      for (let i = 0; i < 20; i++) {
+        const j = (await scrapeJobs() || []).find(x => (x.payload || '').includes('e2e-cancel'))
+        if (j) return j
+        await sleep(250)
+      }
+    })()
+    if (!job) return 'no scrape_url job for the hanging URL'
+    const sel = `[data-testid="cancel-job-${job.id}"]`
+    try { await page.waitForSelector(sel, { timeout: 5000 }) } catch { return 'pending row has no cancel button' }
+    await page.click(sel)
+    try {
+      await page.waitForFunction((u) => !document.body.innerText.includes(u), { timeout: 4000 }, HANG_URL)
+    } catch { return 'pending row still visible after cancel' }
+    // Two poll cycles (3s each while watching): the row must not resurrect.
+    await sleep(7000)
+    if ((await page.evaluate(() => document.body.innerText)).includes(HANG_URL)) return 'cancelled row came back on poll'
+    return (await scrapeJobs() || []).some(j => j.id === job.id) ? 'cancelled job still listed by the API' : null
+  })
+
+  if (errors.length) fail('documents add/cancel: no console/HTTP errors', errors.slice(0, 4).join(' | '))
+  else pass('documents add/cancel: no console/HTTP errors')
+
+  await page.close()
+}
+
 // ── Feed swipe = archive · footer trash = delete (touch included) ─────────────
 // The destructive action must NOT sit on the easiest gesture: a swipe archives
 // (reversible, "Unread"), and delete is an explicit button that touch devices used
@@ -2422,6 +2487,23 @@ async function runPageMode(token, deviceId) {
     return after && after.idx === before.idx - 1 ? null : `page index went ${before.idx} → ${after && after.idx}`
   })
 
+  await check('page mode: PageDown / PageUp turn the page', async () => {
+    const press = (key) => page.evaluate((k) => {
+      const ifr = document.querySelector('iframe')
+      ifr.contentDocument.dispatchEvent(
+        new ifr.contentWindow.KeyboardEvent('keydown', { key: k, bubbles: true }))
+    }, key)
+    const before = await pageTotal(page)
+    await press('PageDown')
+    await sleep(600)
+    const down = await pageTotal(page)
+    if (!down || down.idx !== before.idx + 1) return `PageDown: page index went ${before.idx} → ${down && down.idx}`
+    await press('PageUp')
+    await sleep(600)
+    const up = await pageTotal(page)
+    return up && up.idx === before.idx ? null : `PageUp: page index went ${down.idx} → ${up && up.idx}`
+  })
+
   await check('page mode: a narrower viewport recalculates the page count', async () => {
     const before = await pageTotal(page)
     await page.setViewport({ width: 480, height: 620 })
@@ -3897,6 +3979,7 @@ async function main() {
 
     await runPageChecks(token, deviceId)
     await runAddUrlSheet(token, deviceId)
+    await runDocumentsAddCancel(token, deviceId)
     await runFeedSwipeArchive(token, deviceId)
     await runTouchDelete(token, deviceId)
     await runAddedVia(token, deviceId)

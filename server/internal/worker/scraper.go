@@ -45,6 +45,20 @@ var utmParams = []string{
 	"fbclid", "gclid", "msclkid", "mc_eid",
 }
 
+// ValidateScrapeURL rejects anything a browser cannot navigate to — a relative
+// path, a bare word, a non-web scheme. The API calls it at enqueue so a typo fails
+// in the request; the scraper calls it again for every other enqueue path.
+func ValidateScrapeURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("invalid url: %w", err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("invalid url %q: need an absolute http(s) URL", raw)
+	}
+	return nil
+}
+
 func canonicalize(raw string) (string, error) {
 	// YouTube: collapse every URL shape to the canonical watch URL so the
 	// scrape-once dedup holds (youtu.be, shorts, embed, extra params).
@@ -112,6 +126,9 @@ func handleScrapeURL(ctx context.Context, q *store.Queries, job store.Job, brows
 		return "", fmt.Errorf("bad payload: %w", err)
 	}
 
+	if err := ValidateScrapeURL(p.URL); err != nil {
+		return "", &permanentError{err}
+	}
 	canonical, err := canonicalize(p.URL)
 	if err != nil {
 		return "", err

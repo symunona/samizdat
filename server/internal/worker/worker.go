@@ -98,6 +98,12 @@ func (w *Worker) ExtractorRegistry() extractor.Registry {
 	return w.extractorReg
 }
 
+// permanentError marks a job failure no retry can fix (a malformed URL). The
+// worker fails it straight to dead instead of burning the backoff schedule.
+type permanentError struct{ error }
+
+func (e *permanentError) Unwrap() error { return e.error }
+
 // flagFalseParse records a false-parse reason on the Document (so it's visibly
 // flagged and not treated as good content) and returns the *FalseParseError the
 // worker recognises as a permanent job failure. Shared by the scrape and
@@ -294,9 +300,10 @@ func (w *Worker) run(ctx context.Context, job store.Job) {
 	// re-burns LLM tokens. Fail straight to dead with the clean reason as
 	// last_error; the detection site already flagged the Document.
 	var fpe *pipeline.FalseParseError
-	permanent := errors.As(err, &fpe)
+	var pe *permanentError
+	permanent := errors.As(err, &fpe) || errors.As(err, &pe)
 	lastErr := err.Error()
-	if permanent {
+	if fpe != nil {
 		lastErr = fpe.Reason
 	}
 

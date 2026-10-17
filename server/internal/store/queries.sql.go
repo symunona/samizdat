@@ -102,7 +102,7 @@ UPDATE jobs
 SET status = 'running', attempts = attempts + 1, updated_at = ?
 WHERE id = (
     SELECT j2.id FROM jobs j2
-    WHERE j2.status = 'queued' AND j2.run_after <= ?
+    WHERE j2.status = 'queued' AND j2.run_after <= ? AND j2.deleted_at IS NULL
     ORDER BY j2.created_at
     LIMIT 1
 )

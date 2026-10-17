@@ -23,6 +23,7 @@ import { activeJobForDocument, describeJob, jobDocumentId, parseProgress, useNow
 import type { FailedJob } from '../../src/failedJobs'
 import { useDocuments, useSyncStatus } from '../../src/db'
 import { useShareStore } from '../../src/store/shareStore'
+import { normalizeScrapeUrl } from '../../src/scrapeUrl'
 import { forceSync, requestSync } from '../../src/store/syncEngine'
 
 function jobUrl(job: Job): string {
@@ -267,20 +268,40 @@ export default function DocumentsScreen() {
     }
   }, [activeUrl, token, refetchFailed, toast])
 
+  // Cancel a queued/running scrape: the soft-delete takes it out of the claim
+  // queue, so no further attempt runs. An attempt already in flight finishes.
+  const handleCancelPending = useCallback(async (job: Job) => {
+    if (!activeUrl || !token) return
+    setBusyJobId(job.id)
+    try {
+      await deleteJob(activeUrl, token, job.id)
+      setActiveJobs((prev) => prev.filter((j) => j.id !== job.id))
+    } catch (e: unknown) {
+      toast(e instanceof Error ? e.message : 'Cancel failed', 'error')
+    } finally {
+      setBusyJobId(null)
+    }
+  }, [activeUrl, token, toast])
+
   async function handleSubmitUrl() {
     if (!activeUrl || !token) return
-    const trimmed = urlInput.trim()
-    if (!trimmed) return
+    if (!urlInput.trim()) return
+    const normalized = normalizeScrapeUrl(urlInput)
+    if (!normalized) {
+      setSubmitError('Enter a valid http(s) URL')
+      setSubmitState('error')
+      return
+    }
     setSubmitState('submitting')
     setSubmitError(null)
     try {
-      const { job_id } = await submitScrapeJob(activeUrl, token, trimmed)
+      const { job_id } = await submitScrapeJob(activeUrl, token, normalized)
       setUrlInput('')
       setSubmitState('idle')
       // Show the URL immediately, before the poll round-trips.
       const now = new Date().toISOString()
       const optimistic: Job = {
-        id: job_id, kind: 'scrape_url', payload: JSON.stringify({ url: trimmed }),
+        id: job_id, kind: 'scrape_url', payload: JSON.stringify({ url: normalized }),
         status: 'queued', attempts: 0, run_after: now, last_error: '', result: '',
         duration_ms: 0, created_at: now, updated_at: now, parent_job_id: null,
       }
@@ -320,6 +341,16 @@ export default function DocumentsScreen() {
                 {act.detail ? <Text style={s.pendingDetail} numberOfLines={2}>{act.detail}</Text> : null}
                 {act.timing ? <Text style={s.pendingTiming}>{act.timing}</Text> : null}
               </View>
+              <Pressable
+                style={({ pressed }) => [s.failedDismissBtn, pressed && s.failedBtnPressed]}
+                onPress={() => handleCancelPending(job)}
+                disabled={!!busyJobId}
+                hitSlop={6}
+                accessibilityLabel="Cancel"
+                testID={`cancel-job-${job.id}`}
+              >
+                <Text style={s.failedDismissText}>✕</Text>
+              </Pressable>
             </View>
           )
         })}

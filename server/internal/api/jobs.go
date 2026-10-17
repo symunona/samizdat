@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/symunona/samizdat/server/internal/llm"
 	"github.com/symunona/samizdat/server/internal/store"
+	"github.com/symunona/samizdat/server/internal/worker"
 )
 
 type jobsHandler struct {
@@ -38,6 +39,10 @@ func (h *jobsHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.URL == "" {
 		writeErr(w, http.StatusBadRequest, "url required")
+		return
+	}
+	if err := worker.ValidateScrapeURL(body.URL); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

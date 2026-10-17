@@ -78,3 +78,21 @@ func TestAbsolutizeImageURLs(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateScrapeURL(t *testing.T) {
+	for raw, ok := range map[string]bool{
+		"https://example.com/a":                         true,
+		"http://example.com":                            true,
+		"https://youtu.be/dQw4w9WgXcQ":                  true,
+		"org/99-samizdat/documents/2016-W24/dive-in.md": false,
+		"/abs/path.md":                                  false,
+		"example.com/a":                                 false,
+		"file:///etc/passwd":                            false,
+		"javascript:alert(1)":                           false,
+		"https://":                                      false,
+	} {
+		if err := ValidateScrapeURL(raw); (err == nil) != ok {
+			t.Errorf("ValidateScrapeURL(%q) err=%v, want ok=%v", raw, err, ok)
+		}
+	}
+}

@@ -2,30 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Keyboard, Modal, Platform, Pressable, StyleSheet, Text, TextInput } from 'react-native'
 import { useUnistyles } from 'react-native-unistyles'
 import { useConnection } from './ConnectionContext'
+import { normalizeScrapeUrl } from './scrapeUrl'
 
 interface Props {
   visible: boolean
   onSubmit: (url: string) => void
   onClose: () => void
-}
-
-// Bare host/path typed without a scheme is the common paste-slip; assume https
-// rather than rejecting. Returns null when the result still isn't an http(s) URL.
-function normalizeUrl(raw: string): string | null {
-  const trimmed = raw.trim()
-  if (!trimmed) return null
-  const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
-  try {
-    const u = new URL(hasScheme ? trimmed : `https://${trimmed}`)
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
-    // A guessed scheme means the user typed a bare host: require a dot so free text
-    // ("not a url") is caught here instead of queueing a doomed scrape. An explicit
-    // scheme is taken at face value (http://localhost:8765 is legitimate).
-    if (!hasScheme && !u.hostname.includes('.')) return null
-    return u.toString()
-  } catch {
-    return null
-  }
 }
 
 // Quick "add a document by URL" sheet. Same bottom-sheet shape as LinkActionSheet;
@@ -68,7 +50,7 @@ export default function AddUrlSheet({ visible, onSubmit, onClose }: Props) {
   const connected = status === 'connected'
 
   function handleSubmit() {
-    const normalized = normalizeUrl(url)
+    const normalized = normalizeScrapeUrl(url)
     if (!normalized) { setError('Enter a valid http(s) URL'); return }
     if (!connected) { setError('Not connected — can’t queue a scrape'); return }
     Keyboard.dismiss()
