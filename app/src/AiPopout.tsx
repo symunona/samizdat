@@ -163,7 +163,7 @@ export default function AiPopout({ request, onSave, onClose }: Props) {
               disabled={loading || !answer}
               testID="ai-popout-save"
             >
-              <Text style={s.saveText}>Save as note</Text>
+              <Text style={s.saveText} selectable={false}>Save as note</Text>
             </Pressable>
           </View>
 

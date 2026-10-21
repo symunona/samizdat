@@ -43,7 +43,9 @@ import * as db from './db'
 import { useConnection } from './ConnectionContext'
 import { useToast } from './ToastContext'
 import AnnotationPanel from './AnnotationPanel'
-import SelectionActions from './SelectionActions'
+import { useSelectionActions } from './SelectionActions'
+import SelectionBar from './SelectionBar'
+import AiPopout from './AiPopout'
 import IconButton from './IconButton'
 import type { PendingSelection, ExistingAnnotation } from './AnnotationPanel'
 import { buildTranscriptHtml } from './markdownToHtml'
@@ -195,6 +197,9 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const [findCount, setFindCount] = useState(0)
   const [findIndex, setFindIndex] = useState(0)
   const [showVideo, setShowVideo] = useState(false)
+  // Player folded away so the tabs take the whole screen — a long transcript is
+  // easier to read and select with more of it on screen.
+  const [playerCollapsed, setPlayerCollapsed] = useState(false)
   const offline = useOfflineMedia(doc.id)
   const [trackWidth, setTrackWidth] = useState(0)
   // Where the finger is on the seek bar mid-drag; null when nobody is scrubbing.
@@ -399,8 +404,9 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   const [existingAnnotation, setExistingAnnotation] = useState<ExistingAnnotation | undefined>()
   // Body the composer opens with — set only when an AI answer is kept.
   const [annInitialNote, setAnnInitialNote] = useState('')
-  // Selection context menu ("···" next to Annotate). Null = closed.
-  const [menuSelection, setMenuSelection] = useState<Selection | null>(null)
+  // The live transcript selection, mirrored by the viewer (selection_bar) and
+  // acted on from the SelectionBar over the footer. Null = nothing selected.
+  const [barSelection, setBarSelection] = useState<Selection | null>(null)
 
   const seekTo = useCallback((ms: number) => {
     try { seek(ms) } catch (e) { log.error('seek failed', e) }
@@ -448,15 +454,9 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       sendToWebView({ type: 'mediaTime', ms: positionMs })
     } else if (msg.type === 'seek' && typeof msg.ms === 'number') {
       userSeek(msg.ms)
-    } else if (msg.type === 'selection' && msg.data) {
+    } else if (msg.type === 'selection_bar') {
       // Prefer the anchored transcript segment's time; fall back to live playback.
-      setPendingSelection({ ...msg.data, media_ts_ms: msg.data.media_ts_ms ?? positionMs })
-      setAnnMode('create')
-      setExistingAnnotation(undefined)
-      setAnnInitialNote('')
-      setAnnVisible(true)
-    } else if (msg.type === 'selection_menu' && msg.data) {
-      setMenuSelection({ ...msg.data, media_ts_ms: msg.data.media_ts_ms ?? positionMs })
+      setBarSelection(msg.data ? { ...msg.data, media_ts_ms: msg.data.media_ts_ms ?? positionMs } : null)
     } else if (msg.type === 'segmentWindow' && msg.data) {
       setPendingSelection({ ...msg.data, media_ts_ms: msg.data.media_ts_ms ?? pendingMediaTsRef.current })
       setAnnMode('create')
@@ -473,14 +473,11 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
       // words moving under their finger. Resuming is an explicit ▶ (footer or the
       // selection row's play-from-here).
       pause()
-    } else if (msg.type === 'play_from' && typeof msg.ms === 'number') {
-      userSeek(msg.ms)
-      play()
     } else if (msg.type === 'findResult') {
       setFindCount(msg.count ?? 0)
       setFindIndex(msg.index ?? 0)
     }
-  }, [doc.title, annotations, themeMsg, sendToWebView, userSeek, openAnnotation, positionMs, segments, pause, play])
+  }, [doc.title, annotations, themeMsg, sendToWebView, userSeek, openAnnotation, positionMs, segments, pause])
 
   // Jump the transcript back to the currently-playing segment and resume auto-follow.
   const scrollToActive = useCallback(() => {
@@ -557,6 +554,34 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
     setAnnInitialNote(answer)
     setAnnVisible(true)
   }, [])
+
+  // ── Selection bar ── every action consumes the selection, so each one also
+  // clears it in the viewer (closeBar).
+  const closeBar = useCallback(() => {
+    sendToWebView({ type: 'clearSelection' })
+    setBarSelection(null)
+  }, [sendToWebView])
+  const selActions = useSelectionActions({
+    selection: barSelection,
+    documentTitle: doc.title ?? '',
+    articleSummary: (doc.markdown ?? '').slice(0, 1200),
+    onSaveNote: handleSaveAiNote,
+    onClose: closeBar,
+  })
+  const handleBarAnnotate = useCallback(() => {
+    if (!barSelection) return
+    setPendingSelection(barSelection)
+    setAnnMode('create')
+    setExistingAnnotation(undefined)
+    setAnnInitialNote('')
+    setAnnVisible(true)
+    closeBar()
+  }, [barSelection, closeBar])
+  const handleBarPlay = useCallback(() => {
+    userSeek(barSelection?.media_ts_ms ?? 0)
+    play()
+    closeBar()
+  }, [barSelection, userSeek, play, closeBar])
 
   const handleAnnDelete = useCallback(() => {
     if (!existingAnnotation) return
@@ -738,6 +763,13 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
   // Collapse back to audio-only, continuing from the video's position.
   const switchToAudio = useCallback(() => setShowVideo(false), [])
 
+  // Folding the player away drops to audio-only: a hidden video would keep
+  // playing with nothing to watch, and the timeline hands off without a gap.
+  const togglePlayer = useCallback(() => {
+    if (!playerCollapsed) switchToAudio()
+    setPlayerCollapsed(c => !c)
+  }, [playerCollapsed, switchToAudio])
+
   // ── Lock/unlock playback state machine (see docs/media-playback-lockscreen.md) ──
   // The YouTube WebView is suspended by the OS on background/lock, which kills its
   // playback. On 'background' while the video is the sounding backend we REMEMBER that
@@ -829,7 +861,8 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
 
       {/* Player / thumbnail — pinned to the top (never scrolls away). Prefers the
           native server stream; falls back to the YouTube embed on fetch failure. */}
-      <View style={s.player}>
+      {playerCollapsed ? null : (
+      <View style={s.player} testID="player">
           {videoActive ? (
             <View ref={videoBoxRef} style={[s.videoBox, playerDims]}>
               {serverMode ? (
@@ -889,9 +922,10 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
             </Pressable>
           )}
         </View>
+      )}
 
         {/* Collapse the video back to audio-only, continuing from the same position. */}
-        {videoActive ? (
+        {videoActive && !playerCollapsed ? (
           <Pressable onPress={switchToAudio} style={s.audioOnlyBtn} hitSlop={8}>
             <Ionicons name="headset-outline" size={16} color={theme.colors.accent} />
             <Text style={s.audioOnlyText}>Audio only</Text>
@@ -912,6 +946,10 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
               </Pressable>
             )
           })}
+          <Pressable onPress={togglePlayer} style={s.tabCollapse} hitSlop={4} testID="player-collapse"
+            accessibilityLabel={playerCollapsed ? 'Show player' : 'Hide player'}>
+            <Ionicons name={playerCollapsed ? 'chevron-down' : 'chevron-up'} size={16} color={theme.colors.muted} />
+          </Pressable>
         </View>
 
         {/* Tab content fills the space between the pinned tab bar and footer, and
@@ -1154,6 +1192,18 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
           </Pressable>
         </View>
 
+        {barSelection ? (
+          <SelectionBar
+            selection={barSelection.exact}
+            playLabel={barSelection.media_ts_ms != null ? fmtTime(barSelection.media_ts_ms) : undefined}
+            items={selActions.items}
+            loading={selActions.loading}
+            onPlay={handleBarPlay}
+            onAnnotate={handleBarAnnotate}
+            onPick={selActions.pick}
+            onClose={closeBar}
+          />
+        ) : null}
       </View>
 
       <AnnotationPanel
@@ -1167,13 +1217,7 @@ export default function VideoDocument({ doc, from }: { doc: Document; from?: str
         onCancel={() => setAnnVisible(false)}
       />
 
-      <SelectionActions
-        selection={menuSelection}
-        documentTitle={doc.title ?? ''}
-        articleSummary={(doc.markdown ?? '').slice(0, 1200)}
-        onSaveNote={handleSaveAiNote}
-        onClose={() => setMenuSelection(null)}
-      />
+      <AiPopout {...selActions.popout} />
     </View>
   )
 }
@@ -1308,6 +1352,7 @@ function buildStyles(t: Theme) {
       paddingVertical: t.spacing.sm, borderBottomWidth: 2, borderBottomColor: 'transparent',
     },
     tabItemActive: { borderBottomColor: t.colors.accent },
+    tabCollapse: { justifyContent: 'center', paddingHorizontal: t.spacing.md },
     tabLabel: { color: t.colors.muted, fontSize: 12, fontWeight: '600' },
     tabLabelActive: { color: t.colors.accent },
     // Fills the space between the pinned tab bar and footer; the panels below

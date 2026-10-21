@@ -139,15 +139,12 @@ mark.focused{outline:2px solid rgba(232,116,59,0.8);filter:brightness(1.5);trans
 mark[data-noted]::after{content:'';display:inline-block;width:6px;height:6px;margin:0 -3px;vertical-align:top;position:relative;top:-2px;border-radius:50%;background:var(--ac);pointer-events:none}
 /* Anchored to the current text selection (top/left set in JS by positionSelActions).
    The row holds Annotate + the ··· menu; only the ROW is positioned, so the two can
-   never drift apart. */
-#sel-actions{position:fixed;top:0;left:0;display:none;gap:6px;z-index:100}
+   never drift apart. Not selectable: a long-press on a button must not start a
+   second selection (and raise the OS toolbar) on its own label. */
+#sel-actions{position:fixed;top:0;left:0;display:none;gap:6px;z-index:100;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 #sel-actions.on{display:flex}
-#ann-btn,#sel-more-btn,#sel-play-btn{background:var(--ac);color:var(--bg);border:none;border-radius:20px;padding:8px 16px;font-weight:700;font-size:14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.4);white-space:nowrap}
-#sel-more-btn,#sel-play-btn{padding:8px 12px;line-height:1}
-/* Play-from-here: only meaningful on a transcript selection, so it is shown per
-   selection (see handleSelection), not by the row's own .on class. */
-#sel-play-btn{display:none}
-#sel-actions.has-time #sel-play-btn{display:block}
+#ann-btn,#sel-more-btn{background:var(--ac);color:var(--bg);border:none;border-radius:20px;padding:8px 16px;font-weight:700;font-size:14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.4);white-space:nowrap}
+#sel-more-btn{padding:8px 12px;line-height:1}
 #ann-gutter{position:fixed;top:0;right:0;width:6px;height:100%;pointer-events:none;z-index:90}
 #doc-title{font-size:1.6em;font-weight:700;color:var(--fg);margin:0 0 1em;line-height:1.3}
 
@@ -881,15 +878,11 @@ document.addEventListener('click', (e: MouseEvent) => {
 
   // Selection actions — Annotate opens the annotation panel, ··· opens the host's
   // context menu. Both consume the pending selection and clear the row.
-  const selBtn = target.closest && target.closest<HTMLElement>('#ann-btn, #sel-more-btn, #sel-play-btn')
+  const selBtn = target.closest && target.closest<HTMLElement>('#ann-btn, #sel-more-btn')
   if (selBtn) {
     if (!_pendingSel) return
     document.getElementById('sel-actions')?.classList.remove('on')
-    if (selBtn.id === 'sel-play-btn') {
-      sendMsg({ type: 'play_from', ms: _pendingSel.media_ts_ms ?? 0 })
-    } else {
-      sendMsg({ type: selBtn.id === 'sel-more-btn' ? 'selection_menu' : 'selection', data: _pendingSel })
-    }
+    sendMsg({ type: selBtn.id === 'sel-more-btn' ? 'selection_menu' : 'selection', data: _pendingSel })
     _pendingSel = null
     _lastSelText = ''
     window.getSelection()?.removeAllRanges()
@@ -1071,11 +1064,15 @@ function dbg(...parts: unknown[]): void {
 function handleSelection(reason: string): void {
   const sel = window.getSelection()
   const actions = document.getElementById('sel-actions')
+  // A transcript's actions live in the host's bar over the player (selection_bar),
+  // away from the OS selection toolbar that hugs the selection and covered the row.
+  const hostBar = !!document.querySelector('.seg[data-start-ms]')
   if (!sel || sel.isCollapsed || !sel.toString().trim()) {
     if (_lastSelText !== '') {
       _lastSelText = ''
       _pendingSel = null
       if (actions) actions.classList.remove('on')
+      if (hostBar) sendMsg({ type: 'selection_bar' })
       dbg('clear via', reason)
     }
     return
@@ -1102,14 +1099,12 @@ function handleSelection(reason: string): void {
   // A live selection counts as user activity: it suppresses the transcript's
   // playback auto-follow for the usual window (see setActiveSeg).
   _lastUserScroll = Date.now()
-  if (actions) {
-    actions.classList.toggle('has-time', media_ts_ms !== undefined)
-    positionSelActions(actions, range)
-  }
+  if (actions && !hostBar) positionSelActions(actions, range)
   // Selecting on a transcript means the reader stopped listening and started
   // reading — the host pauses playback so the words stop moving under the finger.
   if (wasIdle && media_ts_ms !== undefined) sendMsg({ type: 'selection_start' })
   if (exact !== _lastSelText) {
+    if (hostBar) sendMsg({ type: 'selection_bar', data: _pendingSel })
     _lastSelText = exact
     _pollUntil = Date.now() + 2500 // selection still moving (handle drag) — keep polling
     dbg('show via', reason, 'len:' + exact.length)
@@ -1544,6 +1539,14 @@ function handleMessage(event: MessageEvent): void {
       }
       break
     }
+
+    // The host's selection bar consumed or dismissed the selection.
+    case 'clearSelection':
+      _pendingSel = null
+      _lastSelText = ''
+      document.getElementById('sel-actions')?.classList.remove('on')
+      window.getSelection()?.removeAllRanges()
+      break
 
     case 'findTranscript':
       runFind((msg.q as string) ?? '', (msg.step as number) ?? 0)

@@ -19,7 +19,7 @@ import { useConnection } from './ConnectionContext'
 import { useToast } from './ToastContext'
 
 interface Props {
-  /** The selection the "···" was pressed on. Null = nothing open. */
+  /** The selection the actions apply to. Null = nothing open. */
   selection: PendingSelection | null
   documentTitle: string
   /** Feeds {{article_summary}} — the document's summary Highlight, or its head. */
@@ -29,11 +29,11 @@ interface Props {
   onClose: () => void
 }
 
-// Everything behind the "···" next to Annotate: the sheet of configured actions
-// and the AI popout the two LLM-backed ones open. Kept out of the document screen
-// because it is one self-contained interaction with its own config, and the video
-// screen will want the same one.
-export default function SelectionActions({ selection, documentTitle, articleSummary, onSaveNote, onClose }: Props) {
+// The configured selection actions and what picking one does — shared by the
+// article's "···" sheet (SelectionActions) and the transcript's SelectionBar, so
+// the two surfaces cannot drift. `popout` is the AI popout's props: render it as
+// <AiPopout {...popout} /> next to whichever surface lists the items.
+export function useSelectionActions({ selection, documentTitle, articleSummary, onSaveNote, onClose }: Props) {
   const { activeUrl, token } = useConnection()
   const { toast } = useToast()
 
@@ -44,15 +44,17 @@ export default function SelectionActions({ selection, documentTitle, articleSumm
   const [target, setTarget] = useState<PendingSelection | null>(null)
 
   // Re-read on every open: the config is server-held, so another device (or the
-  // Settings screen) may have changed it since the last selection.
+  // Settings screen) may have changed it since the last selection. Keyed on open,
+  // not on the selection: a handle drag changes it on every step.
+  const open = selection !== null
   useEffect(() => {
-    if (!selection) return
+    if (!open) return
     let cancelled = false
     loadContextMenu(activeUrl, token)
       .then(m => { if (!cancelled) setMenu(m) })
       .catch(() => { if (!cancelled) setMenu(defaultContextMenu()) })
     return () => { cancelled = true }
-  }, [selection, activeUrl, token])
+  }, [open, activeUrl, token])
 
   const vars = useMemo<TemplateVars>(() => ({
     selection: selection?.exact ?? '',
@@ -110,21 +112,32 @@ export default function SelectionActions({ selection, documentTitle, articleSumm
     if (sel) onSaveNote(sel, answer)
   }, [target, onSaveNote])
 
+  const handlePopoutClose = useCallback(() => { setRequest(null); setTarget(null) }, [])
+  const items = useMemo(() => (menu ? enabledItems(menu) : []), [menu])
+
+  return {
+    items,
+    loading: menu === null,
+    pick: handlePick,
+    popout: { request, onSave: handleSave, onClose: handlePopoutClose },
+  }
+}
+
+// Everything behind the "···" next to Annotate: the sheet of configured actions
+// and the AI popout the two LLM-backed ones open.
+export default function SelectionActions(props: Props) {
+  const { items, loading, pick, popout } = useSelectionActions(props)
   return (
     <>
       <SelectionMenuSheet
-        visible={selection !== null}
-        selection={selection?.exact ?? ''}
-        items={menu ? enabledItems(menu) : []}
-        loading={menu === null}
-        onPick={handlePick}
-        onClose={onClose}
+        visible={props.selection !== null}
+        selection={props.selection?.exact ?? ''}
+        items={items}
+        loading={loading}
+        onPick={pick}
+        onClose={props.onClose}
       />
-      <AiPopout
-        request={request}
-        onSave={handleSave}
-        onClose={() => { setRequest(null); setTarget(null) }}
-      />
+      <AiPopout {...popout} />
     </>
   )
 }

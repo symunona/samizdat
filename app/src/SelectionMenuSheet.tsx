@@ -15,7 +15,7 @@ interface Props {
   onClose: () => void
 }
 
-const ICONS: Record<ContextMenuKind, keyof typeof Ionicons.glyphMap> = {
+export const ICONS: Record<ContextMenuKind, keyof typeof Ionicons.glyphMap> = {
   copy: 'copy-outline',
   web_search: 'search-outline',
   translate: 'language-outline',
@@ -42,7 +42,7 @@ export default function SelectionMenuSheet({ visible, selection, items, loading,
             {items.map(item => (
               <Pressable key={item.id} style={s.row} onPress={() => onPick(item)} testID={`ctxmenu-${item.id}`}>
                 <Ionicons name={ICONS[item.kind]} size={18} color={theme.colors.accent} />
-                <Text style={s.rowText} numberOfLines={1}>{item.title}</Text>
+                <Text style={s.rowText} numberOfLines={1} selectable={false}>{item.title}</Text>
               </Pressable>
             ))}
             {items.length === 0 && (
@@ -53,7 +53,7 @@ export default function SelectionMenuSheet({ visible, selection, items, loading,
           </ScrollView>
           <View style={s.footer}>
             <Pressable style={s.cancel} onPress={onClose}>
-              <Text style={s.cancelText}>Cancel</Text>
+              <Text style={s.cancelText} selectable={false}>Cancel</Text>
             </Pressable>
           </View>
         </Pressable>

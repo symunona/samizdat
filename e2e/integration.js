@@ -1919,9 +1919,10 @@ async function runSelectionContextMenu(token, deviceId) {
   await page.close()
 }
 
-// The transcript screen is a SECOND host for the same WebView bundle: it renders
-// the ··· row from the shared viewer, so if it does not handle `selection_menu`
-// the button is there and does nothing. That is exactly how it shipped broken.
+// The transcript screen is a SECOND host for the same WebView bundle, and it does
+// NOT use the viewer's row: the OS selection toolbar kept landing on it. The viewer
+// reports the selection (`selection_bar`) and the host lays every action over the
+// footer. If either half drops the message, nothing appears and nothing errors.
 async function runTranscriptContextMenu(token, deviceId) {
   const { page, errors } = await newConnectedPage(browser, token, deviceId)
   await page.setViewport({ width: 900, height: 900 })
@@ -1944,38 +1945,45 @@ async function runTranscriptContextMenu(token, deviceId) {
     return s.toString()
   })
 
-  await check('transcript: the ··· row appears on a transcript selection', async () => {
+  await check('transcript: a selection raises the bar over the footer, not the in-viewer row', async () => {
     if (!selText.trim()) return 'nothing was selected in the transcript'
+    await page.waitForSelector('[data-testid="ctxmenu-copy"]', { timeout: 3000 }).catch(() => {})
     const info = await page.evaluate(() => {
       const f = document.querySelector('iframe')
-      const row = f.contentDocument.getElementById('sel-actions')
-      if (!row) return null
-      const r = row.getBoundingClientRect()
+      const bar = document.querySelector('[data-testid="selection-bar"]')
+      const play = document.querySelector('[data-testid="seek-track"]')
       return {
-        display: f.contentWindow.getComputedStyle(row).display,
-        inside: r.left >= 0 && r.top >= 0 && r.right <= f.contentWindow.innerWidth && r.bottom <= f.contentWindow.innerHeight,
+        row: f.contentWindow.getComputedStyle(f.contentDocument.getElementById('sel-actions')).display,
+        bar: bar ? bar.getBoundingClientRect() : null,
+        track: play ? play.getBoundingClientRect() : null,
+        text: bar ? bar.innerText : '',
+        items: [...document.querySelectorAll('[data-testid^="ctxmenu-"]')].map(e => e.getAttribute('data-testid')),
+        buttonsSelectable: bar ? [...bar.querySelectorAll('[data-testid^="ctxmenu-"] *, [data-testid^="selection-bar-"] *')]
+          .some(e => getComputedStyle(e).userSelect !== 'none') : null,
       }
     })
-    if (!info) return 'no selection action row in the transcript viewer'
-    if (info.display !== 'flex') return `the action row is ${info.display}`
-    if (!info.inside) return 'the action row is positioned outside the transcript viewport'
+    if (info.row !== 'none') return `the in-viewer row also shows (${info.row}) — two menus for one selection`
+    if (!info.bar) return 'no selection bar on a transcript selection'
+    if (!info.text.includes(selText.trim().slice(0, 10))) return `the bar does not echo the selection (reads "${info.text.slice(0, 60)}")`
+    if (!info.items.includes('ctxmenu-copy')) return `the bar lists no context-menu items (${JSON.stringify(info.items)})`
+    if (!info.track || info.bar.top > info.track.top || info.bar.bottom < info.track.bottom) return 'the bar does not cover the player controls'
+    if (info.buttonsSelectable) return 'the bar buttons have selectable labels'
     return null
   })
 
-  await check('transcript: ··· opens the same action sheet as the article viewer', async () => {
-    await clickSelMore(page)
-    const rows = await page.evaluate(() =>
-      [...document.querySelectorAll('[data-testid^="ctxmenu-"]')].map(e => e.getAttribute('data-testid')))
-    return rows.includes('ctxmenu-copy')
-      ? null
-      : `the sheet did not open on the transcript screen (rows: ${JSON.stringify(rows)})`
+  await check('transcript: the bar X clears the selection', async () => {
+    await page.evaluate(() => {
+      document.querySelector('[data-testid="selection-bar"] [aria-label="Clear selection"]')?.click()
+    })
+    await sleep(300)
+    const left = await page.evaluate(() => ({
+      bar: !!document.querySelector('[data-testid="selection-bar"]'),
+      sel: document.querySelector('iframe').contentWindow.getSelection().toString(),
+    }))
+    if (left.bar) return 'the bar stayed up after X'
+    if (left.sel) return `the transcript selection survived X ("${left.sel}")`
+    return null
   })
-
-  await page.evaluate(() => {
-    const el = [...document.querySelectorAll('*')].find(e => e.innerText && e.innerText.trim() === 'Cancel' && e.offsetParent)
-    el && el.click()
-  })
-  await sleep(400)
 
   if (errors.length) fail('transcript ctx menu: no console/HTTP errors', errors.slice(0, 4).join(' | '))
   else pass('transcript ctx menu: no console/HTTP errors')
@@ -2040,31 +2048,26 @@ async function runTranscriptPlayback(token, deviceId) {
     await sleep(300)
     const seen = await msgs()
     if (!seen.some(m => m.type === 'selection_start')) return 'no selection_start — playback would keep running under the selection'
-    const btn = await page.evaluate(() => {
-      const f = document.querySelector('iframe')
-      const row = f.contentDocument.getElementById('sel-actions')
-      const play = f.contentDocument.getElementById('sel-play-btn')
-      if (!row || !play) return null
-      return { hasTime: row.classList.contains('has-time'), display: f.contentWindow.getComputedStyle(play).display }
-    })
-    if (!btn) return 'no play-from-here button in the selection row'
-    if (!btn.hasTime || btn.display === 'none') return 'the play-from-here button is hidden on a transcript selection'
+    if (!(await page.$('[data-testid="selection-bar-play"]'))) return 'no play-from-here pill in the selection bar'
     return null
   })
 
   await check('transcript: ▶ plays from the selected line', async () => {
-    await clearMsgs()
     const want = await page.evaluate(() => {
       const f = document.querySelector('iframe')
       const seg = [...f.contentDocument.querySelectorAll('.seg')].find(x => x.innerText.trim().length > 10)
-      f.contentDocument.getElementById('sel-play-btn')
-        .dispatchEvent(new f.contentWindow.MouseEvent('click', { bubbles: true }))
       return Number(seg.dataset.startMs)
     })
-    await sleep(300)
-    const hit = (await msgs()).find(m => m.type === 'play_from')
-    if (!hit) return 'the ▶ button posted nothing'
-    if (hit.ms !== want) return `play_from carried ${hit.ms}ms, expected the segment's ${want}ms`
+    const label = await page.$eval('[data-testid="selection-bar-play"]', e => (e.innerText.match(/\d+:\d\d/) || [''])[0])
+    await page.click('[data-testid="selection-bar-play"]')
+    await sleep(400)
+    const fmt = ms => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`
+    if (label !== fmt(want)) return `the pill reads "${label}", expected the segment's ${fmt(want)}`
+    const playing = await page.evaluate(() => document.querySelector('[data-testid="play-toggle"]')?.getAttribute('aria-label'))
+    if (playing !== 'Pause') return `playback did not start (toggle reads "${playing}")`
+    if (await page.$('[data-testid="selection-bar"]')) return 'the bar stayed up after ▶'
+    const t = await page.evaluate(() => document.querySelector('[data-testid="play-toggle"]') && document.querySelector('[data-testid="seek-time"]')?.innerText)
+    if (Math.abs(Number(t.split(':')[1]) - Math.floor(want / 1000)) > 2) return `playback is at ${t}, expected near ${fmt(want)}`
     return null
   })
 
@@ -2117,6 +2120,23 @@ async function runTranscriptPlayback(token, deviceId) {
     const after = await read()
     if (after.current === before.current) return `the step did not move (still "${after.current}")`
     if (after.label === before.label) return `the count did not advance (still "${after.label}")`
+    return null
+  })
+
+  await check('transcript: hiding the player gives the tabs the screen', async () => {
+    const pane = () => page.evaluate(() => document.querySelector('iframe').getBoundingClientRect().height)
+    const before = await pane()
+    if (!(await page.$('[data-testid="player"]'))) return 'no player to hide'
+    await page.click('[data-testid="player-collapse"]')
+    await sleep(300)
+    const folded = await pane()
+    const thumb = await page.$('[data-testid="player"]')
+    await page.click('[data-testid="player-collapse"]')
+    await sleep(300)
+    const back = await pane()
+    if (folded < before + 150) return `the transcript grew ${before}px → ${folded}px; expected the player's height back`
+    if (thumb) return 'the player thumbnail still shows while hidden'
+    if (Math.abs(back - before) > 2) return `unfolding left the transcript at ${back}px, was ${before}px`
     return null
   })
 
